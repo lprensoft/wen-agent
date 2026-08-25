@@ -15,3 +15,9 @@
 - [How the context is organized](context.md) — what one request is made of, and why the current time is not in the system message
 - [HTTP API](http-api.md) — the endpoints shared by the web UI and any external program
 - [Project layout and writing plugins](architecture.md) — a tour of the tree, the `Plugin` interface and its optional companions, and visibility scopes
+
+## Decision records
+
+One-off research and design decisions, kept as they stood at the time. They are not updated alongside the code, and they exist in Chinese only.
+
+- [Plugin installation, ecosystem compatibility, and the choice of language](../decisions/agent-plugins-analysis.md) — why the project stays on Go, and why external plugins follow the Agent Plugins standard (2026-08-25, Chinese only)
