@@ -15,3 +15,9 @@
 - [上下文的组织](context.md) —— 一轮请求怎么拼、当前时间为什么不放在 system 里
 - [HTTP API](http-api.md) —— Web UI 与外部程序共用的接口
 - [项目结构与插件开发](architecture.md) —— 目录导览、`Plugin` 接口与各个可选接口、可见域
+
+## 决策记录
+
+一次性的调研与选型结论，记录当时的判断依据，不随代码更新，也不做双语。
+
+- [插件安装、生态兼容与语言选择](decisions/agent-plugins-analysis.md) —— 为什么继续用 Go，外源插件为什么走 Agent Plugins 标准（2026-08-25）
