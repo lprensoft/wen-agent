@@ -258,3 +258,9 @@ SDK 已有 transport，主要是配置字段与 URL 校验（非回环必须 HTT
      名要装了才知道——所以这批字段需要一个**与 bundle 名无关的共享键前缀**，否则每装一个
      bundle 就多出一组永远翻不了的标签。这一条会动到 `internal/plugin/i18n.go` 的键推导，
      动手前先定。
+6. **裸 MCP server 怎么装。** 标准要求 MCP server 必须住在一个有 `plugin.json` 的插件目录里，
+   但很常见的需求是接一台裸 server——用户只想加个 `npx -y @foo/bar-mcp`，并不想写清单。
+   倾向的解法是 `wen plugins install <名字> --cmd "..."` 就地**生成一个只有一台 server 的
+   最小 bundle**（`plugin.json` + `mcp.json`，十几行），此后它与别人发布的 bundle 走完全
+   同一条加载路径。这样既不必为它单开一套逻辑，也不会出现第二处「装了什么」的来源——
+   而第二处来源正是 `plugins:` 段当初被从 config.yaml 里拿掉的原因。
