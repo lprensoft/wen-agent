@@ -11,7 +11,7 @@ import (
 // 键从插件已经有的东西推出来（插件名 + 配置项的 Key + 候选值），**不在
 // ConfigField 上加字段**。加一个 LabelEN 的话，下一门语言就得再加一个
 // LabelJA——那是「只有两种语言」的思路穿了件国际化的外衣。键靠推导的代价是
-// 零：二十八个内置插件一行代码都不用改，加一门语言只是多一份语言包。
+// 零：二十九个内置插件一行代码都不用改，加一门语言只是多一份语言包。
 //
 // 翻译只发生在**展示的那一刻**：Manager.List 仍返回代码里的中文，由
 // Localize 按调用方（某个 HTTP 请求、某次 wen config 会话）的语言复制出一份。
@@ -128,6 +128,14 @@ func Localize(lang string, sts []Status) []Status {
 			for j, a := range st.Actions {
 				a.Label = i18n.T(lang, ActionLabelKey(kn, a.Key), a.Label)
 				a.Description = i18n.T(lang, ActionDescKey(kn, a.Key), a.Description)
+				// 运行时事实接在译文后面，本身不翻译——它是路径、版本号与名字
+				if a.Detail != "" {
+					if a.Description != "" {
+						a.Description += "\n"
+					}
+					a.Description += a.Detail
+					a.Detail = ""
+				}
 				acts[j] = a
 			}
 			st.Actions = acts

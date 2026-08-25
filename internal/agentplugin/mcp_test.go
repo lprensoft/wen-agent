@@ -3,6 +3,8 @@ package agentplugin
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -333,5 +335,149 @@ func TestConfirmRequiredWithoutConfirmerRefuses(t *testing.T) {
 		t.Fatal("没有确认通道却放行了")
 	} else if !strings.Contains(err.Error(), "拒绝") {
 		t.Errorf("该说清是按拒绝处理: %v", err)
+	}
+}
+
+// ---------- 端到端：Streamable HTTP ----------
+
+// 起一台本机的 HTTP MCP server，走完与 stdio 同一条链路。顺带验两件只有 HTTP 才有的
+// 事：声明的头真的发了出去，以及回环地址允许明文（对外必须 HTTPS 已由解析层挡住）。
+func TestEndToEndStreamableHTTP(t *testing.T) {
+	gotHeader := make(chan string, 8)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "fake-http", Version: "v0"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "ping", Description: "回一句 pong"},
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil, nil
+		})
+
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotHeader <- r.Header.Get("X-Tenant"):
+		default:
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	base := t.TempDir()
+	src := filepath.Join(base, "src")
+	writeBundle(t, src, mcpManifest, nil, mcpJSON(`{
+		"remote": {"type": "streamable-http", "url": "`+ts.URL+`", "headers": {"X-Tenant": "public"}}
+	}`))
+
+	store := NewStore(filepath.Join(base, "cfg"))
+	b, err := store.Install(src)
+	if err != nil {
+		t.Fatalf("安装失败: %v", err)
+	}
+	tools, problems, err := Handshake(context.Background(), b, filepath.Join(base, "data"))
+	if err != nil || len(problems) > 0 {
+		t.Fatalf("握手失败: %v %v", err, problems)
+	}
+	if len(tools) != 1 || tools[0].Local != "demo_remote_ping" {
+		t.Fatalf("工具清单不对: %+v", tools)
+	}
+	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPlugin(b, store)
+	if err := p.Init(plugin.InitContext{StateDir: filepath.Join(base, "state")}, nil); err != nil {
+		t.Fatalf("Init 失败: %v", err)
+	}
+	t.Cleanup(p.Stop)
+
+	out, err := p.Tools()[0].Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("调用失败: %v", err)
+	}
+	if !strings.Contains(out, "pong") {
+		t.Fatalf("返回内容不对: %q", out)
+	}
+	select {
+	case h := <-gotHeader:
+		if h != "public" {
+			t.Errorf("声明的头没发出去: %q", h)
+		}
+	default:
+		t.Error("一个请求都没收到")
+	}
+}
+
+// 插件包是公开分发的，写死在 mcp.json 里的凭据等于公开的凭据。提醒但不拦——
+// 那是包作者的选择，拦下来只会变成一次没有解释的失败。
+func TestShippedCredentialWarns(t *testing.T) {
+	if got := credentialHeaders(map[string]string{"X-Tenant": "public"}); len(got) != 0 {
+		t.Errorf("普通的头不该报: %v", got)
+	}
+	got := credentialHeaders(map[string]string{"Authorization": "Bearer x", "cookie": "a=b"})
+	if len(got) != 2 {
+		t.Errorf("凭据类的头该都挑出来（大小写不敏感）: %v", got)
+	}
+}
+
+// ---------- 别家格式的插件包 ----------
+
+// Claude / Codex / Cursor 的插件包比 Agent Plugins 出现得早，社区里已经有很多。
+// 它们的清单在别的位置、没有 $schema，但内容的固定位置是一样的——认下来，用户就
+// 不必先手工改一个 plugin.json 才能装。
+func TestLoadClaudeLayout(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(filepath.Join(dir, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name": "legacy-pack", "description": "从别处拿来的", "version": "2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 别家的 MCP 声明在 .mcp.json，且没有 $schema
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"),
+		[]byte(`{"mcpServers": {"x": {"type": "stdio", "command": "thing"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBundle(t, dir, "", map[string]string{"a": "---\nname: a\ndescription: d\n---\n"}, "")
+
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("加载失败: %v", err)
+	}
+	if b.Format != "Claude" {
+		t.Errorf("格式认错了: %q", b.Format)
+	}
+	if b.Manifest.Name != "legacy-pack" || b.Manifest.Version != "2.0" {
+		t.Errorf("清单没读对: %+v", b.Manifest)
+	}
+	if b.SkillsDir == "" {
+		t.Error("技能目录没认出来")
+	}
+	if len(b.Servers) != 1 {
+		t.Errorf(".mcp.json 没读出来: %+v", b.Servers)
+	}
+	// 读得懂多少要说清楚：那些格式特有的东西（命令、子代理、钩子）本程序不认识，
+	// 不说一句的话，用户会以为整个包都生效了
+	var told bool
+	for _, p := range b.Problems {
+		if strings.Contains(p, "只读得懂") {
+			told = true
+		}
+	}
+	if !told {
+		t.Errorf("该说清只读得懂哪些部分: %v", b.Problems)
+	}
+}
+
+// 名字仍按 Agent Plugins 的规则校验——它要拼进目录名与插件名，这条不能松。
+func TestLooseManifestStillChecksName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(filepath.Join(dir, ".cursor-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".cursor-plugin", "plugin.json"),
+		[]byte(`{"name": "Bad Name"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("名字不合法却装上了")
 	}
 }

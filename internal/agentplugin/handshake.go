@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Handshake 连一遍插件包里的每台 server，取回工具清单并落盘。
@@ -31,9 +32,12 @@ func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []st
 			problems = append(problems, fmt.Sprintf("%s：%v", s.Name, err))
 			continue
 		}
-		if resolved.Type != TransportStdio {
-			problems = append(problems, fmt.Sprintf("%s：本版只支持 stdio，%s 暂不支持", s.Name, resolved.Type))
-			continue
+		// 声明里带着凭据是个该说出来的问题：插件包是拿来分发的，而分发一份带着
+		// 密钥的文件，密钥就等于公开了。只提醒不拦——它是包作者的选择，用户装它
+		// 时那个文件就在手边，拦下来只会变成一次没有解释的失败。
+		if h := credentialHeaders(s.Headers); len(h) > 0 {
+			problems = append(problems, fmt.Sprintf("%s：mcp.json 里直接写了 %s，插件包是公开分发的，别把凭据放在里面",
+				s.Name, strings.Join(h, "、")))
 		}
 
 		c := newClient(resolved)
@@ -71,6 +75,19 @@ func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []st
 	// 顺序稳定：工具清单每轮都进上下文，顺序一变提示词缓存就整段作废
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Local < tools[j].Local })
 	return tools, problems, nil
+}
+
+// credentialHeaders 挑出声明里那些一看就是凭据的头。
+func credentialHeaders(headers map[string]string) []string {
+	var out []string
+	for k := range headers {
+		switch strings.ToLower(k) {
+		case "authorization", "proxy-authorization", "cookie", "x-api-key":
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // DataDir 返回某个插件包的 PLUGIN_DATA 目录。

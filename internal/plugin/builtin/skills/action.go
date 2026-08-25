@@ -21,15 +21,15 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	dir := p.dir
 	p.mu.RUnlock()
 
-	desc := "每个技能是技能目录下的一个子目录，里面放一个 SKILL.md，开头用 --- 包起来的说明块里写 description 说明它是干什么用的。" +
-		"放好文件后点这里即可加载，不必重启。"
-	if dir != "" {
-		desc = "当前技能目录：" + dir + "\n" + desc
-	}
+	// 只放路径本身：Detail 接在译好的说明后面而不翻译，成句的中文会原样出现在
+	// 英文界面上（见 plugin.ActionDef.Detail）。说明那一句以冒号收尾，接上正好。
+	detail := dir
 	return []plugin.ActionDef{{
-		Key:         actionRescan,
-		Label:       "扫描技能目录",
-		Description: desc,
+		Key:   actionRescan,
+		Label: "扫描技能目录",
+		Description: "每个技能是技能目录下的一个子目录，里面放一个 SKILL.md，开头用 --- 包起来的说明块里" +
+			"写 description 说明它是干什么用的。放好文件后点这里即可加载，不必重启。技能目录：",
+		Detail: detail,
 	}}
 }
 

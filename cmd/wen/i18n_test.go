@@ -16,7 +16,7 @@ import (
 // 起来（不初始化，只读声明），推出全部键，与语言包逐一对照。
 //
 // 漏译不会让程序出错，只会让英文界面上冒出一行中文，而那种缺陷肉眼极难发现——
-// 二十八张卡片、一百多个配置项，谁也不会一条条看过去。所以把它交给测试。
+// 二十九张卡片、一百多个配置项，谁也不会一条条看过去。所以把它交给测试。
 //
 // 要生成/补全语言包的骨架：
 //
@@ -66,8 +66,23 @@ func metadataStrings(t *testing.T) map[string]string {
 				put(plugin.OptionKey(st.Name, f.Key, o.Value), o.Label)
 			}
 		}
-		// Actions 只在插件启用且初始化后才暴露，这里拿不到（WithoutInit）。
-		// 操作的文案因此不进这份清单，由 TestActionKeys 单独盯着。
+	}
+
+	// 操作的文案要单独走一趟：Manager.List 只对已启用且初始化过的插件暴露 Actions，
+	// 而这里是 WithoutInit 建起来的。直接问插件本身——Actions() 按契约就是廉价、
+	// 随时可调的（与 SystemPrompt 同一条），未初始化时它给出的正是默认那一档文案。
+	//
+	// 掺在里面的运行时事实（技能目录、版本号、已装的包）已经挪进 ActionDef.Detail，
+	// 不进语言包也不该进这份清单。
+	for _, pl := range builtinPlugins(cfg, nil) {
+		a, ok := pl.(plugin.Actionable)
+		if !ok {
+			continue
+		}
+		for _, act := range a.Actions() {
+			put(plugin.ActionLabelKey(pl.Name(), act.Key), act.Label)
+			put(plugin.ActionDescKey(pl.Name(), act.Key), act.Description)
+		}
 	}
 	return out
 }

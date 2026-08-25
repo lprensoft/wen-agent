@@ -33,7 +33,7 @@ The form is generated from the config fields the plugins declare themselves, the
 
 ## wen plugins: installing external plugin bundles
 
-External plugins follow the [Agent Plugins 1.0](https://agent-plugins.org/) standard. A bundle is a directory with a `plugin.json` at its root, optionally carrying `skills/` (skill manuals) and `mcp.json` (MCP server declarations). The standard was published in August 2026 by OpenAI, Microsoft, AWS, Cursor and Vercel, and ChatGPT, Codex CLI, Cursor, GitHub Copilot and VS Code all read the same bundles. It contains no executable code, which is why it works regardless of the language the host is written in.
+External plugins follow the [Agent Plugins 1.0](https://agent-plugins.org/) standard. A bundle is a directory with a `plugin.json` at its root, optionally carrying `skills/` (skill manuals) and `mcp.json` (MCP server declarations). Bundles in the Claude, Codex and Cursor formats are read too — the skills and MCP declarations inside them, at least. The standard was published in August 2026 by OpenAI, Microsoft, AWS, Cursor and Vercel, and ChatGPT, Codex CLI, Cursor, GitHub Copilot and VS Code all read the same bundles. It contains no executable code, which is why it works regardless of the language the host is written in.
 
 ```bash
 wen plugins list                   # what is installed
@@ -45,7 +45,7 @@ wen plugins info pdf-tools
 wen plugins uninstall pdf-tools
 ```
 
-Installed bundles live in `bundles/<bundle-name>/` under the configuration directory. Each gets its own card in the settings page under "External plugins" and its own on/off switch. Plugin names are prefixed with `ext_`: a plugin name is globally unique and becomes a directory name, so a bundle called `memory` would otherwise collide with the built-in memory plugin.
+Installed bundles live in `bundles/<bundle-name>/` under the configuration directory. Each gets its own card in the settings page under [External plugins](plugins/external.md) and its own on/off switch. You can install from there too: fill in a path on the `bundles` card and press Install — same thing as the command below, and it likewise only accepts paths on the machine running the server. Plugin names are prefixed with `ext_`: a plugin name is globally unique and becomes a directory name, so a bundle called `memory` would otherwise collide with the built-in memory plugin.
 
 ### Skills
 
@@ -53,7 +53,7 @@ Every subdirectory under a bundle's `skills/` is one skill manual. They join **t
 
 ### MCP servers
 
-Servers declared in a bundle's `mcp.json` are started, and the tools they offer join the model's tool table. **stdio** (a local subprocess) is supported today; Streamable HTTP and SSE are recognised and validated but not yet connected.
+Servers declared in a bundle's `mcp.json` are started, and the tools they offer join the model's tool table. All three transports work: **stdio** (a local subprocess), **Streamable HTTP**, and the deprecated **HTTP+SSE**. Non-loopback addresses must use HTTPS.
 
 Tool names take the form `<bundle>_<server>_<tool>`: tool names are globally unique within wen, and two bundles each carrying a server called `fs` is perfectly normal.
 

@@ -372,9 +372,10 @@ func TestActionsDescribeTheDirectory(t *testing.T) {
 	if len(acts) != 1 || acts[0].Key != actionRescan {
 		t.Fatalf("操作 = %v", acts)
 	}
-	// 目录在配置目录深处，不写出来没人找得到
-	if !strings.Contains(acts[0].Description, dir) {
-		t.Errorf("说明里应给出技能目录: %q", acts[0].Description)
+	// 目录在配置目录深处，不写出来没人找得到。它落在 Detail 而不是 Description：
+	// 后者要能进语言包，掺了路径就进不去（见 plugin.ActionDef.Detail）
+	if !strings.Contains(acts[0].Detail, dir) {
+		t.Errorf("该在 Detail 里给出技能目录: %q", acts[0].Detail)
 	}
 	if _, err := p.ActionState("nope"); err == nil {
 		t.Error("未知操作应报错")

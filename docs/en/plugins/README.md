@@ -36,5 +36,7 @@ The editable prompts among those settings (the heartbeat prompt, the fallback li
 | | `lark_bot` | Lark (international) | off |
 | | `telegram_bot` | The Telegram Bot API | off |
 | [Maintenance](self-update.md) | `self_update` | Checks for a new release, then downloads, verifies, replaces and restarts in one click | on |
+| [External plugins](external.md) | `bundles` | Install Agent Plugins bundles | on |
+| | `ext_*` | One card per installed bundle | on |
 
 To write one yourself, see [Project layout and writing plugins](../architecture.md).

@@ -65,15 +65,27 @@ type mcpServerJSON struct {
 // 不支持 → 只跳过那一台，其余照常（记一条 warning）。一台 server 写错不该让同一个
 // 包里另外两台一起失效。
 func ParseMCP(data []byte) ([]MCPServer, []string, error) {
+	return parseMCP(data, true)
+}
+
+// ParseMCPLoose 解析别家格式的 MCP 声明：内容形状一样，但没有 $schema 那一行
+// （那是 Agent Plugins 加的）。除此之外的校验一视同仁。
+func ParseMCPLoose(data []byte) ([]MCPServer, []string, error) {
+	return parseMCP(data, false)
+}
+
+func parseMCP(data []byte, strict bool) ([]MCPServer, []string, error) {
 	var f mcpFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, nil, fmt.Errorf("%s 不是合法的 JSON：%w", MCPFile, err)
+		return nil, nil, fmt.Errorf("MCP 声明不是合法的 JSON：%w", err)
 	}
-	if f.Schema == "" {
-		return nil, nil, fmt.Errorf("%s 里缺少 $schema", MCPFile)
-	}
-	if f.Schema != MCPSchemaURL {
-		return nil, nil, fmt.Errorf("不支持的 mcp.json $schema %q（本程序支持 %s）", f.Schema, MCPSchemaURL)
+	if strict {
+		if f.Schema == "" {
+			return nil, nil, fmt.Errorf("%s 里缺少 $schema", MCPFile)
+		}
+		if f.Schema != MCPSchemaURL {
+			return nil, nil, fmt.Errorf("不支持的 mcp.json $schema %q（本程序支持 %s）", f.Schema, MCPSchemaURL)
+		}
 	}
 
 	// 名字排序，注册顺序因此稳定——工具清单要拼进上下文，顺序变了缓存就白费
@@ -88,7 +100,7 @@ func ParseMCP(data []byte) ([]MCPServer, []string, error) {
 	for _, name := range names {
 		s, err := parseServer(name, f.Servers[name])
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("mcp.json 里的 %s 已跳过：%v", name, err))
+			warnings = append(warnings, fmt.Sprintf("MCP 声明里的 %s 已跳过：%v", name, err))
 			continue
 		}
 		servers = append(servers, s)

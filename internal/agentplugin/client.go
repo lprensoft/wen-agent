@@ -3,6 +3,7 @@ package agentplugin
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
@@ -46,13 +47,10 @@ func newClient(cfg ResolvedServer) *client {
 // 重连一次。超时因此自己看着办：连接在旁边的 goroutine 里做，这边等一个计时器，
 // 迟到的连接直接关掉。
 func (c *client) connect() (*mcp.ClientSession, error) {
-	if c.cfg.Type != TransportStdio {
-		return nil, fmt.Errorf("本版只支持 stdio，这台 server 是 %s", c.cfg.Type)
+	transport, err := c.transport()
+	if err != nil {
+		return nil, err
 	}
-
-	cmd := exec.Command(c.cfg.Command, c.cfg.Args...)
-	cmd.Dir = c.cfg.Dir
-	cmd.Env = c.cfg.EnvList()
 
 	impl := &mcp.Implementation{Name: "wen", Version: version.Version}
 	mc := mcp.NewClient(impl, nil)
@@ -63,7 +61,7 @@ func (c *client) connect() (*mcp.ClientSession, error) {
 	}
 	ch := make(chan result, 1)
 	go func() {
-		s, err := mc.Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
+		s, err := mc.Connect(context.Background(), transport, nil)
 		ch <- result{s, err}
 	}()
 
@@ -82,6 +80,57 @@ func (c *client) connect() (*mcp.ClientSession, error) {
 		}()
 		return nil, fmt.Errorf("连接 %s 超时（%s）", c.cfg.Name, c.connectTimeout)
 	}
+}
+
+// transport 按声明的传输方式造一个连接器。
+//
+// 三种都由 SDK 提供，本地只负责把 mcp.json 里的声明翻译过去：stdio 拉子进程，
+// 两种 HTTP 各自建连接。sse 是 2024-11-05 那版协议留下的，已废弃，接着只是为了
+// 让还在用它的 server 能用——不必为「识别得出、就是连不上」这个中间状态再留一版。
+func (c *client) transport() (mcp.Transport, error) {
+	switch c.cfg.Type {
+	case TransportStdio:
+		cmd := exec.Command(c.cfg.Command, c.cfg.Args...)
+		cmd.Dir = c.cfg.Dir
+		cmd.Env = c.cfg.EnvList()
+		return &mcp.CommandTransport{Command: cmd}, nil
+	case TransportHTTP:
+		return &mcp.StreamableClientTransport{
+			Endpoint:   c.cfg.URL,
+			HTTPClient: httpClient(c.cfg.Headers),
+		}, nil
+	case TransportSSE:
+		return &mcp.SSEClientTransport{
+			Endpoint:   c.cfg.URL,
+			HTTPClient: httpClient(c.cfg.Headers),
+		}, nil
+	}
+	return nil, fmt.Errorf("不认识的传输方式 %q", c.cfg.Type)
+}
+
+// httpClient 造一个会带上声明头的 HTTP 客户端。
+//
+// 不设 Timeout：MCP 的 Streamable HTTP 会挂一条长连接收服务端主动发来的消息，
+// 给客户端设总超时会把它按时掐断。每次调用的时限由 ctx 管（见 callOnce）。
+func httpClient(headers map[string]string) *http.Client {
+	if len(headers) == 0 {
+		return nil // 交给 SDK 用默认的
+	}
+	return &http.Client{Transport: headerRoundTripper{headers: headers}}
+}
+
+// headerRoundTripper 给每个请求加上插件包声明的头。
+type headerRoundTripper struct {
+	headers map[string]string
+}
+
+func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// 复制一份再改：RoundTripper 按约定不得改动传进来的请求
+	clone := req.Clone(req.Context())
+	for k, v := range h.headers {
+		clone.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(clone)
 }
 
 // ensure 返回可用的会话，没有就建一个。

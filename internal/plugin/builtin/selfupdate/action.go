@@ -22,23 +22,23 @@ const actionUpdate = "update"
 
 func (p *Plugin) Actions() []plugin.ActionDef {
 	s := p.snapshot()
+
+	// 文案固定，当前处境放 Detail。此前这里有两套文案（查到新版时换一套，标签里还带着
+	// 版本号），而语言包按键取译文，一个键只装得下一句——另一套永远没有英文，且测试
+	// 看不见它（检查工具问到的是默认那一档）。运行时事实归 Detail，见 ActionDef.Detail。
+	detail := ""
 	if tag := s.newerTag(); tag != "" {
-		desc := fmt.Sprintf("下载 %s 的官方发布包，校验后替换当前程序。", tag)
+		detail = "· " + tag
 		if s.autoRestart && s.restart != nil {
-			desc += "替换完成后服务会自动重启，正在进行的对话会被中断。"
-		} else {
-			desc += "替换完成后需要你自己重启程序才会生效。"
+			detail += " · auto restart"
 		}
-		return []plugin.ActionDef{{
-			Key:         actionUpdate,
-			Label:       "更新到 " + tag + " 并重启",
-			Description: desc,
-		}}
 	}
 	return []plugin.ActionDef{{
-		Key:         actionUpdate,
-		Label:       "检查更新",
-		Description: "查一次 GitHub 上最新的正式版。只查，查到新版会把更新说明摆出来，装不装再由你决定。",
+		Key:   actionUpdate,
+		Label: "检查并更新",
+		Description: "查一次 GitHub 上最新的正式版。没有新版就只是查一下；" +
+			"查到了会把更新说明摆出来，下载、校验与替换也在这里完成。",
+		Detail: detail,
 	}}
 }
 

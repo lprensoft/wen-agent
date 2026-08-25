@@ -33,14 +33,15 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	if len(p.bundle.Servers) == 0 {
 		return nil // 没有 MCP 组件就没什么可握手的
 	}
-	desc := fmt.Sprintf("连一遍这个包里的 %d 台 MCP server，把它们提供的工具重新记下来。",
-		len(p.bundle.Servers))
-	if len(p.tools) == 0 {
-		desc += "当前还没有记下任何工具——装好之后没握过手，或者上次握手没成功。"
-	} else {
-		desc += fmt.Sprintf("当前记着 %d 件工具。", len(p.tools))
-	}
-	return []plugin.ActionDef{{Key: actionRefresh, Label: "重新握手", Description: desc}}
+	// 台数与件数是运行时事实，放 Detail。写成记号而不是句子：它接在译好的说明后面
+	// 而本身不翻译，成句的中文会原样出现在英文界面上（见 plugin.ActionDef.Detail）。
+	detail := fmt.Sprintf("· %d server · %d tools", len(p.bundle.Servers), len(p.tools))
+	return []plugin.ActionDef{{
+		Key:         actionRefresh,
+		Label:       "重新握手",
+		Description: "连一遍这个包里的 MCP server，把它们提供的工具重新记下来。",
+		Detail:      detail,
+	}}
 }
 
 // StartAction 立即返回，握手在后台进行。
