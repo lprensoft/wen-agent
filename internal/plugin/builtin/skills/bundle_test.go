@@ -2,7 +2,9 @@ package skills
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,8 +71,11 @@ func TestBundleSkillNameCollisionKeepsOwn(t *testing.T) {
 	}
 }
 
-// 技能目录不得经符号链接指到根之外。用户自己的目录里这多半是手滑，但插件包是从
-// 外面拿来的，Agent Plugins 标准明确要求客户端拒绝这种逃逸。
+// 技能目录经符号链接指到技能根之外时要拒绝，并且**要说一句**。
+//
+// 「说一句」是这条用例的重点：这里原先只判 os.ReadDir 给出的 IsDir，而它来自 lstat
+// ——指向目录的符号链接在它眼里不是目录，于是整个条目在容纳性校验之前就被丢掉了，
+// 表现为技能凭空消失、屏幕上一句解释都没有。
 func TestSkillDirEscapingRootIsRejected(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "skills")
@@ -79,20 +84,59 @@ func TestSkillDirEscapingRootIsRejected(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(outside, "sneaky"), filepath.Join(root, "sneaky")); err != nil {
-		t.Skipf("这个环境建不了符号链接：%v", err) // Windows 上非管理员建不了
-	}
+	linkDir(t, filepath.Join(outside, "sneaky"), filepath.Join(root, "sneaky"))
 
 	res := scan(root, 120)
 	if len(res.skills) != 0 {
 		t.Fatalf("逃出技能根的目录被收下了: %+v", res.skills)
 	}
-	if len(res.problems) == 0 {
-		t.Error("拒绝之后该说一句")
+	if len(res.problems) != 1 {
+		t.Fatalf("拒绝之后该说一句，实际 %d 句: %v", len(res.problems), res.problems)
+	}
+	if !strings.Contains(res.problems[0], "sneaky") {
+		t.Errorf("那句话该点名是哪个: %q", res.problems[0])
+	}
+}
+
+// 指到技能根**之内**的符号链接照常收下：那是用户在自己目录里做的整理，没有理由拦。
+func TestSkillDirLinkedWithinRootIsKept(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "real", "name: real\ndescription: 真身", "正文")
+	linkDir(t, filepath.Join(root, "real"), filepath.Join(root, "alias"))
+
+	res := scan(root, 120)
+	if len(res.skills) != 2 {
+		t.Fatalf("根内的链接该照常收下，实际收到 %d 个: %+v", len(res.skills), res.skills)
+	}
+	// 链接过来的那份 SKILL.md 里写的还是真身的名字，于是有一句「与目录名不一致」的
+	// 提醒——那是对的，链接的两端本来就是两个名字。要保证的是没有「越界」那一句。
+	for _, p := range res.problems {
+		if strings.Contains(p, "指到了技能目录之外") {
+			t.Errorf("根内的链接被当成越界拒掉了: %q", p)
+		}
 	}
 }
 
 // 插件包的开关走的是插件系统那一套：启用即登记，禁用即摘掉。
 func TestBundlePluginContract(t *testing.T) {
 	var _ plugin.Stoppable = (*Plugin)(nil)
+}
+
+// linkDir 建一条指向目录的链接。
+//
+// Windows 上普通用户建不了符号链接（要「创建符号链接」这项权限），但建得了目录联接
+// （junction），而 Go 的 Lstat 同样把它报成符号链接——两条用例因此在 Windows 上也能
+// 真的跑起来。这不是凑数：这个缺陷正是因为它们在开发机上一直 SKIP、只在 CI 上才跑，
+// 才带着一句错误的断言进了库。
+func linkDir(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err == nil {
+		return
+	}
+	if runtime.GOOS != "windows" {
+		t.Skip("这个环境建不了指向目录的链接")
+	}
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Skipf("这个环境建不了目录联接：%v（%s）", err, out)
+	}
 }

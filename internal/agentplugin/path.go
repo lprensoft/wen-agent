@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"wen/internal/pathsafe"
 )
 
 // Root 是一个已经解析过符号链接的插件包根目录。
@@ -21,7 +22,7 @@ func NewRoot(dir string) (Root, error) {
 	if err != nil {
 		return Root{}, err
 	}
-	real, err := filepath.EvalSymlinks(abs)
+	real, err := pathsafe.Real(abs)
 	if err != nil {
 		return Root{}, err
 	}
@@ -49,15 +50,11 @@ func (r Root) Join(elem ...string) string {
 // 某个技能目录越界只跳过那一个技能。这条分工是标准写死的——一个坏掉的技能不该
 // 让整包装不上。
 func (r Root) Contains(p string) (string, error) {
-	real, err := filepath.EvalSymlinks(p)
+	real, err := pathsafe.Real(p)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(r.path, real)
-	if err != nil {
-		return "", fmt.Errorf("%s 不在插件包目录内", p)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !pathsafe.Within(r.path, p) {
 		return "", fmt.Errorf("%s 指向插件包目录之外，已拒绝", p)
 	}
 	return real, nil
