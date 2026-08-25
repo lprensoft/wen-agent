@@ -155,8 +155,9 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 	srv := fakeGitHub(t, newTag)
 	p, exe, stateDir := newPlugin(t, srv, nil)
 
-	if got := p.Actions()[0].Label; got != "检查更新" {
-		t.Fatalf("初始文案不符: %q", got)
+	// 按钮文案固定（它要能进语言包），处境写在 Detail 里
+	if got := p.Actions()[0]; got.Label != "检查并更新" || !strings.Contains(got.Detail, "已是最新版") {
+		t.Fatalf("初始文案不符: %+v", got)
 	}
 	if err := p.StartAction(context.Background(), actionUpdate); err != nil {
 		t.Fatal(err)
@@ -178,8 +179,12 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 	if got := loadState(stateDir).Latest; got != newTag {
 		t.Fatalf("状态没记下最新版本: %q", got)
 	}
-	if got := p.Actions()[0].Label; got != "更新到 "+newTag+" 并重启" {
-		t.Fatalf("查到新版后文案没变: %q", got)
+	// 版本号在 Detail 里而不是 Label 里：Label 要能进语言包，掺了版本号就进不去
+	if got := p.Actions()[0].Detail; !strings.Contains(got, newTag) {
+		t.Fatalf("查到新版后该在 Detail 里点明是哪一版: %q", got)
+	}
+	if got := p.Actions()[0].Label; got != "检查并更新" {
+		t.Fatalf("按钮文案该是固定的一句: %q", got)
 	}
 	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], newTag) {
 		t.Fatalf("状态行不符: %v", lines)
@@ -198,8 +203,8 @@ func TestUpToDate(t *testing.T) {
 	if st.Status != plugin.ActionDone || !strings.Contains(st.Message, "已是最新版") {
 		t.Fatalf("结果不符: %+v", st)
 	}
-	if p.Actions()[0].Label != "检查更新" {
-		t.Fatalf("文案不该变: %q", p.Actions()[0].Label)
+	if got := p.Actions()[0]; got.Label != "检查并更新" || !strings.Contains(got.Detail, "已是最新版") {
+		t.Fatalf("已是最新版时该这么说: %+v", got)
 	}
 }
 

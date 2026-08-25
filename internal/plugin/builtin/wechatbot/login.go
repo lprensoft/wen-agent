@@ -79,13 +79,18 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	p.mu.Lock()
 	bound := p.creds.valid()
 	p.mu.Unlock()
-	label := "扫码绑定微信"
-	desc := "获取动态二维码，用微信扫码确认后完成绑定（微信 App：我 → 设置 → 插件 → ClawBot）"
+	// 标签固定、变化的部分放 Detail：「已绑定」是运行时事实，掺进说明里那句话就进不了
+	// 语言包了（见 ActionDef.Detail）。
+	detail := ""
 	if bound {
-		label = "重新绑定微信"
-		desc = "已绑定。重新扫码会替换当前凭证"
+		detail = "已绑定。重新扫码会替换当前凭证。"
 	}
-	return []plugin.ActionDef{{Key: "bind", Label: label, Description: desc}}
+	return []plugin.ActionDef{{
+		Key:         "bind",
+		Label:       "扫码绑定微信",
+		Description: "获取动态二维码，用微信扫码确认后完成绑定（微信 App：我 → 设置 → 插件 → ClawBot）",
+		Detail:      detail,
+	}}
 }
 
 // StartAction 启动绑定流程。进行中重复触发 = 取消旧流程重新开始（二维码可能已过期）。

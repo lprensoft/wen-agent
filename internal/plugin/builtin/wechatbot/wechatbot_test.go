@@ -264,8 +264,9 @@ func TestBindFlow(t *testing.T) {
 	if err != nil || !creds.valid() || creds.BinderUserID != binderID {
 		t.Fatalf("凭证未正确落盘: %+v err=%v", creds, err)
 	}
-	if acts := p.Actions(); acts[0].Label != "重新绑定微信" {
-		t.Fatalf("绑定后动作文案不符: %q", acts[0].Label)
+	// 「已绑定」是运行时事实，落在 Detail 里；按钮文案是固定的一句，它要能进语言包
+	if acts := p.Actions(); !strings.Contains(acts[0].Detail, "已绑定") {
+		t.Fatalf("绑定后该在 Detail 里说明: %+v", acts[0])
 	}
 
 	// 绑定成功后轮询已启动，绑定人无需配置白名单即可对话

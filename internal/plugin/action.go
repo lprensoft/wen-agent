@@ -11,6 +11,14 @@ type ActionDef struct {
 	Key         string `json:"key"` // 限小写字母开头的小写字母、数字与下划线
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	// Detail 是这个操作当前的**运行时事实**：技能目录在哪儿、已经装了哪几个插件包、
+	// 有没有新版本可用。展示时接在 Description 后面。
+	//
+	// 与 Description 分开，是因为 Description 要能进语言包，而掺了运行时内容的句子
+	// 进不去——键查出来的是一句固定的话，那个路径、那个版本号会在翻译时凭空消失。
+	// 所以插件只说事实，缀字的动作挪到翻译那一层（见 Localize），与 ConfigOption
+	// 的 Unavailable 是同一条道理。Detail 本身不翻译：它是路径与名字。
+	Detail string `json:"detail,omitempty"`
 }
 
 // 操作的运行状态。

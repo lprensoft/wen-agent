@@ -66,10 +66,23 @@ func metadataStrings(t *testing.T) map[string]string {
 				put(plugin.OptionKey(st.Name, f.Key, o.Value), o.Label)
 			}
 		}
-		// Actions 只在插件启用且初始化后才暴露，这里拿不到（WithoutInit）。操作的
-		// 文案因此不在这份清单里，语言包里那几条 plugin.*.action.* 也就不算死键
-		// （见 derivedElsewhere）。代价是漏译不会被测出来——内置插件的操作目前确实
-		// 大多没有英文，那是一处已知的缺口，补的时候连同这里的判定一起改。
+	}
+
+	// 操作的文案要单独走一趟：Manager.List 只对已启用且初始化过的插件暴露 Actions，
+	// 而这里是 WithoutInit 建起来的。直接问插件本身——Actions() 按契约就是廉价、
+	// 随时可调的（与 SystemPrompt 同一条），未初始化时它给出的正是默认那一档文案。
+	//
+	// 掺在里面的运行时事实（技能目录、版本号、已装的包）已经挪进 ActionDef.Detail，
+	// 不进语言包也不该进这份清单。
+	for _, pl := range builtinPlugins(cfg, nil) {
+		a, ok := pl.(plugin.Actionable)
+		if !ok {
+			continue
+		}
+		for _, act := range a.Actions() {
+			put(plugin.ActionLabelKey(pl.Name(), act.Key), act.Label)
+			put(plugin.ActionDescKey(pl.Name(), act.Key), act.Description)
+		}
 	}
 	return out
 }
@@ -141,10 +154,6 @@ var derivedElsewhere = map[string]bool{
 	plugin.FieldDescKey(ext, "max_result_bytes"):       true,
 	plugin.ActionLabelKey(ext, "refresh"):              true,
 	plugin.ActionDescKey(ext, "refresh"):               true,
-	plugin.ActionLabelKey("bundles", "install"):        true,
-	plugin.ActionDescKey("bundles", "install"):         true,
-	plugin.ActionLabelKey("bundles", "refresh"):        true,
-	plugin.ActionDescKey("bundles", "refresh"):         true,
 }
 
 // ext 是外源插件在语言包里共用的名字，见 plugin.ExternalKeyName。

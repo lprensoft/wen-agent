@@ -24,13 +24,15 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 			Key:   actionInstall,
 			Label: "安装",
 			Description: "装上面那一栏填的插件包。装完会连一次它声明的 MCP server 取工具清单——" +
-				"那一步会在本机执行插件包里写的命令。" + p.installedSummary(),
+				"那一步会在本机执行插件包里写的命令。",
+			Detail: p.installedSummary(),
 		},
 		{
 			Key:   actionRefresh,
 			Label: "重新握手全部",
 			Description: "把已装的每个插件包都连一遍，工具清单重取。包更新了、依赖后来才装好、" +
-				"上次没连上时用它。" + p.installedSummary(),
+				"上次没连上时用它。",
+			Detail: p.installedSummary(),
 		},
 	}
 }

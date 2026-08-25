@@ -21,15 +21,16 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	dir := p.dir
 	p.mu.RUnlock()
 
-	desc := "每个技能是技能目录下的一个子目录，里面放一个 SKILL.md，开头用 --- 包起来的说明块里写 description 说明它是干什么用的。" +
-		"放好文件后点这里即可加载，不必重启。"
+	detail := ""
 	if dir != "" {
-		desc = "当前技能目录：" + dir + "\n" + desc
+		detail = "当前技能目录：" + dir
 	}
 	return []plugin.ActionDef{{
-		Key:         actionRescan,
-		Label:       "扫描技能目录",
-		Description: desc,
+		Key:   actionRescan,
+		Label: "扫描技能目录",
+		Description: "每个技能是技能目录下的一个子目录，里面放一个 SKILL.md，开头用 --- 包起来的说明块里" +
+			"写 description 说明它是干什么用的。放好文件后点这里即可加载，不必重启。",
+		Detail: detail,
 	}}
 }
 

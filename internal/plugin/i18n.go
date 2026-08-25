@@ -128,6 +128,14 @@ func Localize(lang string, sts []Status) []Status {
 			for j, a := range st.Actions {
 				a.Label = i18n.T(lang, ActionLabelKey(kn, a.Key), a.Label)
 				a.Description = i18n.T(lang, ActionDescKey(kn, a.Key), a.Description)
+				// 运行时事实接在译文后面，本身不翻译——它是路径、版本号与名字
+				if a.Detail != "" {
+					if a.Description != "" {
+						a.Description += "\n"
+					}
+					a.Description += a.Detail
+					a.Detail = ""
+				}
 				acts[j] = a
 			}
 			st.Actions = acts
