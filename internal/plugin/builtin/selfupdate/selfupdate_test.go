@@ -155,8 +155,8 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 	srv := fakeGitHub(t, newTag)
 	p, exe, stateDir := newPlugin(t, srv, nil)
 
-	// 按钮文案固定（它要能进语言包），处境写在 Detail 里
-	if got := p.Actions()[0]; got.Label != "检查并更新" || !strings.Contains(got.Detail, "已是最新版") {
+	// 按钮文案固定（它要能进语言包）；已是最新版时 Detail 为空，查到新版才写上版本号
+	if got := p.Actions()[0]; got.Label != "检查并更新" || got.Detail != "" {
 		t.Fatalf("初始文案不符: %+v", got)
 	}
 	if err := p.StartAction(context.Background(), actionUpdate); err != nil {
@@ -203,8 +203,8 @@ func TestUpToDate(t *testing.T) {
 	if st.Status != plugin.ActionDone || !strings.Contains(st.Message, "已是最新版") {
 		t.Fatalf("结果不符: %+v", st)
 	}
-	if got := p.Actions()[0]; got.Label != "检查并更新" || !strings.Contains(got.Detail, "已是最新版") {
-		t.Fatalf("已是最新版时该这么说: %+v", got)
+	if got := p.Actions()[0]; got.Label != "检查并更新" || got.Detail != "" {
+		t.Fatalf("已是最新版时不该有附注: %+v", got)
 	}
 }
 

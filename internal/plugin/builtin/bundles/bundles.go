@@ -94,10 +94,14 @@ func (p *Plugin) names() []string {
 	return out
 }
 
+// installedSummary 是给操作说明用的运行时事实：已经装了哪几个。
+//
+// 只列名字，不成句：它接在译好的说明后面而本身不翻译（见 plugin.ActionDef.Detail），
+// 掺进中文的句子，英文界面上就会冒出一行中文。
 func (p *Plugin) installedSummary() string {
 	names := p.names()
 	if len(names) == 0 {
-		return "当前一个都没装。"
+		return ""
 	}
-	return "当前装着：" + strings.Join(names, "、") + "。"
+	return "· " + strings.Join(names, " · ")
 }

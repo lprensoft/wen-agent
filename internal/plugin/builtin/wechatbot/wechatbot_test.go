@@ -265,7 +265,7 @@ func TestBindFlow(t *testing.T) {
 		t.Fatalf("凭证未正确落盘: %+v err=%v", creds, err)
 	}
 	// 「已绑定」是运行时事实，落在 Detail 里；按钮文案是固定的一句，它要能进语言包
-	if acts := p.Actions(); !strings.Contains(acts[0].Detail, "已绑定") {
+	if acts := p.Actions(); !strings.Contains(acts[0].Detail, "bound") {
 		t.Fatalf("绑定后该在 Detail 里说明: %+v", acts[0])
 	}
 

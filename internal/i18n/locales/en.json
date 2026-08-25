@@ -411,7 +411,7 @@
   "plugin.session_search.field.max_scan_sessions.label": "Sessions scanned per search",
   "plugin.session_search.field.max_snippets.desc": "When one session matches in several places, how many excerpts to return.",
   "plugin.session_search.field.max_snippets.label": "Snippets per session",
-  "plugin.skills.action.rescan.desc": "Each skill is a subdirectory of the skills directory holding a SKILL.md, whose --- fenced block at the top carries a description saying what the skill is for. Drop the files in and press this to load them; no restart needed.",
+  "plugin.skills.action.rescan.desc": "Each skill is a subdirectory of the skills directory holding a SKILL.md, whose --- fenced block at the top carries a description saying what the skill is for. Drop the files in and press this to load them; no restart needed. Skills directory:",
   "plugin.skills.action.rescan.label": "Scan the skills directory",
   "plugin.skills.desc": "Skills: lists the SKILL.md files in a directory, and the model reads the steps it needs on demand",
   "plugin.skills.field.dir.desc": "Where skills live, one subdirectory each. Leave it empty for the default (plugins/skills under the config directory); the rescan button below shows the full path in use.",

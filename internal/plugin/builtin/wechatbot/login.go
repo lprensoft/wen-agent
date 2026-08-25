@@ -83,7 +83,7 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	// 语言包了（见 ActionDef.Detail）。
 	detail := ""
 	if bound {
-		detail = "已绑定。重新扫码会替换当前凭证。"
+		detail = "· bound"
 	}
 	return []plugin.ActionDef{{
 		Key:         "bind",

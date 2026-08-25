@@ -26,13 +26,11 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	// 文案固定，当前处境放 Detail。此前这里有两套文案（查到新版时换一套，标签里还带着
 	// 版本号），而语言包按键取译文，一个键只装得下一句——另一套永远没有英文，且测试
 	// 看不见它（检查工具问到的是默认那一档）。运行时事实归 Detail，见 ActionDef.Detail。
-	detail := "当前已是最新版。"
+	detail := ""
 	if tag := s.newerTag(); tag != "" {
-		detail = "查到新版 " + tag + "，点这里下载并替换。"
+		detail = "· " + tag
 		if s.autoRestart && s.restart != nil {
-			detail += "替换完成后服务会自动重启，正在进行的对话会被中断。"
-		} else {
-			detail += "替换完成后需要你自己重启程序才会生效。"
+			detail += " · auto restart"
 		}
 	}
 	return []plugin.ActionDef{{
