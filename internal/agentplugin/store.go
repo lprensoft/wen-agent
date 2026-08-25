@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // StoreDirName 是已安装插件包的存放目录名，位于配置目录之下。
@@ -56,8 +57,8 @@ func (s *Store) List() ([]*Bundle, []string) {
 	var bundles []*Bundle
 	var problems []string
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // 点开头的是我们自己的东西（工具清单缓存）与版本控制目录，不是插件包
 		}
 		b, err := Load(filepath.Join(s.dir, e.Name()))
 		if err != nil {

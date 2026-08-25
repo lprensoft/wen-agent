@@ -56,6 +56,25 @@ func DefaultKey(plugin, field string) string {
 
 func CategoryTextKey(catKey string) string { return "plugin.category." + catKey }
 
+// ExternalKeyName 是外源插件在语言包里共用的名字。
+//
+// 外源插件的名字要装了才知道（它来自插件包的清单），按名字推导键的话，语言包里
+// 不可能预先有这些条目——每装一个包就多出一组永远翻不了的标签。而这些配置项与
+// 操作是**本项目给外源插件加的**（调用前确认、结果截断、重新握手），不是包自己
+// 声明的，因此它们本来就该共用一份译文。
+//
+// 只有字段与操作走这个共用名。插件自己的说明（Description）不走：那是包的清单里
+// 的话，一个包一个说法，共用一份译文等于把所有包的说明都写成同一句。
+const ExternalKeyName = "external"
+
+// keyName 返回该插件在语言包里用的名字。
+func keyName(st Status) string {
+	if st.Source == SourceExternal {
+		return ExternalKeyName
+	}
+	return st.Name
+}
+
 // Localize 按 lang 复制出一份译好的插件状态。
 //
 // 复制而不是就地改：Status 里的 ConfigFields 与 Actions 是插件自己那份切片，
@@ -78,19 +97,20 @@ func Localize(lang string, sts []Status) []Status {
 		st.Description = i18n.T(lang, DescKey(st.Name), st.Description)
 		st.Category = i18n.T(lang, CategoryTextKey(st.CategoryKey), st.Category)
 
+		kn := keyName(st)
 		if len(st.ConfigFields) > 0 {
 			fields := make([]ConfigField, len(st.ConfigFields))
 			for j, f := range st.ConfigFields {
-				f.Label = i18n.T(lang, FieldLabelKey(st.Name, f.Key), f.Label)
-				f.Description = i18n.T(lang, FieldDescKey(st.Name, f.Key), f.Description)
+				f.Label = i18n.T(lang, FieldLabelKey(kn, f.Key), f.Label)
+				f.Description = i18n.T(lang, FieldDescKey(kn, f.Key), f.Description)
 				if def, ok := f.Default.(string); ok && def != "" &&
 					(f.Type == FieldString || f.Type == FieldText) {
-					f.Default = i18n.T(lang, DefaultKey(st.Name, f.Key), def)
+					f.Default = i18n.T(lang, DefaultKey(kn, f.Key), def)
 				}
 				if len(f.Options) > 0 {
 					opts := make([]ConfigOption, len(f.Options))
 					for k, o := range f.Options {
-						o.Label = i18n.T(lang, OptionKey(st.Name, f.Key, o.Value), o.Label)
+						o.Label = i18n.T(lang, OptionKey(kn, f.Key, o.Value), o.Label)
 						if o.Unavailable {
 							o.Label = fmt.Sprintf(i18n.T(lang, UnavailableKey, unavailableZH), o.Label)
 						}
@@ -106,8 +126,8 @@ func Localize(lang string, sts []Status) []Status {
 		if len(st.Actions) > 0 {
 			acts := make([]ActionDef, len(st.Actions))
 			for j, a := range st.Actions {
-				a.Label = i18n.T(lang, ActionLabelKey(st.Name, a.Key), a.Label)
-				a.Description = i18n.T(lang, ActionDescKey(st.Name, a.Key), a.Description)
+				a.Label = i18n.T(lang, ActionLabelKey(kn, a.Key), a.Label)
+				a.Description = i18n.T(lang, ActionDescKey(kn, a.Key), a.Description)
 				acts[j] = a
 			}
 			st.Actions = acts

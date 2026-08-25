@@ -113,4 +113,4 @@ Released under the [MIT License](LICENSE).
 ## Roadmap
 
 - More provider types (Ollama and friends) and model fallback
-- MCP tools (they will show up as "external" plugins — the source badge on the plugin cards is there for them)
+- Streamable HTTP transport for external plugins (stdio already works — see [CLI](docs/en/cli.md))

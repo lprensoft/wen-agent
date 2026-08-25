@@ -114,4 +114,4 @@ go vet ./...     # 静态检查
 ## 后续规划
 
 - 更多 Provider 类型（Ollama 等）与模型 fallback
-- MCP 工具（接入后即为「外源」插件，插件卡片上的来源标签为此预留）
+- 外源插件的 Streamable HTTP 传输（stdio 已支持，见 [命令行](docs/cli.md)）

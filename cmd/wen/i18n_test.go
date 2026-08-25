@@ -126,12 +126,23 @@ func isPluginKey(k string) bool { return len(k) > 7 && k[:7] == "plugin." }
 // 这几条 plugin.* 的键不是从插件声明推出来的，因此不算死键：
 //   - 「未启用」那句提示由翻译层缀在候选项后面，与具体插件无关；
 //   - 「其他」分组只在插件没声明分组时出现，内置插件都声明了，外部插件才会走到；
-//   - 「外源插件」分组只有装进来的插件包才会用到，而它们不在内置清单里。
+//   - 「外源插件」分组与 plugin.external.* 那一族只有装进来的插件包才会用到，
+//     而它们不在内置清单里——外源插件的名字要装了才知道，那些字段与操作因此
+//     共用一个与包名无关的名字（见 plugin.ExternalKeyName）。
 var derivedElsewhere = map[string]bool{
 	plugin.UnavailableKey:                              true,
 	plugin.CategoryTextKey(plugin.CategoryKeyOther):    true,
 	plugin.CategoryTextKey(plugin.CategoryKeyExternal): true,
+	plugin.FieldLabelKey(ext, "confirm"):               true,
+	plugin.FieldDescKey(ext, "confirm"):                true,
+	plugin.FieldLabelKey(ext, "max_result_bytes"):      true,
+	plugin.FieldDescKey(ext, "max_result_bytes"):       true,
+	plugin.ActionLabelKey(ext, "refresh"):              true,
+	plugin.ActionDescKey(ext, "refresh"):               true,
 }
+
+// ext 是外源插件在语言包里共用的名字，见 plugin.ExternalKeyName。
+const ext = plugin.ExternalKeyName
 
 func keySet(keys []string) map[string]bool {
 	m := make(map[string]bool, len(keys))

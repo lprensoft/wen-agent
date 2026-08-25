@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 
@@ -26,6 +28,7 @@ func runPlugins(args []string) error {
 
 	fs := flag.NewFlagSet("plugins "+sub, flag.ExitOnError)
 	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
+	noConnect := fs.Bool("no-connect", false, "装完不连接包里的 MCP server（不取工具清单）")
 	rest := parseMixed(fs, args)
 
 	path := config.ResolvePath(*configPath)
@@ -45,19 +48,24 @@ func runPlugins(args []string) error {
 		if len(rest) != 1 {
 			return fmt.Errorf("用法: wen plugins install <目录或 .zip>")
 		}
-		return installBundle(store, rest[0], cfg)
+		return installBundle(store, rest[0], cfg, *noConnect)
 	case "uninstall", "remove":
 		if len(rest) != 1 {
 			return fmt.Errorf("用法: wen plugins uninstall <插件包名称>")
 		}
 		return uninstallBundle(store, rest[0], cfg.BaseDir)
+	case "refresh":
+		if len(rest) != 1 {
+			return fmt.Errorf("用法: wen plugins refresh <插件包名称>")
+		}
+		return refreshBundle(store, rest[0], cfg)
 	case "info":
 		if len(rest) != 1 {
 			return fmt.Errorf("用法: wen plugins info <插件包名称>")
 		}
 		return bundleInfo(store, rest[0])
 	default:
-		return fmt.Errorf("未知的子命令 %q（可用：list / install / uninstall / info）", sub)
+		return fmt.Errorf("未知的子命令 %q（可用：list / install / refresh / uninstall / info）", sub)
 	}
 }
 
@@ -91,7 +99,8 @@ func listBundles(store *agentplugin.Store) error {
 		nameW, verW, kindW := 4, 4, 4
 		kinds := make([]string, len(bundles))
 		for i, b := range bundles {
-			kinds[i] = strings.Join(components(b), "+")
+			tools, _ := store.LoadTools(b.Manifest.Name)
+			kinds[i] = strings.Join(components(b, len(tools)), "+")
 			nameW = max(nameW, runewidth.StringWidth(b.Manifest.Name))
 			verW = max(verW, runewidth.StringWidth(dash(b.Manifest.Version)))
 			kindW = max(kindW, runewidth.StringWidth(kinds[i]))
@@ -110,14 +119,14 @@ func listBundles(store *agentplugin.Store) error {
 	return nil
 }
 
-func installBundle(store *agentplugin.Store, src string, cfg *config.Config) error {
+func installBundle(store *agentplugin.Store, src string, cfg *config.Config, noConnect bool) error {
 	b, err := store.Install(src)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("已装好 %s%s\n", b.Manifest.Name, paren(b.Manifest.Version))
 	fmt.Printf("  位置  %s\n", store.Path(b.Manifest.Name))
-	fmt.Printf("  内容  %s\n", strings.Join(components(b), "、"))
+	fmt.Printf("  内容  %s\n", strings.Join(components(b, -1), "、"))
 	fmt.Printf("  插件  %s（设置页上标记为「外源」，可单独开关）\n", agentplugin.PluginName(b.Manifest.Name))
 	for _, p := range b.Problems {
 		fmt.Printf("  提示  %s\n", p)
@@ -125,10 +134,73 @@ func installBundle(store *agentplugin.Store, src string, cfg *config.Config) err
 	if b.SkillsDir != "" {
 		noteSkillsOff(cfg)
 	}
-	if b.HasMCP {
-		fmt.Println("\n注意：这个包里的 MCP server 声明本版还不会加载，只有技能会生效。")
+	if len(b.Servers) > 0 && !noConnect {
+		if err := handshake(store, b, cfg); err != nil {
+			// 握手失败不回滚安装：包已经装好了，连不上多半是那台 server 自己的事
+			// （依赖没装、要先登录），用 wen plugins refresh 重来一次即可。
+			fmt.Println("  × 取工具清单失败：" + err.Error())
+			fmt.Println("    包已装好，修好之后用 wen plugins refresh " + b.Manifest.Name + " 重试。")
+		}
+	} else if b.HasMCP && len(b.Servers) == 0 {
+		fmt.Println()
+		fmt.Println("注意：这个包里有 mcp.json，但没有一台可用的 server（原因见上面的提示）。")
+	} else if noConnect && len(b.Servers) > 0 {
+		fmt.Println()
+		fmt.Println("按要求没有连接。包里的工具要等 wen plugins refresh " + b.Manifest.Name + " 之后才可用。")
 	}
 	noteRestart(cfg.BaseDir)
+	return nil
+}
+
+// refreshBundle 连一遍包里的 MCP server，把工具清单重取一遍。
+func refreshBundle(store *agentplugin.Store, name string, cfg *config.Config) error {
+	b, err := agentplugin.Load(store.Path(name))
+	if err != nil {
+		return fmt.Errorf("%s：%w", name, err)
+	}
+	return handshake(store, b, cfg)
+}
+
+// handshake 取回工具清单并落盘，把过程如实说清楚。
+//
+// 它会**在本机启动插件包里声明的命令**。这一步不藏着：装一个包本来就意味着以后要跑
+// 它，但「以后」和「现在」是两回事，所以把将要执行的命令原样打出来。不想连的话
+// install 时加 --no-connect，之后再用 wen plugins refresh。
+func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Config) error {
+	if len(b.Servers) == 0 {
+		return nil
+	}
+	// 把将要执行的命令原样打出来。只列 stdio 的那些——HTTP 的 server 不在本机启动，
+	// 混在同一张「将在本机执行」的清单里是句错话。
+	var local []agentplugin.MCPServer
+	for _, s := range b.Servers {
+		if s.Type == agentplugin.TransportStdio {
+			local = append(local, s)
+		}
+	}
+	fmt.Println()
+	fmt.Println(fmt.Sprint("正在连接 ", len(b.Servers), " 台 MCP server。其中 ", len(local), " 台将在本机启动："))
+	for _, s := range local {
+		fmt.Println("  " + s.Name + "  " + strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	tools, problems, err := agentplugin.Handshake(ctx, b, agentplugin.DataDir(cfg.BaseDir, b.Manifest.Name))
+	if err != nil {
+		return err
+	}
+	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
+		return fmt.Errorf("工具清单没能存下来：%w", err)
+	}
+
+	fmt.Println(fmt.Sprint("取到 ", len(tools), " 件工具"))
+	for _, t := range tools {
+		fmt.Println("  " + t.Local)
+	}
+	for _, m := range problems {
+		fmt.Println("  × " + m)
+	}
 	return nil
 }
 
@@ -136,6 +208,7 @@ func uninstallBundle(store *agentplugin.Store, name, baseDir string) error {
 	if err := store.Remove(name); err != nil {
 		return err
 	}
+	store.DropTools(name)
 	fmt.Printf("已卸载 %s\n", name)
 	fmt.Printf("提示：它在设置页上的开关状态还留在 plugins.state.json 里，重新装回来时会沿用。\n")
 	noteRestart(baseDir)
@@ -166,25 +239,38 @@ func bundleInfo(store *agentplugin.Store, name string) error {
 		fmt.Printf("主页      %s\n", m.Homepage)
 	}
 	fmt.Printf("位置      %s\n", b.Root.Path())
-	fmt.Printf("内容      %s\n", strings.Join(components(b), "、"))
+	tools, _ := store.LoadTools(name)
+	fmt.Printf("内容      %s\n", strings.Join(components(b, len(tools)), "、"))
 	if b.SkillsDir != "" {
 		fmt.Printf("技能目录  %s\n", b.SkillsDir)
 	}
 	for _, p := range b.Problems {
 		fmt.Printf("提示      %s\n", p)
 	}
+	for _, t := range tools {
+		fmt.Println("工具      " + t.Local)
+	}
+	if len(tools) == 0 && b.HasMCP {
+		fmt.Println("提示      还没取到工具，用 wen plugins refresh " + name + " 连一次")
+	}
 	return nil
 }
 
 // components 说清这个包里到底有什么。空包也要说，否则「装好了但什么都没发生」
 // 只能靠猜。
-func components(b *agentplugin.Bundle) []string {
+func components(b *agentplugin.Bundle, tools int) []string {
 	var out []string
 	if b.SkillsDir != "" {
 		out = append(out, "技能")
 	}
 	if b.HasMCP {
-		out = append(out, "MCP")
+		// 带上工具数：一个包「有 MCP 声明」与「真的取到了工具」是两回事，
+		// 而后者才决定模型能不能用上它
+		if tools < 0 {
+			out = append(out, "MCP") // 还没握手，件数未知
+		} else {
+			out = append(out, fmt.Sprint("MCP·", tools, " 件工具"))
+		}
 	}
 	if len(out) == 0 {
 		out = append(out, "（空）")

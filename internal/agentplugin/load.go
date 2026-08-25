@@ -22,9 +22,11 @@ type Bundle struct {
 	// SkillsDir 是包内的技能根目录，不存在时为空串。
 	// 里面每个子目录一个技能，具体解析交给技能插件，本包不重复实现一遍。
 	SkillsDir string
-	// HasMCP 表示包里有 mcp.json。M1 只记录不加载——先把它报出来，
-	// 用户装了个纯 MCP 的包却什么都没发生时，至少知道是本程序还没支持。
-	HasMCP   bool
+	// HasMCP 表示包里有 mcp.json。整份文件不合法时它仍为 true 而 Servers 为空：
+	// 「有这个组件但没能用起来」与「压根没这个组件」是两件事，报给人看的话不一样。
+	HasMCP bool
+	// Servers 是 mcp.json 里可用的那些 server，尚未展开占位符。
+	Servers  []MCPServer
 	Problems []string
 }
 
@@ -64,9 +66,22 @@ func Load(dir string) (*Bundle, error) {
 		}
 	}
 
-	// MCP 组件：本版只报告存在与否。真正的加载在 M2。
-	if info, err := os.Stat(root.Join(MCPFile)); err == nil && !info.IsDir() {
+	// MCP 组件：整份文件坏掉只作废这一个组件，技能照常；单台 server 坏掉只跳过那一台。
+	mcpPath := root.Join(MCPFile)
+	if info, err := os.Stat(mcpPath); err == nil && !info.IsDir() {
 		b.HasMCP = true
+		switch data, err := os.ReadFile(mcpPath); {
+		case err != nil:
+			b.Problems = append(b.Problems, "读取 "+MCPFile+" 失败："+err.Error())
+		default:
+			servers, warnings, err := ParseMCP(data)
+			b.Problems = append(b.Problems, warnings...)
+			if err != nil {
+				b.Problems = append(b.Problems, err.Error()+"，这个包的 MCP 组件整个不可用")
+			} else {
+				b.Servers = servers
+			}
+		}
 	}
 	return b, nil
 }
