@@ -221,7 +221,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 }
 
 // StatusLines 报一行这个包里有什么。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.RLock()
 	live := len(p.clients)
 	p.mu.RUnlock()

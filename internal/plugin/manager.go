@@ -565,11 +565,11 @@ func (m *Manager) SystemPrompts() []string {
 
 // StatusLines 返回所有启用插件贡献的状态行（按注册顺序）。
 // 只问启用的插件：被禁用的插件没有运行状况可言，报一行「已停」只是噪声。
-func (m *Manager) StatusLines() []string {
+func (m *Manager) StatusLines(lang string) []string {
 	var out []string
 	for _, e := range enabledAs[StatusReporter](m) {
 		var lines []string
-		safely(e.name, "汇报状态行", func() { lines = e.impl.StatusLines() })
+		safely(e.name, "汇报状态行", func() { lines = e.impl.StatusLines(lang) })
 		for _, line := range lines {
 			if line != "" {
 				out = append(out, line)

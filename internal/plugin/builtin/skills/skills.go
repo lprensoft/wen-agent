@@ -203,7 +203,7 @@ func (p *Plugin) SystemPrompt() string {
 	return p.prompt
 }
 
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.dir == "" {

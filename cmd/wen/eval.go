@@ -233,7 +233,7 @@ func runSayTurn(ctx context.Context, ag *agent.Agent, sessionID string, index in
 		return sayOutcome{rows: []evalRow{row}, failed: true}
 	}
 	row.Metrics = stylecheck.Measure(row.Reply)
-	row.Hits = stylecheck.Check(row.Reply)
+	row.Hits = stylecheck.Check(uiLang, row.Reply)
 	out := sayOutcome{rows: []evalRow{row}}
 	if compact {
 		out.rows = append(out.rows, evalRow{Kind: rowAutoCompact})

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/stylecheck"
 )
 
@@ -79,11 +80,11 @@ func (b bucket) bracketPercent() int {
 }
 
 // hitBreakdown 把按规则的命中渲染成「客套收尾 2、加粗 1」，多的在前，最多 n 项。
-func (b bucket) hitBreakdown(n int) string {
-	return breakdown(b.Hits, n)
+func (b bucket) hitBreakdown(lang string, n int) string {
+	return breakdown(lang, b.Hits, n)
 }
 
-func breakdown(hits map[string]int, n int) string {
+func breakdown(lang string, hits map[string]int, n int) string {
 	type kv struct {
 		id string
 		n  int
@@ -103,18 +104,18 @@ func breakdown(hits map[string]int, n int) string {
 	}
 	parts := make([]string, 0, len(items))
 	for _, it := range items {
-		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(it.id), it.n))
+		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(lang, it.id), it.n))
 	}
-	return strings.Join(parts, "、")
+	return strings.Join(parts, i18n.T(lang, "plugin.style_watch.sep", "、"))
 }
 
 // summary 把一个 bucket 渲染成一句话：「42 轮，助手腔 3 次（客套收尾 2、加粗 1），均长 58 字，演绎占 23%」。
-func (b bucket) summary() string {
-	s := fmt.Sprintf("%d 轮，助手腔 %d 次", b.Turns, b.totalHits())
-	if bd := b.hitBreakdown(3); bd != "" {
-		s += "（" + bd + "）"
+func (b bucket) summary(lang string) string {
+	s := i18n.Tf(lang, "plugin.style_watch.summary.turns", "%d 轮，助手腔 %d 次", b.Turns, b.totalHits())
+	if bd := b.hitBreakdown(lang, 3); bd != "" {
+		s += i18n.Tf(lang, "plugin.style_watch.summary.breakdown", "（%s）", bd)
 	}
-	s += fmt.Sprintf("，均长 %d 字，演绎占 %d%%", b.avgRunes(), b.bracketPercent())
+	s += i18n.Tf(lang, "plugin.style_watch.summary.metrics", "，均长 %d 字，演绎占 %d%%", b.avgRunes(), b.bracketPercent())
 	return s
 }
 

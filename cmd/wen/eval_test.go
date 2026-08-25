@@ -81,10 +81,10 @@ func sampleResult() evalResult {
 		Persona:     "小满，二十出头，说话短。",
 		Samples:     "你：累了。\n小满：那就歇着，别硬撑。",
 		Rows: []evalRow{
-			{Kind: rowSay, Index: 1, Say: "晚上好", Reply: reply1, Metrics: stylecheck.Measure(reply1), Hits: stylecheck.Check(reply1)},
+			{Kind: rowSay, Index: 1, Say: "晚上好", Reply: reply1, Metrics: stylecheck.Measure(reply1), Hits: stylecheck.Check("", reply1)},
 			{Kind: rowCompact},
 			{Kind: rowGap, GapHours: 8},
-			{Kind: rowSay, Index: 2, Say: "醒了吗 | 在吗", Reply: reply2, Metrics: stylecheck.Measure(reply2), Hits: stylecheck.Check(reply2)},
+			{Kind: rowSay, Index: 2, Say: "醒了吗 | 在吗", Reply: reply2, Metrics: stylecheck.Measure(reply2), Hits: stylecheck.Check("", reply2)},
 			{Kind: rowAutoCompact},
 		},
 		Compactions:     1,

@@ -12,7 +12,7 @@ import (
 //
 // 「有没有新版」与「还知不知道有没有新版」是两件事：自动检查被关掉、上一次检查失败、
 // 从来没查过，在界面上看起来都是「没提示更新」。状态行是唯一能把它们区分开的地方。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	const prefix = "⬆ 程序更新："
 

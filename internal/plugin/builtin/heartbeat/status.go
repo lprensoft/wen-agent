@@ -7,7 +7,7 @@ import (
 
 // StatusLines 在状态命令里报一行当前节奏：间隔、模式与下次心跳的大致时刻。
 // 只报「大致」——心跳会被真人对话重置、被动态判定改写，报到秒既没有意义也会误导。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.Lock()
 	cur, dynamic, lastBeat := p.cur, p.dynamic, p.lastBeat
 	pausedUntil, curContext := p.pausedUntil, p.curContext

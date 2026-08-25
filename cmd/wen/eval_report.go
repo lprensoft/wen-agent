@@ -369,7 +369,7 @@ func hitBreakdown(hits map[string]int) string {
 	})
 	parts := make([]string, 0, len(items))
 	for _, it := range items {
-		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(it.id), it.n))
+		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(uiLang, it.id), it.n))
 	}
 	return strings.Join(parts, "、")
 }

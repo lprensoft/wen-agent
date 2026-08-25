@@ -333,14 +333,14 @@ func TestStatusLinesShowPauseAndContext(t *testing.T) {
 	if _, err := p.Tools()[0].Execute(context.Background(), json.RawMessage(`{"minutes":60,"reason":"睡","context":"睡前"}`)); err != nil {
 		t.Fatal(err)
 	}
-	lines := p.StatusLines()
+	lines := p.StatusLines("")
 	if len(lines) != 1 || !strings.Contains(lines[0], "睡前") {
 		t.Errorf("状态行应带情境：%v", lines)
 	}
 	if _, err := p.Tools()[1].Execute(context.Background(), json.RawMessage(`{"minutes":480,"reason":"睡"}`)); err != nil {
 		t.Fatal(err)
 	}
-	lines = p.StatusLines()
+	lines = p.StatusLines("")
 	if len(lines) != 1 || !strings.Contains(lines[0], "暂停中") {
 		t.Errorf("状态行应报暂停：%v", lines)
 	}

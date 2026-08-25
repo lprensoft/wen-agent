@@ -56,7 +56,7 @@ func TestCheckPositives(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := rulesOf(Check(c.text))
+			got := rulesOf(Check("", c.text))
 			if got[c.want] == 0 {
 				t.Errorf("%q 应命中 %s，实际命中 %v", c.text, c.want, got)
 			}
@@ -83,7 +83,7 @@ func TestCheckNegatives(t *testing.T) {
 		"中文标点：全角的，。！？都不是 emoji。",
 	}
 	for _, text := range texts {
-		if hits := Check(text); len(hits) != 0 {
+		if hits := Check("", text); len(hits) != 0 {
 			t.Errorf("%q 不应命中，实际 %+v", text, hits)
 		}
 	}
@@ -91,18 +91,18 @@ func TestCheckNegatives(t *testing.T) {
 
 // 演绎里的修饰不受「少用修饰」类条目约束，但自称 AI 与 emoji 在哪儿都算。
 func TestBracketsExemptOnlyDecorationRules(t *testing.T) {
-	got := rulesOf(Check("【窗外的城市闪耀着灯火，美轮美奂】回来了？"))
+	got := rulesOf(Check("", "【窗外的城市闪耀着灯火，美轮美奂】回来了？"))
 	if got["promo_adjective"] != 0 {
 		t.Errorf("演绎内的宣传腔不该计：%v", got)
 	}
-	got = rulesOf(Check("【作为一个 AI，她笑了笑 😊】回来了？"))
+	got = rulesOf(Check("", "【作为一个 AI，她笑了笑 😊】回来了？"))
 	if got["self_ai"] == 0 || got["emoji"] == 0 {
 		t.Errorf("演绎内的自称 AI 与 emoji 仍应计：%v", got)
 	}
 }
 
 func TestSnippetAndLabel(t *testing.T) {
-	hits := Check("好的，这就去。希望这对你有帮助。")
+	hits := Check("", "好的，这就去。希望这对你有帮助。")
 	if len(hits) != 2 {
 		t.Fatalf("命中数 = %d，期望 2：%+v", len(hits), hits)
 	}
@@ -112,20 +112,20 @@ func TestSnippetAndLabel(t *testing.T) {
 	if hits[1].Rule != "closing_cliche" || hits[1].Snippet != "希望这对你有帮助" {
 		t.Errorf("收尾命中 = %+v", hits[1])
 	}
-	long := Check("- " + strings.Repeat("很长的一行", 20))
+	long := Check("", "- " + strings.Repeat("很长的一行", 20))
 	if r := []rune(long[0].Snippet); len(r) != snippetMaxRunes+1 || !strings.HasSuffix(long[0].Snippet, "…") {
 		t.Errorf("片段应截断到 %d 字并带省略号，实际 %q", snippetMaxRunes, long[0].Snippet)
 	}
 }
 
 func TestEmojiCountsEach(t *testing.T) {
-	if got := rulesOf(Check("😊😊 好")); got["emoji"] != 2 {
+	if got := rulesOf(Check("", "😊😊 好")); got["emoji"] != 2 {
 		t.Errorf("两个 emoji 应各计一次：%v", got)
 	}
 }
 
 func TestSummaryClosingNeedsThreeParagraphs(t *testing.T) {
-	got := rulesOf(Check("一件事。\n总之，别急。"))
+	got := rulesOf(Check("", "一件事。\n总之，别急。"))
 	if got["summary_closing"] != 0 {
 		t.Errorf("两段不算三段式：%v", got)
 	}
@@ -141,18 +141,18 @@ func TestRulesTable(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, r := range rs {
-		if r.ID == "" || r.Label == "" || r.fn == nil {
+		if r.ID == "" || r.Label.ZH() == "" || r.fn == nil {
 			t.Errorf("规则缺字段：%+v", r)
 		}
 		if seen[r.ID] {
 			t.Errorf("规则 id 重复：%s", r.ID)
 		}
 		seen[r.ID] = true
-		if !Known(r.ID) || LabelOf(r.ID) != r.Label {
+		if !Known(r.ID) || LabelOf("", r.ID) != r.Label.ZH() {
 			t.Errorf("Known / LabelOf 与规则表不一致：%s", r.ID)
 		}
 	}
-	if Known("no_such_rule") || LabelOf("no_such_rule") != "no_such_rule" {
+	if Known("no_such_rule") || LabelOf("", "no_such_rule") != "no_such_rule" {
 		t.Error("未知规则应当报未知并原样返回 id")
 	}
 }

@@ -120,7 +120,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 				ContextLength: contextLength, MeasuredTokens: -1,
 			}
 			if plugins != nil {
-				info.PluginLines = plugins.StatusLines()
+				info.PluginLines = plugins.StatusLines(lang)
 			}
 			if sessionID == "" {
 				return info, nil

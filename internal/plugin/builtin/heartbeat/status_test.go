@@ -9,7 +9,7 @@ import (
 // 状态行报出间隔、模式与下次心跳的大致时机。
 func TestStatusLines(t *testing.T) {
 	p := &Plugin{cur: 30 * time.Minute, dynamic: true, lastBeat: time.Now().Add(-10 * time.Minute)}
-	lines := p.StatusLines()
+	lines := p.StatusLines("")
 	if len(lines) != 1 {
 		t.Fatalf("应只报一行，得到 %v", lines)
 	}
@@ -22,18 +22,18 @@ func TestStatusLines(t *testing.T) {
 
 	// 动态关闭时报「固定」
 	p.dynamic = false
-	if got := p.StatusLines()[0]; !strings.Contains(got, "固定") {
+	if got := p.StatusLines("")[0]; !strings.Contains(got, "固定") {
 		t.Fatalf("动态关闭时应报固定，得到 %q", got)
 	}
 
 	// 已到期（轮次占用或刚被叫醒）报「即将触发」，不报负数
 	p.lastBeat = time.Now().Add(-time.Hour)
-	if got := p.StatusLines()[0]; !strings.Contains(got, "即将触发") {
+	if got := p.StatusLines("")[0]; !strings.Contains(got, "即将触发") {
 		t.Fatalf("已到期应报即将触发，得到 %q", got)
 	}
 
 	// 未 Init（cur 为零）时不报
-	if lines := (&Plugin{}).StatusLines(); lines != nil {
+	if lines := (&Plugin{}).StatusLines(""); lines != nil {
 		t.Fatalf("未启动时不应有状态行，得到 %v", lines)
 	}
 }

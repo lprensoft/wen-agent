@@ -958,7 +958,7 @@ func TestInitReentrant(t *testing.T) {
 
 func TestStatusLines(t *testing.T) {
 	h := newHarness(t, false, nil)
-	if got := h.p.StatusLines(); len(got) != 1 || got[0] != "📅 日程：今天尚未排表" {
+	if got := h.p.StatusLines(""); len(got) != 1 || got[0] != "📅 日程：今天尚未排表" {
 		t.Fatalf("未排状态不符: %v", got)
 	}
 	h.call(t, "set_day_plan", planArgs)
@@ -966,12 +966,12 @@ func TestStatusLines(t *testing.T) {
 	h.call(t, "update_day_plan", `{"id":"a1","status":"done","outcome":"跑完了"}`)
 	h.clk.set(at(14, 2))
 	h.call(t, "update_day_plan", `{"id":"a2","status":"ongoing"}`)
-	if got := h.p.StatusLines()[0]; got != "📅 日程：此刻 和林舟在图书馆查资料（到 16:30）；今天 3 项，已完成 1" {
+	if got := h.p.StatusLines("")[0]; got != "📅 日程：此刻 和林舟在图书馆查资料（到 16:30）；今天 3 项，已完成 1" {
 		t.Fatalf("进行中状态不符: %s", got)
 	}
 	h.clk.set(at(16, 35))
 	h.call(t, "update_day_plan", `{"id":"a2","status":"done","outcome":"聊了一下午"}`)
-	if got := h.p.StatusLines()[0]; got != "📅 日程：空闲，下一项 18:30；今天 3 项，已完成 2" {
+	if got := h.p.StatusLines("")[0]; got != "📅 日程：空闲，下一项 18:30；今天 3 项，已完成 2" {
 		t.Fatalf("空闲状态不符: %s", got)
 	}
 }
@@ -1000,7 +1000,7 @@ func TestScopedStores(t *testing.T) {
 	if _, err := h.tool("update_day_plan").Execute(outer, json.RawMessage(`{"id":"a2","status":"ongoing"}`)); err == nil || !strings.Contains(err.Error(), "没有 id 为") {
 		t.Fatalf("不可读域的项应报没有这一项: %v", err)
 	}
-	if got := h.p.StatusLines()[0]; got != "📅 日程：今天 3 项，已完成 1（按人格分开的表）" {
+	if got := h.p.StatusLines("")[0]; got != "📅 日程：今天 3 项，已完成 1（按人格分开的表）" {
 		t.Fatalf("只有分域的表时状态只报条数: %s", got)
 	}
 }

@@ -287,7 +287,7 @@ func TestInitCustomDirNotCreated(t *testing.T) {
 	if _, err := os.Stat(custom); !os.IsNotExist(err) {
 		t.Error("不该替用户创建他指定的目录")
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], "未能加载") {
+	if lines := p.StatusLines(""); len(lines) != 1 || !strings.Contains(lines[0], "未能加载") {
 		t.Errorf("状态行应报出问题: %v", lines)
 	}
 }
@@ -295,7 +295,7 @@ func TestInitCustomDirNotCreated(t *testing.T) {
 func TestStatusLine(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "pdf", "description: 处理 PDF", "正文")
-	lines := newAt(t, dir, nil).StatusLines()
+	lines := newAt(t, dir, nil).StatusLines("")
 	if len(lines) != 1 {
 		t.Fatalf("状态行数 = %d", len(lines))
 	}

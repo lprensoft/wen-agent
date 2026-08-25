@@ -13,5 +13,9 @@ package plugin
 // 措辞由插件负责：一行一条、自带前缀（如「💓 心跳：…」）。状态输出是给人扫一眼的，
 // 不要塞多行长文，也不要放随时间抖动到看不懂的精确值。
 type StatusReporter interface {
-	StatusLines() []string
+	// lang 是要用哪门语言写这一行。它按调用方判定：Web UI 的 /api/status 用那次
+	// 请求的语言，IM 通道的 /status 与 wen status 用进程语言（那两处没有请求可
+	// 依附）。插件不要自己去存语言——同一个服务可能同时连着一个中文浏览器和一个
+	// 英文的终端。
+	StatusLines(lang string) []string
 }

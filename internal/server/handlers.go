@@ -149,7 +149,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"context_length": contextLength,
 	}
 	// 插件贡献的状态行（如心跳节奏）：无插件可报时不下发该字段，界面据此不占版面
-	if lines := s.plugins.StatusLines(); len(lines) > 0 {
+	if lines := s.plugins.StatusLines(reqLang(r)); len(lines) > 0 {
 		resp["plugin_lines"] = lines
 	}
 	if sid := r.URL.Query().Get("session_id"); sid != "" {

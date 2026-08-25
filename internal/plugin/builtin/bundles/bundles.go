@@ -67,7 +67,7 @@ func (p *Plugin) Init(_ plugin.InitContext, _ map[string]any) error {
 func (p *Plugin) SystemPrompt() string { return "" }
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	bundles, problems := p.store.List()
 	if len(bundles) == 0 && len(problems) == 0 {
 		return []string{"🧩 外源插件包：一个都没装"}

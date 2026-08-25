@@ -91,7 +91,7 @@ func TestSystemPromptStableAndStatic(t *testing.T) {
 	if r := p.Requires(); len(r) != 1 || r[0] != "roleplay" {
 		t.Errorf("Requires = %v", r)
 	}
-	if p.StatusLines() != nil {
+	if p.StatusLines("") != nil {
 		t.Error("未 Init 不该报状态行")
 	}
 }
@@ -101,7 +101,7 @@ func TestTurnPromptEmptyWhenNothing(t *testing.T) {
 	if got, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{}); got != "" || err != nil {
 		t.Errorf("没有状况不该注入: %q, %v", got, err)
 	}
-	if p.StatusLines() != nil {
+	if p.StatusLines("") != nil {
 		t.Error("没有状况不该报状态行")
 	}
 }
@@ -118,7 +118,7 @@ func TestToolsRoundTrip(t *testing.T) {
 	if !strings.HasPrefix(tp, stateHeader+"\n着凉第 1 天，有点不舒服，还在往重里走（硬扛着），预计再四五天好。") || !strings.HasSuffix(tp, guideLine) {
 		t.Errorf("注入块不对: %q", tp)
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || lines[0] != "🤒 身体：着凉第 1 天（硬扛中）" {
+	if lines := p.StatusLines(""); len(lines) != 1 || lines[0] != "🤒 身体：着凉第 1 天（硬扛中）" {
 		t.Errorf("状态行 = %q", lines)
 	}
 
@@ -155,7 +155,7 @@ func TestToolsRoundTrip(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "7 天内不再添新状况") {
 		t.Errorf("冷却期内应拒绝并说明: %v", err)
 	}
-	if p.StatusLines() != nil {
+	if p.StatusLines("") != nil {
 		t.Error("痊愈后不该报状态行")
 	}
 }
@@ -290,7 +290,7 @@ func TestScopeSeparation(t *testing.T) {
 		t.Errorf("inner 应落在同级的 -inner 目录: %v", err)
 	}
 	// 状态行跨全部域，标上域名
-	lines := p.StatusLines()
+	lines := p.StatusLines("")
 	if len(lines) != 1 || !strings.Contains(lines[0], "头疼第 1 天（硬扛中）") || !strings.Contains(lines[0], "inner：着凉第 1 天（硬扛中）") {
 		t.Errorf("状态行 = %q", lines)
 	}

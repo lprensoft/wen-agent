@@ -413,7 +413,7 @@ func (p *Plugin) rebuildAvailabilityLocked() {
 
 // StatusLines 报一行今天的进度。共享域的表带活动名；只有按人格分开的表时只报条数——
 // 状态输出会被转发到各条消息通道，哪一面的活动名都不该出现在另一面的窗口里。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	if s.base == "" {
 		return nil

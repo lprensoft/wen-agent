@@ -14,19 +14,23 @@ package stylecheck
 import (
 	"regexp"
 	"strings"
+
+	"wen/internal/prompt"
 )
 
 // Hit 是一次规则命中。
 type Hit struct {
 	Rule    string // 规则 id，稳定，可用于配置忽略与统计键
-	Label   string // 中文标签，给人看
+	Label   string // 规则名，已按调用方的语言取出
 	Snippet string // 命中的那一小段原文（已截断）
 }
 
 // Rule 描述一条检测规则。
 type Rule struct {
-	ID    string
-	Label string
+	ID string
+	// Label 是这条规则的名字。它进文风注记与状态行（给人看），也进 style_report
+	// 的输出（给模型看），两处都跟随进程语言，因此放提示词语言包。
+	Label prompt.Piece
 	// fn 在预处理后的文本上找出全部命中片段；返回空表示未命中。
 	fn func(t prepared) []string
 }
@@ -39,10 +43,10 @@ func Rules() []Rule {
 }
 
 // LabelOf 返回规则 id 的中文标签；未知 id 原样返回。
-func LabelOf(id string) string {
+func LabelOf(lang, id string) string {
 	for _, r := range rules {
 		if r.ID == id {
-			return r.Label
+			return r.Label.For(lang)
 		}
 	}
 	return id
@@ -62,7 +66,7 @@ func Known(id string) bool {
 const snippetMaxRunes = 24
 
 // Check 在文本上跑全部规则，按规则顺序返回命中；同一规则命中多处返回多条。
-func Check(text string) []Hit {
+func Check(lang, text string) []Hit {
 	t := prepare(text)
 	if t.full == "" {
 		return nil
@@ -70,7 +74,7 @@ func Check(text string) []Hit {
 	var hits []Hit
 	for _, r := range rules {
 		for _, s := range r.fn(t) {
-			hits = append(hits, Hit{Rule: r.ID, Label: r.Label, Snippet: clip(s)})
+			hits = append(hits, Hit{Rule: r.ID, Label: r.Label.For(lang), Snippet: clip(s)})
 		}
 	}
 	return hits
@@ -124,23 +128,23 @@ func clip(s string) string {
 // （自称 AI），再是开场与收尾的客套，然后是句式与结构，最后是排版。
 
 var rules = []Rule{
-	{ID: "self_ai", Label: "自称 AI", fn: regexAll(selfAI)},
-	{ID: "opening_cliche", Label: "客套开场", fn: leadMatch(openingCliche)},
-	{ID: "flattery", Label: "谄媚开场", fn: regexAll(flattery)},
-	{ID: "closing_cliche", Label: "客套收尾", fn: regexAll(closingCliche)},
-	{ID: "transition_cliche", Label: "过渡套话", fn: regexAll(transitionCliche)},
-	{ID: "enumeration", Label: "首先其次", fn: enumeration},
-	{ID: "not_but", Label: "不是而是", fn: regexAll(notBut)},
-	{ID: "hedging", Label: "过度对冲", fn: regexAll(hedging)},
-	{ID: "authority", Label: "泛指权威", fn: regexAll(authority)},
-	{ID: "pseudo_analysis", Label: "伪分析", fn: speechRegexAll(pseudoAnalysis)},
-	{ID: "promo_adjective", Label: "宣传腔", fn: speechRegexAll(promoAdjective)},
-	{ID: "filler", Label: "填充语", fn: regexAll(filler)},
-	{ID: "summary_closing", Label: "三段式总结", fn: summaryClosing},
-	{ID: "md_heading", Label: "标题", fn: lineMatch(mdHeading)},
-	{ID: "md_list", Label: "列表", fn: lineMatch(mdList)},
-	{ID: "md_bold", Label: "加粗", fn: regexAll(mdBold)},
-	{ID: "emoji", Label: "emoji", fn: emoji},
+	{ID: "self_ai", Label: prompt.Text("prompt.style.rule.self_ai", "自称 AI"), fn: regexAll(selfAI)},
+	{ID: "opening_cliche", Label: prompt.Text("prompt.style.rule.opening_cliche", "客套开场"), fn: leadMatch(openingCliche)},
+	{ID: "flattery", Label: prompt.Text("prompt.style.rule.flattery", "谄媚开场"), fn: regexAll(flattery)},
+	{ID: "closing_cliche", Label: prompt.Text("prompt.style.rule.closing_cliche", "客套收尾"), fn: regexAll(closingCliche)},
+	{ID: "transition_cliche", Label: prompt.Text("prompt.style.rule.transition_cliche", "过渡套话"), fn: regexAll(transitionCliche)},
+	{ID: "enumeration", Label: prompt.Text("prompt.style.rule.enumeration", "首先其次"), fn: enumeration},
+	{ID: "not_but", Label: prompt.Text("prompt.style.rule.not_but", "不是而是"), fn: regexAll(notBut)},
+	{ID: "hedging", Label: prompt.Text("prompt.style.rule.hedging", "过度对冲"), fn: regexAll(hedging)},
+	{ID: "authority", Label: prompt.Text("prompt.style.rule.authority", "泛指权威"), fn: regexAll(authority)},
+	{ID: "pseudo_analysis", Label: prompt.Text("prompt.style.rule.pseudo_analysis", "伪分析"), fn: speechRegexAll(pseudoAnalysis)},
+	{ID: "promo_adjective", Label: prompt.Text("prompt.style.rule.promo_adjective", "宣传腔"), fn: speechRegexAll(promoAdjective)},
+	{ID: "filler", Label: prompt.Text("prompt.style.rule.filler", "填充语"), fn: regexAll(filler)},
+	{ID: "summary_closing", Label: prompt.Text("prompt.style.rule.summary_closing", "三段式总结"), fn: summaryClosing},
+	{ID: "md_heading", Label: prompt.Text("prompt.style.rule.md_heading", "标题"), fn: lineMatch(mdHeading)},
+	{ID: "md_list", Label: prompt.Text("prompt.style.rule.md_list", "列表"), fn: lineMatch(mdList)},
+	{ID: "md_bold", Label: prompt.Text("prompt.style.rule.md_bold", "加粗"), fn: regexAll(mdBold)},
+	{ID: "emoji", Label: prompt.Text("prompt.style.rule.emoji", "emoji"), fn: emoji},
 }
 
 var (

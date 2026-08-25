@@ -186,7 +186,7 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 	if got := p.Actions()[0].Label; got != "检查并更新" {
 		t.Fatalf("按钮文案该是固定的一句: %q", got)
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], newTag) {
+	if lines := p.StatusLines(""); len(lines) != 1 || !strings.Contains(lines[0], newTag) {
 		t.Fatalf("状态行不符: %v", lines)
 	}
 }

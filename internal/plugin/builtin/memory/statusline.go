@@ -11,7 +11,7 @@ import (
 // 持锁的路径上被调用），而条数本身就会泄漏「存在什么」——启用 dual_persona 时，
 // 一个人格的状态输出里出现另一个人格的记忆条数，藏住的就只是内容而不是存在性了。
 // 要看有多少条，list_memories 是按可见域算的。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	if s.store == nil {
 		return nil

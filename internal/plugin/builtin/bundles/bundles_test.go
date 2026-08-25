@@ -93,7 +93,7 @@ func TestInstallFromDraftValue(t *testing.T) {
 	if !strings.Contains(st.Message, "重启") {
 		t.Errorf("该说清要重启: %q", st.Message)
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], "1 个") {
+	if lines := p.StatusLines(""); len(lines) != 1 || !strings.Contains(lines[0], "1 个") {
 		t.Errorf("状态行不对: %v", lines)
 	}
 }

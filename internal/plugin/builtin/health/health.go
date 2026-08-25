@@ -266,7 +266,7 @@ func renderSnapshot(snap Snapshot, now time.Time, cooldown time.Duration) string
 // StatusLines 报一行身体状况。没有状况就不报：「一切如常」不值得占一行。
 // 跨全部域：状态行是给用户看的，用户拥有全部域。多个域时标上域名，
 // 否则两个人格各病一场就分不清谁是谁。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	base, tags := p.allDomains()
 	if base == "" {
 		return nil

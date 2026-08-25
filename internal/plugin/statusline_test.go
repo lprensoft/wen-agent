@@ -11,7 +11,7 @@ type reporterPlugin struct {
 	lines []string
 }
 
-func (p *reporterPlugin) StatusLines() []string { return p.lines }
+func (p *reporterPlugin) StatusLines(string) []string { return p.lines }
 
 // 状态行只取启用插件、按注册顺序、丢弃空串；未实现接口的插件跳过。
 func TestStatusLines(t *testing.T) {
@@ -30,7 +30,7 @@ func TestStatusLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := strings.Join(m.StatusLines(), "|")
+	got := strings.Join(m.StatusLines(""), "|")
 	if got != "A|B" {
 		t.Fatalf("StatusLines = %q，期望 \"A|B\"", got)
 	}
@@ -39,7 +39,7 @@ func TestStatusLines(t *testing.T) {
 	if err := m.SetEnabled("off", true); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(m.StatusLines(), "|"); got != "A|B|X" {
+	if got := strings.Join(m.StatusLines(""), "|"); got != "A|B|X" {
 		t.Fatalf("启用后 StatusLines = %q，期望 \"A|B|X\"", got)
 	}
 }

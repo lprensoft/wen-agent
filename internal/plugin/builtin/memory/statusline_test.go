@@ -14,7 +14,7 @@ func statusLineOf(t *testing.T, cfg map[string]any) string {
 	if err := p.Init(plugin.InitContext{StateDir: filepath.Join(t.TempDir(), "memory")}, cfg); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	lines := p.StatusLines()
+	lines := p.StatusLines("")
 	if len(lines) != 1 {
 		t.Fatalf("状态行数 = %d, want 1: %v", len(lines), lines)
 	}

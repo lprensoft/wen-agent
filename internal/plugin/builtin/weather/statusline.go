@@ -14,7 +14,7 @@ import (
 // 已经过期，三种情况在对话里看起来都一样——角色都是不提天气。状态行是唯一能把它们
 // 区分开的地方，所以三种都说，并且过期标在具体那一处上：两处地点时，一处失效
 // 不代表另一处也没在用。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	if !s.configured() {
 		return []string{"🌦 天气：未设置城市，不注入"}
