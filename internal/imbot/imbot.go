@@ -54,6 +54,12 @@ type Config struct {
 	PluginName string // 插件名，用于日志前缀
 	Sender     Sender
 	StateDir   string // 会话绑定落在 <StateDir>/sessions.json
+	// Lang 是这条通道对外说话用的语言（命令回执、错误提示、注入模型的引导）。
+	// 由插件从 InitContext.Lang 原样带下来；空串按中文处理。
+	//
+	// 不按入站消息猜：同一个用户可能中英文混着发，而这条通道的回执与它所在服务
+	// 的其它出口（Web UI 的状态行、日志）说的应该是同一门语言。
+	Lang string
 
 	ConfirmTimeout time.Duration
 	TurnTimeout    time.Duration // 0 表示用 DefaultTurnTimeout

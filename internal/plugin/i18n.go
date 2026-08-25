@@ -75,14 +75,39 @@ func keyName(st Status) string {
 	return st.Name
 }
 
-// Localize 按 lang 复制出一份译好的插件状态。
-//
-// 复制而不是就地改：Status 里的 ConfigFields 与 Actions 是插件自己那份切片，
-// 就地改会把翻译写回插件，下一次别的语言来问就拿到上一个人的语言了。
 // UnavailableKey 是「这个候选当前用不了」那句提示的键。整句进字典而不是在外面
 // 拼一个后缀：中文缀在名字后面不留空格、英文要留一个，这种差异逐处硬写必漏。
 const UnavailableKey = "plugin.option.unavailable"
 const unavailableZH = "%s（未启用）"
+
+// LocalizeDefaults 按 lang 复制出一份默认值已就位的配置项声明。
+//
+// 它有两个调用方，两处要的是同一件事的两半：
+//   - Localize 拿它填设置页上那个文本框的**预填内容**与「恢复默认」按钮；
+//   - Manager 在 Init 之前拿它决定**没存过值时实际生效的**是哪一份。
+//
+// 分开的时候出过一个静默的毛病：界面照着英文默认值预填，而用户没有点保存，于是
+// NormalizeConfig 在缺键时取的仍是 Go 里的中文常量——英文用户看到的与模型收到的
+// 是两份东西。合到一处之后，「显示什么」和「生效什么」不可能再分叉。
+//
+// 复制而不是就地改：ConfigFields 是插件自己那份切片，就地改会把翻译写回插件，
+// 下一次别的语言来问就拿到上一个人的语言了。
+func LocalizeDefaults(lang, keyName string, fields []ConfigField) []ConfigField {
+	if len(fields) == 0 {
+		return fields
+	}
+	out := make([]ConfigField, len(fields))
+	for i, f := range fields {
+		// 只有文本类才有可译的默认值。数值与开关没有，单选的默认值是**取值**
+		// 而不是展示文字（展示文字走 OptionKey），译掉会让它对不上候选表。
+		if def, ok := f.Default.(string); ok && def != "" &&
+			(f.Type == FieldString || f.Type == FieldText) {
+			f.Default = i18n.T(lang, DefaultKey(keyName, f.Key), def)
+		}
+		out[i] = f
+	}
+	return out
+}
 
 // Localize 按 lang 复制出一份译好的插件状态。
 //
@@ -99,14 +124,10 @@ func Localize(lang string, sts []Status) []Status {
 
 		kn := keyName(st)
 		if len(st.ConfigFields) > 0 {
-			fields := make([]ConfigField, len(st.ConfigFields))
-			for j, f := range st.ConfigFields {
+			fields := LocalizeDefaults(lang, kn, st.ConfigFields)
+			for j, f := range fields {
 				f.Label = i18n.T(lang, FieldLabelKey(kn, f.Key), f.Label)
 				f.Description = i18n.T(lang, FieldDescKey(kn, f.Key), f.Description)
-				if def, ok := f.Default.(string); ok && def != "" &&
-					(f.Type == FieldString || f.Type == FieldText) {
-					f.Default = i18n.T(lang, DefaultKey(kn, f.Key), def)
-				}
 				if len(f.Options) > 0 {
 					opts := make([]ConfigOption, len(f.Options))
 					for k, o := range f.Options {

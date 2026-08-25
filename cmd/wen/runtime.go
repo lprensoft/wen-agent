@@ -66,8 +66,10 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		return nil, fmt.Errorf("初始化 session 存储失败: %w", err)
 	}
 
+	lang := resolveLang(cfg)
 	ictx := plugin.InitContext{
 		Workdir:    workdir,
+		Lang:       lang,
 		Sessions:   store,
 		SessionDir: sessionDir,
 		Complete: func(ctx context.Context, prompt string) (string, error) {
@@ -168,6 +170,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		SystemPrompt:  cfg.Agent.SystemPrompt,
 		MaxTurns:      cfg.Agent.MaxTurns,
 		Workdir:       workdir,
+		Lang:          lang,
 		Thinking:      cur.Thinking,
 		ContextLength: cur.ContextLength,
 	})

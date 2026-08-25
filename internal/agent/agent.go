@@ -45,10 +45,13 @@ type Event struct {
 }
 
 type Options struct {
-	Model         string
-	Temperature   float64
-	MaxTokens     int
-	SystemPrompt  string
+	Model        string
+	Temperature  float64
+	MaxTokens    int
+	SystemPrompt string
+	// Lang 是这个进程发给模型的文本用哪门语言（zh / en / …）。空串按中文处理。
+	// 启动时定死、整轮之间不变，因此 system 前缀仍是逐字节稳定的缓存前缀。
+	Lang          string
 	MaxTurns      int
 	Workdir       string // 工具的工作目录，写入环境块
 	Thinking      string // 思考模式：off 或强度档位

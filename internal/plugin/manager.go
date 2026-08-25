@@ -142,6 +142,22 @@ func NewManager(ictx InitContext, statePath string, opts ...Option) *Manager {
 // validName 限定插件名的取值，因为它会被用来拼持久化目录。
 var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// fieldsFor 返回该插件的配置项声明，其中文本类的默认值已按**进程语言**解析。
+//
+// 「没存过值时实际生效的是哪一份」必须在这里定，不能留给 NormalizeConfig 去取
+// 插件代码里的中文常量：那样英文用户不点一次保存，界面上显示的与模型收到的就是
+// 两份东西。设置页的预填走的是同一个函数（见 LocalizeDefaults），两处因此不可能分叉。
+//
+// 用进程语言而不是请求语言：生效值只有一份，它属于这个服务而不属于某个浏览器。
+func (m *Manager) fieldsFor(p Plugin, source string) []ConfigField {
+	fields := ConfigFieldsOf(p)
+	kn := p.Name()
+	if source == SourceExternal {
+		kn = ExternalKeyName
+	}
+	return LocalizeDefaults(m.ictx.Lang, kn, fields)
+}
+
 // initCtxFor 返回该插件专属的运行环境：在公共 InitContext 上补一个按插件名隔离的持久化目录。
 // 未配置状态文件时 StateDir 留空，由插件自行决定是否拒绝启用。
 // RunTurn 与 Notice 被包一层自动注入发起方标记——发起方由 Manager 裁定，
@@ -209,7 +225,7 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 		e.enabled = saved.Enabled
 		e.userCfg = saved.Config
 		// JSON 会把整数读成 float64，按字段声明还原类型；非法值退回配置文件
-		if fields := ConfigFieldsOf(p); len(fields) > 0 && len(e.userCfg) > 0 {
+		if fields := m.fieldsFor(p, source); len(fields) > 0 && len(e.userCfg) > 0 {
 			values, err := NormalizeConfig(fields, e.userCfg)
 			if err != nil {
 				log.Printf("插件 %q 的持久化配置无效，改用配置文件的值: %v", name, err)
@@ -294,7 +310,7 @@ func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 		m.mu.Unlock()
 		return fmt.Errorf("插件 %q 不存在", name)
 	}
-	fields := ConfigFieldsOf(e.plugin)
+	fields := m.fieldsFor(e.plugin, e.source)
 	if len(fields) == 0 {
 		m.mu.Unlock()
 		return fmt.Errorf("插件 %q 没有可配置项", name)
@@ -494,7 +510,7 @@ func (m *Manager) List() []Status {
 			if a, ok := sn.plugin.(Actionable); ok && sn.enabled && sn.inited {
 				st.Actions = a.Actions()
 			}
-			if fields := ConfigFieldsOf(sn.plugin); len(fields) > 0 {
+			if fields := m.fieldsFor(sn.plugin, sn.source); len(fields) > 0 {
 				st.ConfigFields = fields
 				// 配置非法时（如手改配置文件）退回默认值展示，不影响列表可用
 				values, err := NormalizeConfig(fields, sn.cfg)

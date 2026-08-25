@@ -36,6 +36,7 @@ func runPlugins(args []string) error {
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
+	adoptLang(cfg)
 	store := agentplugin.NewStore(cfg.BaseDir)
 	if store.Dir() == "" {
 		return fmt.Errorf("没有可用的配置目录，无法管理插件包")

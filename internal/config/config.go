@@ -14,6 +14,14 @@ import (
 )
 
 type Config struct {
+	// Lang 是进程级的兜底语言（zh / en / …），决定没有 HTTP 请求可依附的那些路径
+	// 用哪门语言：模型收到的提示词、插件的状态行、会话注记、运行日志，以及
+	// wen status 这类一次性命令。留空表示跟随操作系统的区域设置。
+	//
+	// Web UI 与 wen config 仍按请求判定（?lang= 优先于 Accept-Language），
+	// 这里的值只是它们判不出来时的最后一档——同一个服务可能一台电脑一台手机各用
+	// 一种语言，服务端不该替谁记住界面语言。
+	Lang      string                    `yaml:"lang"`
 	Server    ServerConfig              `yaml:"server"`
 	Model     ModelConfig               `yaml:"model"`
 	Providers map[string]ProviderConfig `yaml:"providers"`

@@ -42,6 +42,7 @@ func runConfig(args []string) error {
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
+	adoptLang(cfg)
 	b, err := openBackend(cfg)
 	if err != nil {
 		return err

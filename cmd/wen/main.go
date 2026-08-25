@@ -70,6 +70,8 @@ func runServe(args []string) {
 	if *port != 0 {
 		cfg.Server.Port = *port
 	}
+	// 语言要在第一行日志之前定下——启动日志本身就是要跟着它走的东西之一
+	adoptLang(cfg)
 
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
@@ -124,6 +126,7 @@ func runServe(args []string) {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	log.Printf("配置文件: %s", path)
+	log.Printf("语言: %s", langSummary(cfg))
 	log.Printf("模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
 	for _, st := range plugins.List() {
 		state := "禁用"

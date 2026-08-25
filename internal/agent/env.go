@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"runtime"
+
+	"wen/internal/oslocale"
 )
 
 // envContext 生成注入 system 消息开头的系统环境块，
@@ -16,7 +18,7 @@ func envContext(workdir string) string {
 	if runtime.GOOS == "windows" {
 		shell = "cmd /C（请使用 Windows 命令语法，如 dir、type、findstr）"
 	}
-	locale := systemLocale()
+	locale := oslocale.Current()
 	if locale == "" {
 		locale = "未知"
 	}

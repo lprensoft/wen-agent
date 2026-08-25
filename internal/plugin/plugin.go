@@ -22,6 +22,14 @@ type Tool interface {
 // InitContext 是核心传给插件的运行环境。
 type InitContext struct {
 	Workdir string // agent 工作目录
+	// Lang 是进程级的兜底语言（zh / en / …），供没有 HTTP 请求可依附的路径使用：
+	// 插件注入模型的提示词（走 internal/prompt）、状态行与会话注记（走 internal/i18n）。
+	// 核心只负责把它交下来，不知道插件会拿它去翻什么。
+	//
+	// 插件应在 Init 里存下自己那份并自行加锁——Init 可能被反复调用（SetConfig 会
+	// 重新 Init），此时可能有 in-flight 的 Execute 正在读。为空表示按中文处理：
+	// 两个语言查表都对空语言直接回退到代码里的中文原文，不会 panic。
+	Lang string
 	// StateDir 是该插件专属的持久化目录（由 Manager 按插件名生成，可能不存在，需自行创建）。
 	// 为空表示当前没有可用的持久化位置，需要落盘的插件应在 Init 中返回错误拒绝启用，
 	// 不要退化到写进程当前目录。

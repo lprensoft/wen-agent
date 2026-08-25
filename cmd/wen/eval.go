@@ -68,6 +68,7 @@ func runEval(args []string) error {
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
+	adoptLang(cfg)
 
 	// 一切落盘都进临时目录：会话、记忆库、心情、统计……评测不该在真实数据里留下
 	// 任何痕迹，也不该读到真实的记忆（那会让两次评测的条件不同）。

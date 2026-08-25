@@ -29,6 +29,14 @@ func runUpdate(args []string) error {
 		return err
 	}
 
+	// 语言在最前面定下：这个命令的输出从第一行就开始了，配置读不出来也不影响
+	// 它按系统区域猜一门
+	if cfg, err := config.Load(config.ResolvePath(*configPath)); err == nil {
+		adoptLang(cfg)
+	} else {
+		adoptLang(nil)
+	}
+
 	exe, err := updater.ExePath()
 	if err != nil {
 		return err
