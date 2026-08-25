@@ -67,7 +67,7 @@ const snippetMaxRunes = 24
 
 // Check 在文本上跑全部规则，按规则顺序返回命中；同一规则命中多处返回多条。
 func Check(lang, text string) []Hit {
-	t := prepare(text)
+	t := prepare(lang, text)
 	if t.full == "" {
 		return nil
 	}
@@ -82,27 +82,25 @@ func Check(lang, text string) []Hit {
 
 // prepared 是预处理后的文本的几种视图，各规则按需取用。
 type prepared struct {
+	lang   string // 本轮的语言：决定演绎用哪个记号，也决定用哪一组模式
 	full   string // 原文（去首尾空白）
-	speech string // 去掉全部【】演绎后的文字：话语与叙述
-	lead   string // 去掉开头连续的【】演绎之后的起手部分
+	speech string // 去掉全部演绎后的文字：话语与叙述
+	lead   string // 去掉开头连续的演绎之后的起手部分
 	paras  []string
 }
 
-// bracketPattern 匹配一段【】演绎。不跨段落：没闭合的【会把后面整段吞掉。
-var bracketPattern = regexp.MustCompile(`【[^】\n]*】`)
-
-func prepare(text string) prepared {
+func prepare(lang, text string) prepared {
 	full := strings.TrimSpace(text)
-	t := prepared{full: full}
-	t.speech = strings.TrimSpace(bracketPattern.ReplaceAllString(full, " "))
+	t := prepared{lang: lang, full: full}
+	t.speech = strings.TrimSpace(cutSpans(full, actingSpans(lang, full), " "))
 	lead := full
 	for {
 		lead = strings.TrimLeft(lead, " \t\r\n　")
-		loc := bracketPattern.FindStringIndex(lead)
-		if loc == nil || loc[0] != 0 {
+		spans := actingSpans(lang, lead)
+		if len(spans) == 0 || spans[0][0] != 0 {
 			break
 		}
-		lead = lead[loc[1]:]
+		lead = lead[spans[0][1]:]
 	}
 	t.lead = lead
 	for _, p := range strings.Split(full, "\n") {
@@ -128,23 +126,26 @@ func clip(s string) string {
 // （自称 AI），再是开场与收尾的客套，然后是句式与结构，最后是排版。
 
 var rules = []Rule{
-	{ID: "self_ai", Label: prompt.Text("prompt.style.rule.self_ai", "自称 AI"), fn: regexAll(selfAI)},
-	{ID: "opening_cliche", Label: prompt.Text("prompt.style.rule.opening_cliche", "客套开场"), fn: leadMatch(openingCliche)},
-	{ID: "flattery", Label: prompt.Text("prompt.style.rule.flattery", "谄媚开场"), fn: regexAll(flattery)},
-	{ID: "closing_cliche", Label: prompt.Text("prompt.style.rule.closing_cliche", "客套收尾"), fn: regexAll(closingCliche)},
-	{ID: "transition_cliche", Label: prompt.Text("prompt.style.rule.transition_cliche", "过渡套话"), fn: regexAll(transitionCliche)},
+	{ID: "self_ai", Label: prompt.Text("prompt.style.rule.self_ai", "自称 AI"), fn: anyOf(selfAI, selfAIEN)},
+	{ID: "opening_cliche", Label: prompt.Text("prompt.style.rule.opening_cliche", "客套开场"), fn: leadMatch(byLang(openingCliche, openingClicheEN))},
+	{ID: "flattery", Label: prompt.Text("prompt.style.rule.flattery", "谄媚开场"), fn: regexAll(byLang(flattery, flatteryEN))},
+	{ID: "closing_cliche", Label: prompt.Text("prompt.style.rule.closing_cliche", "客套收尾"), fn: regexAll(byLang(closingCliche, closingClicheEN))},
+	{ID: "transition_cliche", Label: prompt.Text("prompt.style.rule.transition_cliche", "过渡套话"), fn: regexAll(byLang(transitionCliche, transitionClicheEN))},
 	{ID: "enumeration", Label: prompt.Text("prompt.style.rule.enumeration", "首先其次"), fn: enumeration},
-	{ID: "not_but", Label: prompt.Text("prompt.style.rule.not_but", "不是而是"), fn: regexAll(notBut)},
-	{ID: "hedging", Label: prompt.Text("prompt.style.rule.hedging", "过度对冲"), fn: regexAll(hedging)},
-	{ID: "authority", Label: prompt.Text("prompt.style.rule.authority", "泛指权威"), fn: regexAll(authority)},
-	{ID: "pseudo_analysis", Label: prompt.Text("prompt.style.rule.pseudo_analysis", "伪分析"), fn: speechRegexAll(pseudoAnalysis)},
-	{ID: "promo_adjective", Label: prompt.Text("prompt.style.rule.promo_adjective", "宣传腔"), fn: speechRegexAll(promoAdjective)},
-	{ID: "filler", Label: prompt.Text("prompt.style.rule.filler", "填充语"), fn: regexAll(filler)},
+	{ID: "not_but", Label: prompt.Text("prompt.style.rule.not_but", "不是而是"), fn: regexAll(byLang(notBut, notButEN))},
+	{ID: "hedging", Label: prompt.Text("prompt.style.rule.hedging", "过度对冲"), fn: regexAll(byLang(hedging, hedgingEN))},
+	{ID: "authority", Label: prompt.Text("prompt.style.rule.authority", "泛指权威"), fn: regexAll(byLang(authority, authorityEN))},
+	{ID: "pseudo_analysis", Label: prompt.Text("prompt.style.rule.pseudo_analysis", "伪分析"), fn: speechRegexAll(byLang(pseudoAnalysis, pseudoAnalysisEN))},
+	{ID: "promo_adjective", Label: prompt.Text("prompt.style.rule.promo_adjective", "宣传腔"), fn: speechRegexAll(byLang(promoAdjective, promoAdjectiveEN))},
+	{ID: "filler", Label: prompt.Text("prompt.style.rule.filler", "填充语"), fn: regexAll(byLang(filler, fillerEN))},
 	{ID: "summary_closing", Label: prompt.Text("prompt.style.rule.summary_closing", "三段式总结"), fn: summaryClosing},
-	{ID: "md_heading", Label: prompt.Text("prompt.style.rule.md_heading", "标题"), fn: lineMatch(mdHeading)},
-	{ID: "md_list", Label: prompt.Text("prompt.style.rule.md_list", "列表"), fn: lineMatch(mdList)},
-	{ID: "md_bold", Label: prompt.Text("prompt.style.rule.md_bold", "加粗"), fn: regexAll(mdBold)},
+	{ID: "md_heading", Label: prompt.Text("prompt.style.rule.md_heading", "标题"), fn: lineMatch(only(mdHeading))},
+	{ID: "md_list", Label: prompt.Text("prompt.style.rule.md_list", "列表"), fn: lineMatch(only(mdList))},
+	{ID: "md_bold", Label: prompt.Text("prompt.style.rule.md_bold", "加粗"), fn: regexAll(only(mdBold))},
 	{ID: "emoji", Label: prompt.Text("prompt.style.rule.emoji", "emoji"), fn: emoji},
+	// em dash 当修辞只在英文里算毛病：中文的破折号是两个「——」，且它本来就是
+	// 正常标点。这条因此只在非中文的语言上跑，且只认拉丁字母之间的单个 —。
+	{ID: "em_dash", Label: prompt.Text("prompt.style.rule.em_dash", "破折号当修辞"), fn: enOnly(regexAll(only(emDashEN)))},
 }
 
 var (
@@ -182,31 +183,75 @@ var (
 	mdBold    = regexp.MustCompile(`\*\*[^*\n]+\*\*`)
 )
 
+// picker 按本轮的语言挑一条正则。
+type picker func(prepared) *regexp.Regexp
+
+// byLang 中文一条、其余语言一条。
+//
+// 两组模式各跑各的，不合并同跑：robust、leverage、first 这些词在中文回复里也会
+// 出现（聊代码的时候），合着跑等于让中文用户的统计里凭空多出命中。
+func byLang(zh, other *regexp.Regexp) picker {
+	return func(t prepared) *regexp.Regexp {
+		if isZH(t.lang) {
+			return zh
+		}
+		return other
+	}
+}
+
+// only 是不分语言的那一档：同一条正则在所有语言上跑（排版类的规则都是这样）。
+func only(re *regexp.Regexp) picker {
+	return func(prepared) *regexp.Regexp { return re }
+}
+
 // regexAll 在全文上找出全部匹配。
-func regexAll(re *regexp.Regexp) func(prepared) []string {
-	return func(t prepared) []string { return re.FindAllString(t.full, -1) }
+func regexAll(pick picker) func(prepared) []string {
+	return func(t prepared) []string { return pick(t).FindAllString(t.full, -1) }
 }
 
-// speechRegexAll 只看话语与叙述，不看【】里的演绎：[自然表达] 明说演绎有自己的笔调，
+// speechRegexAll 只看话语与叙述，不看演绎：[自然表达] 明说演绎有自己的笔调，
 // 「少用修饰」这类条目不管它。
-func speechRegexAll(re *regexp.Regexp) func(prepared) []string {
-	return func(t prepared) []string { return re.FindAllString(t.speech, -1) }
+func speechRegexAll(pick picker) func(prepared) []string {
+	return func(t prepared) []string { return pick(t).FindAllString(t.speech, -1) }
 }
 
-// leadMatch 只看起手：跳过开头的【】演绎之后的第一句。
-func leadMatch(re *regexp.Regexp) func(prepared) []string {
+// leadMatch 只看起手：跳过开头的演绎之后的第一句。
+func leadMatch(pick picker) func(prepared) []string {
 	return func(t prepared) []string {
-		if m := re.FindString(t.lead); m != "" {
+		if m := pick(t).FindString(t.lead); m != "" {
 			return []string{m}
 		}
 		return nil
 	}
 }
 
-// lineMatch 逐行匹配，命中的行作为片段。
-func lineMatch(re *regexp.Regexp) func(prepared) []string {
+// anyOf 把几条正则一起跑，命中合并。给「不分语言都算毛病」的那种规则用——
+// 目前只有自称 AI：中文角色蹦出一句 "as an AI" 同样是出戏。
+func anyOf(res ...*regexp.Regexp) func(prepared) []string {
 	return func(t prepared) []string {
 		var out []string
+		for _, re := range res {
+			out = append(out, re.FindAllString(t.full, -1)...)
+		}
+		return out
+	}
+}
+
+// enOnly 让一条规则只在非中文的语言上跑。
+func enOnly(fn func(prepared) []string) func(prepared) []string {
+	return func(t prepared) []string {
+		if isZH(t.lang) {
+			return nil
+		}
+		return fn(t)
+	}
+}
+
+// lineMatch 逐行匹配，命中的行作为片段。
+func lineMatch(pick picker) func(prepared) []string {
+	return func(t prepared) []string {
+		var out []string
+		re := pick(t)
 		for _, line := range strings.Split(t.full, "\n") {
 			if re.MatchString(line) {
 				out = append(out, strings.TrimSpace(line))
@@ -219,6 +264,9 @@ func lineMatch(re *regexp.Regexp) func(prepared) []string {
 // enumeration 认「首先」配上「其次 / 然后 / 最后」，或「第一」配「第二」——
 // 单独一个「首先」「最后」在口语里很常见，成对出现才是在给对话编号。
 func enumeration(t prepared) []string {
+	if !isZH(t.lang) {
+		return enumerationEN(t.full)
+	}
 	s := t.full
 	switch {
 	case strings.Contains(s, "首先") && (strings.Contains(s, "其次") || strings.Contains(s, "最后") || strings.Contains(s, "再者")):
@@ -247,8 +295,8 @@ func summaryClosing(t prepared) []string {
 		return nil
 	}
 	last := t.paras[len(t.paras)-1]
-	last = strings.TrimSpace(bracketPattern.ReplaceAllString(last, ""))
-	if m := summaryLead.FindString(last); m != "" {
+	last = strings.TrimSpace(cutSpans(last, actingSpans(t.lang, last), ""))
+	if m := summaryLeadFor(t.lang).FindString(last); m != "" {
 		return []string{last}
 	}
 	return nil

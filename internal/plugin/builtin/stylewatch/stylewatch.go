@@ -216,7 +216,7 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 // record 跑检测、计入统计、落盘，命中时留注记。在后台 goroutine 中执行。
 func (p *Plugin) record(s settings, scope plugin.Scope, ev plugin.TurnEndEvent, text string) {
 	hits := filterHits(stylecheck.Check(s.lang, text), s.ignore)
-	m := stylecheck.Measure(text)
+	m := stylecheck.Measure(s.lang, text)
 
 	p.statsMu.Lock()
 	day := p.st.day(dateOf(ev.EndedAt))

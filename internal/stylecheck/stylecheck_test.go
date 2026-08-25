@@ -112,7 +112,7 @@ func TestSnippetAndLabel(t *testing.T) {
 	if hits[1].Rule != "closing_cliche" || hits[1].Snippet != "希望这对你有帮助" {
 		t.Errorf("收尾命中 = %+v", hits[1])
 	}
-	long := Check("", "- " + strings.Repeat("很长的一行", 20))
+	long := Check("", "- "+strings.Repeat("很长的一行", 20))
 	if r := []rune(long[0].Snippet); len(r) != snippetMaxRunes+1 || !strings.HasSuffix(long[0].Snippet, "…") {
 		t.Errorf("片段应截断到 %d 字并带省略号，实际 %q", snippetMaxRunes, long[0].Snippet)
 	}
@@ -176,7 +176,7 @@ func TestMeasure(t *testing.T) {
 		{"a b c", 3, 1, 0},
 	}
 	for _, c := range cases {
-		m := Measure(c.text)
+		m := Measure("", c.text)
 		if m.Runes != c.runes || m.Sentences != c.sentences || math.Abs(m.BracketRatio-c.ratio) > 1e-9 {
 			t.Errorf("Measure(%q) = %+v，期望 runes=%d sentences=%d ratio=%.2f",
 				c.text, m, c.runes, c.sentences, c.ratio)

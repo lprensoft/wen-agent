@@ -141,6 +141,7 @@
   "prompt.scene.tool.save_scene.schema": "{\n\t\t\"type\": \"object\",\n\t\t\"properties\": {\n\t\t\t\"name\": {\"type\": \"string\", \"description\": \"name of the place, short and unique\"},\n\t\t\t\"detail\": {\"type\": \"string\", \"description\": \"description of the place: where it is, how it relates to other places, the layout, what is in it, the atmosphere and anything distinctive\"},\n\t\t\t\"mode\": {\"type\": \"string\", \"description\": \"what to do when a place of that name already exists; refuses by default\", \"enum\": [\"create\", \"replace\"]}\n\t\t},\n\t\t\"required\": [\"name\", \"detail\"]\n\t}",
   "prompt.style.rule.authority": "vague authority",
   "prompt.style.rule.closing_cliche": "boilerplate closer",
+  "prompt.style.rule.em_dash": "em dash as rhetoric",
   "prompt.style.rule.emoji": "emoji",
   "prompt.style.rule.enumeration": "first/second/finally",
   "prompt.style.rule.filler": "filler words",
