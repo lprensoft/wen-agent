@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -26,13 +27,13 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // 界面上的操作不是模型的读取路径，不存在泄漏问题。
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	if key != actionClear {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.snapshotLang(), key)
 	}
 	p.mu.RLock()
 	base := p.base
 	p.mu.RUnlock()
 	if base == "" {
-		return errNotReady
+		return errNotReady(p.snapshotLang())
 	}
 
 	// Scope 取零值：ReadDomains 因此枚举磁盘上已存在的全部域，正好是「全部清空」的范围。
@@ -55,20 +56,20 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 	if len(failed) > 0 {
 		p.actState = plugin.ActionState{
 			Status:  plugin.ActionError,
-			Message: "清空失败：" + strings.Join(failed, "; "),
+			Message: i18n.Tf(p.snapshotLang(), "plugin.presence.clear.failed", "清空失败：%s", strings.Join(failed, "; ")),
 		}
-		return fmt.Errorf("清空现场状态失败: %s", strings.Join(failed, "; "))
+		return fmt.Errorf(i18n.T(p.snapshotLang(), "plugin.presence.clear.error", "清空现场状态失败: %s"), strings.Join(failed, "; "))
 	}
 	p.actState = plugin.ActionState{
 		Status:  plugin.ActionDone,
-		Message: fmt.Sprintf("已清空 %d 份现场快照。", cleared),
+		Message: i18n.Tf(p.snapshotLang(), "plugin.presence.clear.done", "已清空 %d 份现场快照。", cleared),
 	}
 	return nil
 }
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionClear {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.snapshotLang(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()

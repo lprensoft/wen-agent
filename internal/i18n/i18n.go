@@ -181,3 +181,11 @@ func Err() error {
 	loadOnce()
 	return load
 }
+
+// Tf 是带格式串的那一档：先按语言取出格式串，再套用参数。
+//
+// 整句进字典而不是在外面拼——中英语序不同，拼出来的句子在另一种语言里必然是错的。
+// 需要调换参数顺序时用 %[1]s 这样的显式索引，不要指望译者去改调用点。
+func Tf(lang, key, fallback string, a ...any) string {
+	return fmt.Sprintf(T(lang, key, fallback), a...)
+}

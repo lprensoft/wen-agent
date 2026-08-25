@@ -42,7 +42,7 @@ func TestInitRequiresStateDir(t *testing.T) {
 }
 
 func TestApplyUpdateAndClear(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 
 	updated, cleared, err := s.Apply(map[string]string{"location": "卧室", "attire": "睡裙"}, now)
@@ -71,14 +71,14 @@ func TestApplyUpdateAndClear(t *testing.T) {
 }
 
 func TestApplyRejectsUnknownField(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, _, err := s.Apply(map[string]string{"mood": "开心"}, time.Now()); err == nil {
 		t.Fatal("未知字段应报错")
 	}
 }
 
 func TestApplyClipsText(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	long := strings.Repeat("长", 100) + "\n换行也压掉"
 	if _, _, err := s.Apply(map[string]string{"location": long}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestApplyClipsText(t *testing.T) {
 }
 
 func TestApplyAllClearedRemovesFile(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, _, err := s.Apply(map[string]string{"location": "卧室"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestRenderMarksStaleFields(t *testing.T) {
 		"location": {Text: "卧室", Updated: now.Add(-3 * time.Hour)},
 		"focus":    {Text: "雨声", Updated: now.Add(-time.Minute)},
 	}
-	got := renderSnapshot(snap, now)
+	got := renderSnapshot("", snap, now)
 	if !strings.Contains(got, "所在：卧室（3 小时前记下）") {
 		t.Errorf("旧字段应标时间：%s", got)
 	}

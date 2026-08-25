@@ -100,50 +100,13 @@ func gapNote(lang string, prev, cur time.Time) string {
 	return fmt.Sprintf(gapNoteFmt(lang), humanizeGap(lang, d))
 }
 
-// 间隔的说法。只给到「约」的精度：这里要传达的是「隔了多久」，精确到分钟反而会让
-// 模型拿它去做不必要的推算。
-//
-// 每个单位两个键，单数一个复数一个：英语里「about 1 hours」是错的，而这个函数在
-// n 为 1 时真的会走到（本轮那一行的阈值只有一分钟）。中文两个键取同一句原文，
-// 要分的只有语言包里的英文那份。
-const (
-	gapMinutesZH = "约 %d 分钟"
-	gapHoursZH   = "约 %d 小时"
-	gapDaysZH    = "约 %d 天"
-	gapMonthsZH  = "约 %d 个月"
-)
-
 // humanizeGap 把间隔说成人话。
 //
-// 两个键都在调用点上写全，没有抽成一个按单位查表的循环：拼出来的键静态扫不到，
-// 覆盖检查就看不见它们（见 cmd/wen 的 scanRepo）。
+// 「约」只给到一个单位的精度：这里要传达的是「隔了多久」，精确到分钟反而会让模型
+// 拿它去做不必要的推算。时长本身的措辞归 prompt.Duration，整个程序共用一份——
+// 现场快照与身体感知也在报时长，三处各写一个迟早分叉。
 func humanizeGap(lang string, d time.Duration) string {
-	switch {
-	case d < time.Hour:
-		return gapText(int(d.Minutes()),
-			prompt.T(lang, "prompt.core.gap.minute_one", gapMinutesZH),
-			prompt.T(lang, "prompt.core.gap.minutes", gapMinutesZH))
-	case d < 24*time.Hour:
-		return gapText(int(d.Hours()),
-			prompt.T(lang, "prompt.core.gap.hour_one", gapHoursZH),
-			prompt.T(lang, "prompt.core.gap.hours", gapHoursZH))
-	case d < 30*24*time.Hour:
-		return gapText(int(d.Hours()/24),
-			prompt.T(lang, "prompt.core.gap.day_one", gapDaysZH),
-			prompt.T(lang, "prompt.core.gap.days", gapDaysZH))
-	default:
-		return gapText(int(d.Hours()/24/30),
-			prompt.T(lang, "prompt.core.gap.month_one", gapMonthsZH),
-			prompt.T(lang, "prompt.core.gap.months", gapMonthsZH))
-	}
-}
-
-// gapText 在单数与复数两句里挑一句。
-func gapText(n int, one, many string) string {
-	if n == 1 {
-		return fmt.Sprintf(one, n)
-	}
-	return fmt.Sprintf(many, n)
+	return prompt.Tf(lang, "prompt.core.gap.about", "约 %s", prompt.Duration(lang, d))
 }
 
 // weekdaysZH 是七个星期名，一行一个，从星期日排起。

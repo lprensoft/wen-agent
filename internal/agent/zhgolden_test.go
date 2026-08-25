@@ -19,6 +19,9 @@ func TestChineseWordingUnchanged(t *testing.T) {
 		{gapNote("", at.Add(-5*time.Minute), at), ""},
 		{humanizeGap("", time.Minute), "约 1 分钟"},
 		{humanizeGap("", 40*24*time.Hour), "约 1 个月"},
+		// 一年以上从前一律说「约 N 个月」，现在与现场快照、身体感知共用同一份
+		// 时长措辞（prompt.Duration），因此多了「年」这一档
+		{humanizeGap("", 400*24*time.Hour), "约 1 年"},
 		{turnStateOpen(""), "<本轮状态>"},
 		{turnStateClose(""), "</本轮状态>"},
 	} {

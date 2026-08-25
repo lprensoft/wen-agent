@@ -82,7 +82,10 @@ func scanPackage(t *testing.T, dir string, out *scanned) {
 		t.Fatalf("解析 %s: %v", dir, err)
 	}
 
-	for _, pkg := range pkgs {
+	for pkgName, pkg := range pkgs {
+		// prompt 包内部调自己的 T / Tf 时没有包名前缀，仍然要扫到——
+		// prompt.Duration 的十个键就写在那里
+		selfPrompt := pkgName == "prompt"
 		consts := packageConsts(pkg)
 		for _, file := range pkg.Files {
 			ast.Inspect(file, func(n ast.Node) bool {
@@ -90,7 +93,7 @@ func scanPackage(t *testing.T, dir string, out *scanned) {
 				if !ok {
 					return true
 				}
-				kind, keyArg, zhArg := classify(call)
+				kind, keyArg, zhArg := classify(call, selfPrompt)
 				if kind == kindNone {
 					return true
 				}
@@ -128,7 +131,7 @@ const (
 //	prompt.Text(key, zh)                                      给模型看的（声明在表里的那种）
 //	i18n.T(lang, key, zh) / i18n.Tf(...)                      给人看的
 //	tr(key, zh) / trf(key, zh, ...)                           给人看的（cmd/wen 里的简写）
-func classify(call *ast.CallExpr) (kind scanKind, key, zh ast.Expr) {
+func classify(call *ast.CallExpr, selfPrompt bool) (kind scanKind, key, zh ast.Expr) {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		pkg, ok := fn.X.(*ast.Ident)
@@ -150,6 +153,9 @@ func classify(call *ast.CallExpr) (kind scanKind, key, zh ast.Expr) {
 	case *ast.Ident:
 		if (fn.Name == "tr" || fn.Name == "trf") && len(call.Args) >= 2 {
 			return kindUI, call.Args[0], call.Args[1]
+		}
+		if selfPrompt && (fn.Name == "T" || fn.Name == "Tf") && len(call.Args) >= 3 {
+			return kindPrompt, call.Args[1], call.Args[2]
 		}
 	}
 	return kindNone, nil, nil
