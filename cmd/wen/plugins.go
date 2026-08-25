@@ -222,6 +222,7 @@ func bundleInfo(store *agentplugin.Store, name string) error {
 	}
 	m := b.Manifest
 	fmt.Printf("名称      %s\n", m.Name)
+	fmt.Println("格式      " + b.Format)
 	fmt.Printf("插件名    %s\n", agentplugin.PluginName(m.Name))
 	if m.Version != "" {
 		fmt.Printf("版本      %s\n", m.Version)

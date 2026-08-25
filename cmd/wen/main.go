@@ -24,6 +24,7 @@ import (
 	"wen/internal/plugin/builtin/agenda"
 	"wen/internal/plugin/builtin/belongings"
 	"wen/internal/plugin/builtin/bodysense"
+	"wen/internal/plugin/builtin/bundles"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/health"
@@ -301,6 +302,10 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 		// self_update 排在最后：它不注入任何提示词，注册顺序对它只剩展示含义，
 		// 而「程序维护」这一节摆在设置页最下面也是对的——它与角色、记忆、通道都无关
 		selfupdate.New(selfupdate.Options{Restart: restart}),
+		// bundles 排在 self_update 旁边，理由相同：它不注入任何提示词，注册顺序对它
+		// 只剩展示含义。它得排在下面 registerBundles 注册的那些包**之前**，设置页上
+		// 「外源插件」这一节才会以「装一个新的」开头，而不是把入口埋在一堆卡片后面。
+		bundles.New(cfg.BaseDir),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍

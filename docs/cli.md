@@ -34,7 +34,7 @@ wen help [命令]            显示帮助
 
 ## wen plugins：装外源插件包
 
-外源插件走 [Agent Plugins 1.0](https://agent-plugins.org/) 标准：一个插件包是一个目录，根下有 `plugin.json`，可以带 `skills/`（技能手册）与 `mcp.json`（MCP server 声明）。这份标准由 OpenAI、微软、AWS、Cursor 与 Vercel 在 2026 年 8 月联合发布，ChatGPT、Codex CLI、Cursor、GitHub Copilot、VS Code 等客户端共用同一批插件包。它不含任何可执行代码，因此与宿主用什么语言写无关。
+外源插件走 [Agent Plugins 1.0](https://agent-plugins.org/) 标准：一个插件包是一个目录，根下有 `plugin.json`，可以带 `skills/`（技能手册）与 `mcp.json`（MCP server 声明）。Claude、Codex、Cursor 那三种格式的包也认，只读得懂里面的技能与 MCP 声明。这份标准由 OpenAI、微软、AWS、Cursor 与 Vercel 在 2026 年 8 月联合发布，ChatGPT、Codex CLI、Cursor、GitHub Copilot、VS Code 等客户端共用同一批插件包。它不含任何可执行代码，因此与宿主用什么语言写无关。
 
 ```bash
 wen plugins list                   # 看装了哪些
@@ -46,7 +46,7 @@ wen plugins info pdf-tools
 wen plugins uninstall pdf-tools
 ```
 
-装好的包放在配置目录的 `bundles/<插件包名>/`，在设置页上各占一张卡片、归入「外源插件」一节，可以单独开关。插件名前面加了 `ext_` 前缀：插件名全局唯一且会被拼成持久化目录，一个叫 `memory` 的包否则会与内置的记忆插件撞名。
+装好的包放在配置目录的 `bundles/<插件包名>/`，在设置页上各占一张卡片、归入[外源插件](plugins/external.md)一节，可以单独开关。设置页上也能装：那一节的 `bundles` 卡片里填路径、点「安装」，与这里的命令等价（只认服务所在机器上的路径）。插件名前面加了 `ext_` 前缀：插件名全局唯一且会被拼成持久化目录，一个叫 `memory` 的包否则会与内置的记忆插件撞名。
 
 ### 技能
 
@@ -54,7 +54,7 @@ wen plugins uninstall pdf-tools
 
 ### MCP server
 
-包里 `mcp.json` 声明的 server 会被拉起来，它们提供的工具进入模型的工具表。当前支持 **stdio**（本机子进程）；Streamable HTTP 与 SSE 能被识别并校验，但还不会连接。
+包里 `mcp.json` 声明的 server 会被拉起来，它们提供的工具进入模型的工具表。三种传输都支持：**stdio**（本机子进程）、**Streamable HTTP**，以及已废弃的 **HTTP+SSE**。非回环地址必须用 HTTPS。
 
 工具名的形状是 `<包名>_<server 名>_<工具名>`：工具名在本程序里是全局唯一的，而两个包各带一台叫 `fs` 的 server 是完全正常的事。
 

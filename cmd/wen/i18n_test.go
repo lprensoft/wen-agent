@@ -16,7 +16,7 @@ import (
 // 起来（不初始化，只读声明），推出全部键，与语言包逐一对照。
 //
 // 漏译不会让程序出错，只会让英文界面上冒出一行中文，而那种缺陷肉眼极难发现——
-// 二十八张卡片、一百多个配置项，谁也不会一条条看过去。所以把它交给测试。
+// 二十九张卡片、一百多个配置项，谁也不会一条条看过去。所以把它交给测试。
 //
 // 要生成/补全语言包的骨架：
 //
@@ -66,8 +66,10 @@ func metadataStrings(t *testing.T) map[string]string {
 				put(plugin.OptionKey(st.Name, f.Key, o.Value), o.Label)
 			}
 		}
-		// Actions 只在插件启用且初始化后才暴露，这里拿不到（WithoutInit）。
-		// 操作的文案因此不进这份清单，由 TestActionKeys 单独盯着。
+		// Actions 只在插件启用且初始化后才暴露，这里拿不到（WithoutInit）。操作的
+		// 文案因此不在这份清单里，语言包里那几条 plugin.*.action.* 也就不算死键
+		// （见 derivedElsewhere）。代价是漏译不会被测出来——内置插件的操作目前确实
+		// 大多没有英文，那是一处已知的缺口，补的时候连同这里的判定一起改。
 	}
 	return out
 }
@@ -139,6 +141,10 @@ var derivedElsewhere = map[string]bool{
 	plugin.FieldDescKey(ext, "max_result_bytes"):       true,
 	plugin.ActionLabelKey(ext, "refresh"):              true,
 	plugin.ActionDescKey(ext, "refresh"):               true,
+	plugin.ActionLabelKey("bundles", "install"):        true,
+	plugin.ActionDescKey("bundles", "install"):         true,
+	plugin.ActionLabelKey("bundles", "refresh"):        true,
+	plugin.ActionDescKey("bundles", "refresh"):         true,
 }
 
 // ext 是外源插件在语言包里共用的名字，见 plugin.ExternalKeyName。

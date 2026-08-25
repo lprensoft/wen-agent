@@ -3,6 +3,7 @@ package agentplugin
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // SkillsDirName 与 MCPFile 是标准规定的固定位置。它们不可配置，也不接受清单里的
@@ -18,7 +19,9 @@ const (
 // 无能为力，那是用户要修的东西。
 type Bundle struct {
 	Manifest Manifest
-	Root     Root
+	// Format 是这个包的格式显示名（Agent Plugins / Claude / …），供界面与命令行说明。
+	Format string
+	Root   Root
 	// SkillsDir 是包内的技能根目录，不存在时为空串。
 	// 里面每个子目录一个技能，具体解析交给技能插件，本包不重复实现一遍。
 	SkillsDir string
@@ -41,20 +44,29 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("打不开插件包目录：%w", err)
 	}
 
-	manifestPath := root.Join(ManifestFile)
+	f, manifestPath, err := detect(root)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := root.Contains(manifestPath); err != nil {
-		return nil, fmt.Errorf("%s 不可用：%w", ManifestFile, err)
+		return nil, fmt.Errorf("清单不可用：%w", err)
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取 %s 失败：%w", ManifestFile, err)
+		return nil, fmt.Errorf("读取清单失败：%w", err)
 	}
-	m, warnings, err := ParseManifest(data)
+	var m Manifest
+	var warnings []string
+	if f.Strict {
+		m, warnings, err = ParseManifest(data)
+	} else {
+		m, warnings, err = parseLoose(data, f.Name)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	b := &Bundle{Manifest: m, Root: root, Problems: warnings}
+	b := &Bundle{Manifest: m, Format: f.Name, Root: root, Problems: warnings}
 
 	// 技能组件：目录在就收下，里面每一篇的合规性由技能插件在扫描时判定。
 	skillsDir := root.Join(SkillsDirName)
@@ -67,14 +79,19 @@ func Load(dir string) (*Bundle, error) {
 	}
 
 	// MCP 组件：整份文件坏掉只作废这一个组件，技能照常；单台 server 坏掉只跳过那一台。
-	mcpPath := root.Join(MCPFile)
-	if info, err := os.Stat(mcpPath); err == nil && !info.IsDir() {
+	if mcpPath := findMCP(root); mcpPath != "" {
 		b.HasMCP = true
 		switch data, err := os.ReadFile(mcpPath); {
 		case err != nil:
-			b.Problems = append(b.Problems, "读取 "+MCPFile+" 失败："+err.Error())
+			b.Problems = append(b.Problems, "读取 "+filepath.Base(mcpPath)+" 失败："+err.Error())
 		default:
-			servers, warnings, err := ParseMCP(data)
+			var servers []MCPServer
+			var warnings []string
+			if f.Strict {
+				servers, warnings, err = ParseMCP(data)
+			} else {
+				servers, warnings, err = ParseMCPLoose(data)
+			}
 			b.Problems = append(b.Problems, warnings...)
 			if err != nil {
 				b.Problems = append(b.Problems, err.Error()+"，这个包的 MCP 组件整个不可用")
