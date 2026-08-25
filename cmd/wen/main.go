@@ -227,30 +227,32 @@ func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
 	}
 }
 
-// needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定
-// 就不成其为角色扮演，dual_persona 没有触发词就永远切不过去。默认打开一个空壳只会让人
-// 以为功能坏了，所以留给用户配好再开。heartbeat 属于另一类理由：无人值守持续消耗模型
-// 额度的功能应当由用户显式打开，而不是装上就开始花钱。
+// defaultOffPlugins 是默认不启用的插件。三类理由，各自成立：
 //
-// 其余插件用声明的默认参数就能直接工作，因此默认启用。
-var needsSetupPlugins = map[string]bool{
-	"roleplay":     true,
-	"dual_persona": true,
-	"scene":        true, // 不配置也能工作，但它依赖默认关闭的 roleplay，默认启用只会在启动时被强制关闭
-	"body_sense":   true, // 同上：自带默认部位表，开箱即用，进这张表只因为它依赖默认关闭的 roleplay
-	"mood":         true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"health":       true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"presence":     true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
-	"belongings":   true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"people":       true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"relationship": true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
-	"unspoken":     true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"agenda":       true, // 两个理由都占：依赖默认关闭的 roleplay 与 people，且到点自动跑轮次是无人值守消耗额度的功能
-	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
-	"style_watch":  true, // 同上：无需配置就能工作，进这张表只因为它依赖默认关闭的 roleplay
+//  1. 不配置就没法工作：不填触发词、城市、凭据，插件就是个空壳，默认打开只会让人
+//     以为功能坏了。
+//  2. 权限过大：read_file 能读任意文件、exec_command 能执行任意命令。这两样是
+//     「拿它当干活的 Agent」时才要的东西，不该是开箱默认——尤其它们能绕过可见域
+//     直接读到会话文件与记忆目录（dual_persona 正是为此把它们声明为冲突）。
+//     要用就去设置页打开，那是个看得见的选择。
+//  3. 空目录：skills 的技能目录是空的，开着只多两个用不上的工具。
+//
+// 其余插件用声明的默认参数就能直接工作，因此默认启用——**包括整个角色演绎组**。
+// 它们从前全在这张表里，理由是「依赖默认关闭的 roleplay」，而 roleplay 关着的理由
+// 是「没有角色设定就不成其为角色扮演」。那条理由成立，但结论下反了：该做的是给一个
+// 默认角色设定（见 roleplay 的 defaultPersona），不是把这一组功能整个关掉。
+//
+// heartbeat 与 agenda 会在无人值守时消耗模型额度，这一点写在文档里而不是靠默认
+// 关闭来表达：它们是这个项目的招牌功能（角色会主动开口、有自己的一天），关着的话
+// 开箱就演示不出来。要停就去设置页关掉，或把心跳间隔调长。
+var defaultOffPlugins = map[string]bool{
+	"read_file":    true, // 能读任意文件
+	"exec_command": true, // 能执行任意命令
 
-	"heartbeat":    true,
+	"dual_persona": true, // 不填触发词就永远切不过去
+	"weather":      true, // 不填城市就查不了天气，且开箱即联网
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
+
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot":   true, // 不扫码绑定没法工作
 	"feishu_bot":   true, // 不填 App ID/Secret 没法工作
@@ -268,7 +270,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 	builtins := builtinPlugins(cfg, restart)
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
-		init := plugin.PluginConfig{Enabled: !needsSetupPlugins[p.Name()]}
+		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
 		if err := m.Register(p, init); err != nil {
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}

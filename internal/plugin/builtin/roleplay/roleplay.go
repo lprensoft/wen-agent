@@ -77,7 +77,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		{
 			Key: "persona", Label: "角色设定", Type: plugin.FieldText,
 			Description: "扮演谁、什么性格、什么处境、怎么说话。作为最高优先级提示词每轮注入。留空则不注入设定，只保留表达规则。",
-			Default:     "",
+			Default:     defaultPersona,
 		},
 		{
 			// 标签用「我的信息」：填的人就是你自己。注入给模型的那一段仍写作
@@ -92,7 +92,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 				"每段一来一回（你说什么、角色怎么答），段与段之间空一行；覆盖不同情绪的场合" +
 				"（高兴时、被烦到时、认真说事时），开了【】演绎就在样例里也带上【】。" +
 				"样例里的人和事只是示范，不会被角色当成真实经历。",
-			Default: "",
+			Default: defaultVoiceSamples,
 		},
 		{
 			Key: "interaction", Label: "启用【】互动演绎", Type: plugin.FieldBool,
