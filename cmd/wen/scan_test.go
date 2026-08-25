@@ -125,13 +125,20 @@ const (
 // 三种形状：
 //
 //	prompt.T(lang, key, zh) / prompt.Tf(lang, key, zh, ...)   给模型看的
-//	i18n.T(lang, key, zh) / i18n.Tf(...)                       给人看的
+//	prompt.Text(key, zh)                                      给模型看的（声明在表里的那种）
+//	i18n.T(lang, key, zh) / i18n.Tf(...)                      给人看的
 //	tr(key, zh) / trf(key, zh, ...)                           给人看的（cmd/wen 里的简写）
 func classify(call *ast.CallExpr) (kind scanKind, key, zh ast.Expr) {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		pkg, ok := fn.X.(*ast.Ident)
-		if !ok || len(call.Args) < 3 || (fn.Sel.Name != "T" && fn.Sel.Name != "Tf") {
+		if !ok {
+			return kindNone, nil, nil
+		}
+		if pkg.Name == "prompt" && fn.Sel.Name == "Text" && len(call.Args) == 2 {
+			return kindPrompt, call.Args[0], call.Args[1]
+		}
+		if len(call.Args) < 3 || (fn.Sel.Name != "T" && fn.Sel.Name != "Tf") {
 			return kindNone, nil, nil
 		}
 		switch pkg.Name {

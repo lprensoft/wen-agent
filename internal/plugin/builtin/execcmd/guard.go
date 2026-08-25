@@ -3,6 +3,8 @@ package execcmd
 import (
 	"regexp"
 	"strings"
+
+	"wen/internal/prompt"
 )
 
 // 本文件是命令风险分级。
@@ -42,14 +44,17 @@ const (
 
 // rule 是一条风险模式。
 type rule struct {
-	re     *regexp.Regexp
-	reason string
+	re *regexp.Regexp
+	// risk 是这一类风险的名字。它既进工具返回给模型的错误文本，也进确认弹窗里那句
+	// 「因为什么要确认」。两处都跟随进程语言，因此放提示词语言包——载重的那一半是
+	// 模型那边，弹窗只是顺带同语言。
+	risk prompt.Piece
 }
 
-func mk(reason string, patterns ...string) []rule {
+func mk(risk prompt.Piece, patterns ...string) []rule {
 	out := make([]rule, 0, len(patterns))
 	for _, p := range patterns {
-		out = append(out, rule{re: regexp.MustCompile(p), reason: reason})
+		out = append(out, rule{re: regexp.MustCompile(p), risk: risk})
 	}
 	return out
 }
@@ -57,36 +62,36 @@ func mk(reason string, patterns ...string) []rule {
 // denyRules 是直接拒绝的模式：没有任何正当用途，且后果是整机级、不可撤销的。
 // 这一档不问用户——把「格式化磁盘吗？」摆到人面前，本身就是一次误点击的机会。
 var denyRules = concat(
-	mk("整盘格式化或写裸设备",
+	mk(prompt.Text("prompt.exec_command.risk.format_disk", "整盘格式化或写裸设备"),
 		`(?i)\bformat\s+[a-z]:`,
 		`(?i)\bmkfs(\.\w+)?\b`,
 		`(?i)\bdd\b[^|;&]*\bof=/dev/(sd|nvme|hd|disk)`,
 		`(?i)>\s*/dev/(sd|nvme|hd|disk)`,
 		`(?i)\bdiskpart\b`,
 	),
-	mk("删除系统根目录或整个用户目录",
+	mk(prompt.Text("prompt.exec_command.risk.delete_root", "删除系统根目录或整个用户目录"),
 		`(?i)\brm\s+(-[a-z]*\s+)*-[a-z]*[rf][a-z]*\s+(-[a-z]+\s+)*/(\s|$|\*)`,
 		`(?i)\brm\s+(-[a-z]*\s+)*-[a-z]*[rf][a-z]*\s+(-[a-z]+\s+)*~/?(\s|$|\*)`,
 		`(?i)\b(del|erase|rd|rmdir)\b[^|;&]*\s[a-z]:\\?\s*$`,
 		`(?i)\b(del|erase)\b[^|;&]*/s[^|;&]*\s[a-z]:\\(\s|$)`,
 	),
-	mk("销毁备份或引导配置",
+	mk(prompt.Text("prompt.exec_command.risk.destroy_backup", "销毁备份或引导配置"),
 		`(?i)\bvssadmin\b[^|;&]*\bdelete\b`,
 		`(?i)\bwbadmin\b[^|;&]*\bdelete\b`,
 		`(?i)\bbcdedit\b`,
 		`(?i)\bcipher\b[^|;&]*/w`,
 	),
-	mk("关机或重启",
+	mk(prompt.Text("prompt.exec_command.risk.shutdown", "关机或重启"),
 		`(?i)\bshutdown\b`, `(?i)\breboot\b`, `(?i)\bpoweroff\b`, `(?i)\bhalt\b`,
 	),
-	mk("fork 炸弹",
+	mk(prompt.Text("prompt.exec_command.risk.fork_bomb", "fork 炸弹"),
 		`:\s*\(\s*\)\s*\{.*\|.*&.*\}\s*;?\s*:`,
 	),
 )
 
 // dangerRules 是需要用户确认的模式：有正当用途，但做错了不可撤销。
 var dangerRules = concat(
-	mk("删除文件或目录",
+	mk(prompt.Text("prompt.exec_command.risk.delete_files", "删除文件或目录"),
 		`(?i)(^|[\s;&|(])rm\s`,
 		`(?i)(^|[\s;&|(])(del|erase|rd|rmdir)\s`,
 		`(?i)\bRemove-Item\b`,
@@ -94,13 +99,13 @@ var dangerRules = concat(
 		`(?i)\bfind\b[^|;&]*(-delete|-exec\s+rm)`,
 		`(?i)\bgit\s+clean\b`,
 	),
-	mk("覆盖或镜像同步（会删除目标端多余文件）",
+	mk(prompt.Text("prompt.exec_command.risk.mirror_sync", "覆盖或镜像同步（会删除目标端多余文件）"),
 		`(?i)\brobocopy\b[^|;&]*/(mir|purge)\b`,
 		`(?i)\brsync\b[^|;&]*--delete`,
 		`(?i)(^|[\s;&|(])(mv|move)\s[^|;&]*(-f|/y)\b`,
 		`(?i)\bxcopy\b[^|;&]*/y\b`,
 	),
-	mk("丢弃未提交改动或改写提交历史",
+	mk(prompt.Text("prompt.exec_command.risk.rewrite_history", "丢弃未提交改动或改写提交历史"),
 		`(?i)\bgit\s+reset\b[^|;&]*--hard`,
 		`(?i)\bgit\s+checkout\b[^|;&]*\s--\s`,
 		`(?i)\bgit\s+restore\b`,
@@ -110,48 +115,48 @@ var dangerRules = concat(
 		`(?i)\bgit\s+reflog\b[^|;&]*expire`,
 		`(?i)\bgit\s+stash\b[^|;&]*(drop|clear)`,
 	),
-	mk("修改权限或归属",
+	mk(prompt.Text("prompt.exec_command.risk.change_perms", "修改权限或归属"),
 		`(?i)(^|[\s;&|(])(chmod|chown|chgrp)\s`,
 		`(?i)\b(icacls|takeown|attrib)\b`,
 	),
-	mk("提权执行",
+	mk(prompt.Text("prompt.exec_command.risk.escalate", "提权执行"),
 		`(?i)(^|[\s;&|(])(sudo|doas|runas)\s`,
 		`(?i)(^|[\s;&|(])su\s+-`,
 		`(?i)\bStart-Process\b[^|;&]*-Verb\s+RunAs`,
 	),
-	mk("终止进程",
+	mk(prompt.Text("prompt.exec_command.risk.kill_process", "终止进程"),
 		`(?i)(^|[\s;&|(])(kill|killall|pkill)\s`,
 		`(?i)\b(taskkill|Stop-Process)\b`,
 	),
-	mk("改动系统服务、计划任务或注册表",
+	mk(prompt.Text("prompt.exec_command.risk.system_config", "改动系统服务、计划任务或注册表"),
 		`(?i)\b(schtasks|systemctl|launchctl|netsh)\b`,
 		`(?i)(^|[\s;&|(])sc\s+(create|delete|config|stop|start)\b`,
 		`(?i)\breg\s+(add|delete|import)\b`,
 		`(?i)\bsetx\b`,
 		`(?i)\bHKLM:|\bHKEY_LOCAL_MACHINE\b`,
 	),
-	mk("安装或卸载软件包（会改动本机环境）",
+	mk(prompt.Text("prompt.exec_command.risk.package_change", "安装或卸载软件包（会改动本机环境）"),
 		`(?i)\b(apt|apt-get|yum|dnf|pacman|brew|choco|winget|scoop)\s+(install|remove|uninstall|upgrade|purge)`,
 		`(?i)\bnpm\s+(install|i|uninstall|remove)\b[^|;&]*\s(-g|--global)\b`,
 		`(?i)\b(pip|pip3)\s+(install|uninstall)\b`,
 		`(?i)\bgo\s+install\b`,
 	),
-	mk("从网络下载后直接执行",
+	mk(prompt.Text("prompt.exec_command.risk.pipe_to_shell", "从网络下载后直接执行"),
 		`(?i)\b(curl|wget|iwr|Invoke-WebRequest)\b[^|;&]*\|\s*(sudo\s+)?(sh|bash|zsh|python\w*|pwsh|powershell)`,
 		`(?i)\b(iex|Invoke-Expression)\b`,
 	),
-	mk("写入网络或落地文件",
+	mk(prompt.Text("prompt.exec_command.risk.network_write", "写入网络或落地文件"),
 		`(?i)\bcurl\b[^|;&]*\s-(o|O)\b`,
 		`(?i)\bcurl\b[^|;&]*-X\s*(POST|PUT|DELETE|PATCH)`,
 		`(?i)\bwget\b[^|;&]*\s-O\b`,
 		`(?i)\bInvoke-WebRequest\b[^|;&]*-OutFile`,
 	),
-	mk("删除容器、镜像或数据卷",
+	mk(prompt.Text("prompt.exec_command.risk.delete_container", "删除容器、镜像或数据卷"),
 		`(?i)\bdocker\b[^|;&]*\b(rm|rmi|prune)\b`,
 		`(?i)\bdocker\s+volume\s+rm\b`,
 		`(?i)\bkubectl\s+delete\b`,
 	),
-	mk("删除数据库或数据表",
+	mk(prompt.Text("prompt.exec_command.risk.delete_db", "删除数据库或数据表"),
 		`(?i)\bdrop\s+(table|database|schema)\b`,
 		`(?i)\btruncate\s+table\b`,
 		`(?i)\bdelete\s+from\b`,
@@ -181,7 +186,7 @@ var shellMeta = regexp.MustCompile("[|;&><`$]|\\$\\(|\n|\r")
 var segmentSep = regexp.MustCompile(`\|\||&&|[|;&\n\r]`)
 
 // classify 判定一条命令的风险，返回判定与原因。
-func classify(command, guard string) (verdict, string) {
+func classify(command, guard, lang string) (verdict, string) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" || guard == guardOff {
 		return verdictAllow, ""
@@ -196,33 +201,34 @@ func classify(command, guard string) (verdict, string) {
 			targets = append(targets, seg)
 		}
 	}
-	if reasons := matchAll(denyRules, targets); len(reasons) > 0 {
-		return verdictDeny, strings.Join(reasons, "；")
+	sep := prompt.T(lang, "prompt.exec_command.risk.sep", "；")
+	if reasons := matchAll(denyRules, targets, lang); len(reasons) > 0 {
+		return verdictDeny, strings.Join(reasons, sep)
 	}
 	// 列出全部命中的类别而不是只报第一条：一条串联命令可能既删文件又改写提交历史，
 	// 只说一样会让人以为自己已经看清了要同意什么。
-	if reasons := matchAll(dangerRules, targets); len(reasons) > 0 {
-		return verdictConfirm, strings.Join(reasons, "；")
+	if reasons := matchAll(dangerRules, targets, lang); len(reasons) > 0 {
+		return verdictConfirm, strings.Join(reasons, sep)
 	}
 
 	if guard == guardAll && !isReadOnly(cmd) {
-		return verdictConfirm, "未在只读白名单中"
+		return verdictConfirm, prompt.T(lang, "prompt.exec_command.risk.not_read_only", "未在只读白名单中")
 	}
 	return verdictAllow, ""
 }
 
 // matchAll 返回命中的全部风险类别，按规则声明顺序去重。
-func matchAll(rules []rule, targets []string) []string {
+func matchAll(rules []rule, targets []string, lang string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range rules {
-		if seen[r.reason] {
+		if seen[r.risk.Key()] {
 			continue
 		}
 		for _, s := range targets {
 			if r.re.MatchString(s) {
-				seen[r.reason] = true
-				out = append(out, r.reason)
+				seen[r.risk.Key()] = true
+				out = append(out, r.risk.For(lang))
 				break
 			}
 		}
