@@ -194,7 +194,7 @@ func TestCompactUntaggedHistoryUnchanged(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Kind != session.KindSummary || msgs[0].Tag != "" {
 		t.Fatalf("应留下一条无标签摘要: %+v", msgs)
 	}
-	if !strings.HasPrefix(msgs[0].Content, summaryPrefix) {
+	if !strings.HasPrefix(msgs[0].Content, summaryPrefixZH) {
 		t.Errorf("摘要前缀丢了: %q", msgs[0].Content)
 	}
 	if len(rec.got) != 1 || rec.got[0].Scope != "" {
@@ -258,11 +258,11 @@ func TestCompactPromptCarriesPluginRequirements(t *testing.T) {
 		t.Fatalf("应只有一次摘要请求，得到 %d", len(provider.reqs))
 	}
 	prompt := provider.reqs[0].Messages[0].Content
-	if !strings.Contains(prompt, compactExtrasHeader+"- 保留关系状态\n") {
+	if !strings.Contains(prompt, compactExtrasHeaderZH+"- 保留关系状态\n") {
 		t.Errorf("插件的要求应随补充段进入提示词:\n%s", truncateRunes(prompt, 400))
 	}
 	// 补充段在基础要求之后、历史正文之前：它要盖过基础要求，又不能混进对话内容
-	if strings.Index(prompt, compactExtrasHeader) > strings.Index(prompt, compactHistoryHeader) {
+	if strings.Index(prompt, compactExtrasHeaderZH) > strings.Index(prompt, compactHistoryHeaderZH) {
 		t.Error("补充段应位于历史正文之前")
 	}
 	if len(stub.scopes) != 1 || stub.scopes[0] != "a" {
@@ -281,10 +281,10 @@ func TestCompactPromptPlainWithoutPrompters(t *testing.T) {
 	ag.Compact(context.Background(), meta.ID, func(Event) {})
 
 	prompt := provider.reqs[0].Messages[0].Content
-	if strings.Contains(prompt, compactExtrasHeader) {
+	if strings.Contains(prompt, compactExtrasHeaderZH) {
 		t.Error("没有插件追加要求时不该出现补充段")
 	}
-	if !strings.HasPrefix(prompt, compactPrompt) || !strings.Contains(prompt, compactHistoryHeader) {
+	if !strings.HasPrefix(prompt, compactPromptZH) || !strings.Contains(prompt, compactHistoryHeaderZH) {
 		t.Error("基础要求与历史正文应原样保留")
 	}
 }
@@ -302,7 +302,7 @@ func stamped(m session.StoredMessage, ts time.Time) session.StoredMessage {
 // 压缩器此前拿到的是一堵没有时间信息的对话墙，原文里的「明天」只能原样抄进摘要，
 // 而摘要永不裁剪。日界线是它写出绝对日期的唯一原料。
 func TestSerializeHistoryMarksDayBoundaries(t *testing.T) {
-	got := serializeHistory([]session.StoredMessage{
+	got := serializeHistory("", []session.StoredMessage{
 		stamped(msg(llm.RoleUser, "u1"), at(2026, 8, 20, 9, 0)),
 		stamped(msg(llm.RoleAssistant, "明天给你带菜"), at(2026, 8, 20, 22, 0)),
 		stamped(msg(llm.RoleUser, "u2"), at(2026, 8, 21, 8, 0)),
@@ -316,7 +316,7 @@ func TestSerializeHistoryMarksDayBoundaries(t *testing.T) {
 
 // 同一天只标一次，且没有时间戳的消息（旧会话）不该凭空造出日界线。
 func TestSerializeHistoryOneMarkPerDay(t *testing.T) {
-	got := serializeHistory([]session.StoredMessage{
+	got := serializeHistory("", []session.StoredMessage{
 		stamped(msg(llm.RoleUser, "a"), at(2026, 8, 20, 9, 0)),
 		stamped(msg(llm.RoleUser, "b"), at(2026, 8, 20, 18, 0)),
 		msg(llm.RoleUser, "c"),
@@ -333,7 +333,7 @@ func TestSerializeHistoryOneMarkPerDay(t *testing.T) {
 func TestSerializeHistorySkipsEphemeralForDayMark(t *testing.T) {
 	eph := stamped(msg(llm.RoleUser, "心跳提示"), at(2026, 8, 21, 3, 0))
 	eph.Kind = session.KindEphemeral
-	got := serializeHistory([]session.StoredMessage{
+	got := serializeHistory("", []session.StoredMessage{
 		stamped(msg(llm.RoleUser, "u1"), at(2026, 8, 20, 9, 0)),
 		eph,
 		stamped(msg(llm.RoleUser, "u2"), at(2026, 8, 21, 8, 0)),
@@ -348,7 +348,7 @@ func TestSerializeHistorySkipsEphemeralForDayMark(t *testing.T) {
 
 // 摘要永不裁剪，里面留下「明天」就等于把一条空气待办焊死在上下文最前面。
 func TestCompactPromptDemandsAbsoluteDates(t *testing.T) {
-	p := buildCompactPrompt(nil, "用户: x")
+	p := buildCompactPrompt("", nil, "用户: x")
 	for _, want := range []string{"具体日期", "「明天」", "期限在哪一天"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("压缩提示词缺少对绝对日期的要求 %q:\n%s", want, p)

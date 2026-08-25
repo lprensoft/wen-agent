@@ -8,6 +8,7 @@ import (
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 	"wen/internal/session"
 )
 
@@ -39,7 +40,11 @@ func messagesOf(stored []session.StoredMessage) []llm.Message {
 	return out
 }
 
-const compactPrompt = `你是一个对话压缩器。请将下面的对话历史压缩成一份结构化摘要，要求：
+// compactPromptZH 是压缩器的基础要求。
+//
+// 「用中文输出」那一条随语言换：摘要是 pinned 的、永不裁剪，一份语言不对的摘要会
+// 一直留在上下文最前面，而且此后每次压缩都把它再抄一遍。
+const compactPromptZH = `你是一个对话压缩器。请将下面的对话历史压缩成一份结构化摘要，要求：
 - 保留：用户的核心诉求与目标、已确认的事实与结论、重要的工具调用及其关键结果、未完成的任务与待办事项
 - 时间一律写成具体日期：原文里的「今天」「明天」「昨天」「下周」这类说法，按它所在的日界线（「（以下是 …… 的对话）」那一行）换算成日期再写，摘要里不要留下这些相对说法
 - 未完成的待办要写清是哪一天说的、期限在哪一天；已经兑现或已经过期的，不要再写成待办
@@ -50,27 +55,33 @@ const compactPrompt = `你是一个对话压缩器。请将下面的对话历史
 // compactExtrasHeader 引入插件追加的摘要要求。基础要求是按任务型对话写的（「寒暄客套」
 // 被列为丢弃项），而角色扮演这类对话里关系性的内容恰恰长那个样子；追加项声明为优先，
 // 与提示词注入「靠后的覆盖靠前的」是同一条约定。
-const compactExtrasHeader = "\n补充要求（与上面的要求冲突时以这里为准）：\n"
+const compactExtrasHeaderZH = "\n补充要求（与上面的要求冲突时以这里为准）：\n"
 
-const compactHistoryHeader = "\n对话历史：\n"
+const compactHistoryHeaderZH = "\n对话历史：\n"
 
 // buildCompactPrompt 拼出完整的压缩提示词：基础要求 + 插件追加的要求 + 历史正文。
-func buildCompactPrompt(extras []string, history string) string {
+func buildCompactPrompt(lang string, extras []string, history string) string {
 	var b strings.Builder
-	b.WriteString(compactPrompt)
+	b.WriteString(prompt.T(lang, "prompt.core.compact", compactPromptZH))
 	if len(extras) > 0 {
-		b.WriteString(compactExtrasHeader)
+		b.WriteString(prompt.T(lang, "prompt.core.compact.extras", compactExtrasHeaderZH))
 		for _, e := range extras {
 			b.WriteString(e)
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString(compactHistoryHeader)
+	b.WriteString(prompt.T(lang, "prompt.core.compact.history", compactHistoryHeaderZH))
 	b.WriteString(history)
 	return b.String()
 }
 
-const summaryPrefix = "以下是之前对话内容的压缩摘要：\n\n"
+// summaryPrefixZH 是摘要消息的开头，它会落盘、留在会话里。切换语言不重写已有的
+// 摘要——那是当时的事实，改掉反而对不上摘要正文的语言。
+const summaryPrefixZH = "以下是之前对话内容的压缩摘要：\n\n"
+
+// summaryAnchorZH 是摘要末尾的时间锚。摘要是 pinned 的、永不参与裁剪，因此它里面的
+// 时段描述会一直留在上下文里；不带锚的话，那些描述会被当成「现在」。
+const summaryAnchorZH = "\n\n（以上对话发生在 %s 之前）"
 
 // minSummarizeTokens 以下的分组不单独调模型生成摘要，原文原样保留。
 // 一两轮对话的摘要信息量不会超过原文，却要付一次真实的模型调用。
@@ -208,8 +219,8 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 		// 摘要是 pinned 的、永不参与裁剪，因此它里面的时段描述会一直留在上下文里。
 		// 不带时间锚的话，那些描述会被当成「现在」，压缩越多这种错位越顽固。
 		now := time.Now()
-		content := summaryPrefix + summary +
-			fmt.Sprintf("\n\n（以上对话发生在 %s 之前）", formatNow(now))
+		content := prompt.T(opts.Lang, "prompt.core.summary_prefix", summaryPrefixZH) + summary +
+			prompt.Tf(opts.Lang, "prompt.core.summary_anchor", summaryAnchorZH, formatNow(opts.Lang, now))
 		if len(notes) > 0 {
 			content += "\n\n" + strings.Join(notes, "\n")
 		}
@@ -234,7 +245,7 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, error) {
 	events, err := provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       opts.Model,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: buildCompactPrompt(extras, serializeHistory(msgs))}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: buildCompactPrompt(opts.Lang, extras, serializeHistory(opts.Lang, msgs))}},
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
 		Thinking:    "off", // 压缩追求速度，不启用思考
@@ -268,7 +279,7 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 // 而摘要是 pinned 的、永不裁剪，一条不带日期的待办就此永久留在上下文最前面，
 // 每天以同样的措辞重新出现。要求摘要写绝对日期，前提是先把日期给它。
 // 一次性输入（心跳提示词等）不进摘要：它们是机器注入的模板文案，不是对话内容。
-func serializeHistory(msgs []session.StoredMessage) string {
+func serializeHistory(lang string, msgs []session.StoredMessage) string {
 	var b strings.Builder
 	var day string
 	for _, m := range msgs {
@@ -278,21 +289,23 @@ func serializeHistory(msgs []session.StoredMessage) string {
 		if !m.TS.IsZero() {
 			if d := m.TS.Format("2006-01-02"); d != day {
 				day = d
-				fmt.Fprintln(&b, dayMark(m.TS))
+				fmt.Fprintln(&b, dayMark(lang, m.TS))
 			}
 		}
 		switch m.Role {
 		case llm.RoleUser:
-			fmt.Fprintf(&b, "用户: %s\n", m.Content)
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.user", "用户: %s\n"), m.Content)
 		case llm.RoleAssistant:
 			if m.Content != "" {
-				fmt.Fprintf(&b, "助手: %s\n", m.Content)
+				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.assistant", "助手: %s\n"), m.Content)
 			}
 			for _, tc := range m.ToolCalls {
-				fmt.Fprintf(&b, "[助手调用工具 %s，参数 %s]\n", tc.Name, truncateRunes(string(tc.Arguments), 200))
+				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.tool_call", "[助手调用工具 %s，参数 %s]\n"),
+					tc.Name, truncateRunes(string(tc.Arguments), 200))
 			}
 		case llm.RoleTool:
-			fmt.Fprintf(&b, "[工具结果] %s\n", truncateRunes(m.Content, 500))
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.tool_result", "[工具结果] %s\n"),
+				truncateRunes(m.Content, 500))
 		}
 	}
 	return b.String()

@@ -236,7 +236,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
 	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(opts.Workdir), toolRules, historyRules}
+	parts := []string{envContext(opts.Lang, opts.Workdir), toolRulesFor(opts.Lang), historyRulesFor(opts.Lang)}
 	parts = append(parts, a.plugins.SystemPrompts()...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
@@ -266,10 +266,10 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		if !h.TS.IsZero() {
 			if d := h.TS.Format("2006-01-02"); d != markedDay {
 				markedDay = d
-				note += dayMark(h.TS) + "\n"
+				note += dayMark(opts.Lang, h.TS) + "\n"
 			}
 		}
-		note += gapNote(lastTS, h.TS)
+		note += gapNote(opts.Lang, lastTS, h.TS)
 		if !h.TS.IsZero() {
 			lastTS = h.TS
 		}
@@ -293,7 +293,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	if !lastTS.IsZero() {
 		sinceLast = startedAt.Sub(lastTS)
 	}
-	wireUser.Content = turnStateBlock(startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
+	wireUser.Content = turnStateBlock(opts.Lang, startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
 		"\n\n" + userMsg.Content
 	msgs = append(msgs, wireUser)
 	pinned = append(pinned, false)
