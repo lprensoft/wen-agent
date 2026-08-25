@@ -82,6 +82,8 @@
   "cli.top.quit": "Quit",
   "cli.top.server": "Access control — password for remote access",
   "cli.top.title": "What do you want to configure?",
+  "lang.fromDefault": "%s (could not read the system locale, so this is the default)",
+  "lang.fromSystem": "%s (following the system locale %s)",
   "plugin.agenda.desc": "Agenda: the character plans two to four things for itself each day, goes and does them at the appointed time and brings back a line about how it went; dated commitments are kept separately and folded into the day's plan when their day comes",
   "plugin.agenda.field.auto_plan.desc": "After the first turn of a new day (or the first heartbeat), let the character draw up its own plan for the day. Turn this off to keep only commitments and hand-edited plans.",
   "plugin.agenda.field.auto_plan.label": "Plan each day automatically",

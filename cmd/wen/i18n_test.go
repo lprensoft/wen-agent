@@ -91,7 +91,12 @@ func TestLocaleCoverage(t *testing.T) {
 	if err := i18n.Err(); err != nil {
 		t.Fatalf("语言包加载失败: %v", err)
 	}
+	// 两个来源：插件元数据那批能从声明推出来，其余（日志、状态行、会话注记、
+	// 命令行输出）散在调用点上，只能扫源码
 	want := metadataStrings(t)
+	for k, site := range scanRepo(t).UI {
+		want[k] = site.ZH
+	}
 
 	switch os.Getenv("WEN_I18N_DUMP") {
 	case "zh":
@@ -118,15 +123,19 @@ func TestLocaleCoverage(t *testing.T) {
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("语言包 en 缺 %d 条插件元数据的译文（用 WEN_I18N_DUMP=missing 导出待填的骨架）:\n%s",
+		t.Errorf("语言包 en 缺 %d 条译文（用 WEN_I18N_DUMP=missing 导出待填的骨架）:\n%s",
 			len(missing), joinLimit(missing, 20))
 	}
 
-	// 反向也要查：插件改了配置项的 Key、删了一个字段，语言包里那条就成了死键。
-	// 死键不会造成故障，但会让「还差多少条」这个数字永远对不上。
+	// 反向也要查：插件改了配置项的 Key、删了一个字段、调用点换了个键，语言包里
+	// 那条就成了死键。死键不会造成故障，但会让「还差多少条」这个数字永远对不上，
+	// 而那个数字正是这项工作唯一的进度指示。
+	//
+	// 这一条查的是**全部**键，不只 plugin.* 的：既然推导与扫描合起来能说清每一条
+	// 键的来历，语言包里就不该有第三种来历的东西。
 	var stale []string
 	for k := range have {
-		if _, ok := want[k]; !ok && isPluginKey(k) && !derivedElsewhere[k] {
+		if _, ok := want[k]; !ok && !derivedElsewhere[k] {
 			stale = append(stale, k)
 		}
 	}
@@ -136,7 +145,7 @@ func TestLocaleCoverage(t *testing.T) {
 	}
 }
 
-func isPluginKey(k string) bool { return len(k) > 7 && k[:7] == "plugin." }
+
 
 // 这几条 plugin.* 的键不是从插件声明推出来的，因此不算死键：
 //   - 「未启用」那句提示由翻译层缀在候选项后面，与具体插件无关；
@@ -169,12 +178,17 @@ func keySet(keys []string) map[string]bool {
 
 func dump(t *testing.T, m map[string]string) {
 	t.Helper()
+	dumpTo(t, m, "WEN_I18N_OUT")
+}
+
+func dumpTo(t *testing.T, m map[string]string, outEnv string) {
+	t.Helper()
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 键多起来之后日志读不了，给个直接落文件的出口
-	if out := os.Getenv("WEN_I18N_OUT"); out != "" {
+	if out := os.Getenv(outEnv); out != "" {
 		if err := os.WriteFile(out, b, 0o644); err != nil {
 			t.Fatal(err)
 		}
