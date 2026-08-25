@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"wen/internal/pathsafe"
 )
 
 // bom 是有些编辑器会写在文件开头的字节序标记 U+FEFF，它不属于内容。
@@ -58,23 +60,30 @@ func scan(dir string, descLimit int) scanResult {
 	}
 	// os.ReadDir 按文件名排序，清单因此是稳定的——SystemPrompt 的返回值要求逐字节一致
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
 			continue // 版本控制与编辑器的目录，不是技能，也不该报成问题
+		}
+		sdir := filepath.Join(dir, name)
+		// 用 Stat 判断而不是 e.IsDir()：后者的类型来自 lstat，指向目录的符号链接与
+		// Windows 的目录联接在它眼里都不是目录。只判 e.IsDir 的话，链接进来的技能会
+		// 在这一步被悄悄丢掉——既加载不上，也没有一句话说明为什么。
+		if info, err := os.Stat(sdir); err != nil || !info.IsDir() {
+			continue
 		}
 		if !validSkillName.MatchString(name) {
 			res.problems = append(res.problems,
 				fmt.Sprintf("%s：目录名只能用小写字母、数字、下划线与连字符，已跳过", name))
 			continue
 		}
-		sdir := filepath.Join(dir, name)
-		// 技能目录不得经符号链接指到技能根之外。用户自己的目录里这大多是手滑，
-		// 但插件包是从外面拿来的，Agent Plugins 标准明确要求客户端拒绝这种逃逸。
-		if !within(dir, sdir) {
-			res.problems = append(res.problems, name+"：指向技能目录之外，已跳过")
+		// 技能目录不得经链接指到技能根之外。指到根**之内**的链接照常收下——那是用户
+		// 在自己目录里做的整理，没有理由拦。
+		//
+		// 拒绝时必须说一句：一个技能没出现在清单里而屏幕上什么都没有，是最难自己查
+		// 出来的一类问题。插件包是从外面拿来的，Agent Plugins 标准也明确要求客户端
+		// 拒绝这种逃逸。
+		if !pathsafe.Within(dir, sdir) {
+			res.problems = append(res.problems, name+"：经链接指到了技能目录之外，已跳过")
 			continue
 		}
 		path := filepath.Join(sdir, skillFile)
@@ -106,25 +115,6 @@ func scan(dir string, descLimit int) scanResult {
 		})
 	}
 	return res
-}
-
-// within 报告 sub 解析完符号链接之后是否仍落在 root 之内。
-// 两边都要解析：技能根自己可能就在一条符号链接下面（macOS 的 /tmp、把配置目录
-// 搬到别的盘），只解析一边会把每个技能都判成越界。
-func within(root, sub string) bool {
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return false
-	}
-	realSub, err := filepath.EvalSymlinks(sub)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(realRoot, realSub)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // meta 是 SKILL.md 开头 frontmatter 里我们关心的字段。
