@@ -22,3 +22,7 @@ wen.lock
 # 分发打包产物（发布 workflow 在这两处落地，本地跑同一套脚本时也一样）
 /dist/
 /build/
+
+# 已安装的外源插件包（Agent Plugins 格式，锚定根目录）
+/bundles/
+/wen-test.exe

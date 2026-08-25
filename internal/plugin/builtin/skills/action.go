@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"wen/internal/plugin"
+	"wen/internal/skillroots"
 )
 
 // actionRescan 是设置页上的「扫描技能目录」按钮。
@@ -67,9 +68,10 @@ func (p *Plugin) StartAction(ctx context.Context, key string) error {
 func (p *Plugin) runRescan(seq uint64, dir string, live bool, maxList, maxDesc int) {
 	res := scan(dir, maxDesc)
 	if live {
-		p.mu.Lock()
-		p.apply(res, maxList)
-		p.mu.Unlock()
+		// 走完整的 rescan 而不是把这一趟的结果直接写回：生效清单是「用户自己的
+		// 目录 + 各插件包登记的目录」合起来的，只写这一趟等于把插件包里的技能
+		// 全抹掉，而按钮上写的是「扫描技能目录」。
+		p.rescan()
 	}
 
 	var b strings.Builder
@@ -98,6 +100,12 @@ func (p *Plugin) runRescan(seq uint64, dir string, live bool, maxList, maxDesc i
 	}
 	if !live {
 		b.WriteString("\n以上是对尚未保存的目录的试扫，当前生效的技能没有变动。保存配置后才会切过去。")
+	}
+	// 插件包带进来的技能不在这一趟的结果里（这里扫的是技能目录本身），
+	// 但它们确实在生效清单中——不说一句的话，界面上的条数会对不上。
+	if n := len(skillroots.List()); n > 0 {
+		fmt.Fprintf(&b, `
+另有 %d 个插件包各自带着技能，它们与上面这些合成同一份清单。`, n)
 	}
 
 	st := plugin.ActionState{Status: plugin.ActionDone, Message: strings.TrimRight(b.String(), "\n")}

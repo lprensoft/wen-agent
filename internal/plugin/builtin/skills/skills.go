@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"wen/internal/plugin"
+	"wen/internal/skillroots"
 )
 
 const (
@@ -39,6 +40,12 @@ type Plugin struct {
 	index    map[string]skill
 	problems []string
 	prompt   string // 已渲染好的清单，SystemPrompt 直接返回，不在调用时做任何 I/O
+
+	// scanMu 串行化整轮扫描。扫描要读一批目录，不能在 mu 里做（那会把清单锁住
+	// 一整趟 I/O）；而两趟并发的扫描若各扫各的再写回，晚到的旧结果会盖掉新的。
+	scanMu sync.Mutex
+	// unsub 取消对技能根登记的订阅。Init 可能被反复调用，只订阅一次。
+	unsub func()
 
 	// 设置页操作的状态，与主状态分开加锁：StartAction 与 ActionState 由 HTTP 并发调用。
 	actMu    sync.Mutex
@@ -104,16 +111,77 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 用户自己指定的目录不代建：路径打错时「目录不存在」是有用的反馈，
 	// 而默默建一个空目录只会让人对着它纳闷技能为什么没加载。
 
-	maxList := plugin.CfgInt(cfg, "max_list", defaultMaxList)
-	res := scan(dir, maxDescRunes)
+	p.mu.Lock()
+	p.dir = dir
+	p.maxList = plugin.CfgInt(cfg, "max_list", defaultMaxList)
+	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
+	if p.unsub == nil {
+		// 外源插件包在启用时登记自己的技能目录，而它可能排在本插件之后注册，
+		// 用户也可能在设置页上随时开关一个包——只在这里扫一次的话，那些技能
+		// 要重启才出现。
+		p.unsub = skillroots.Subscribe(p.rescan)
+	}
+	p.mu.Unlock()
+
+	p.rescan()
+	return nil
+}
+
+// Stop 取消订阅。插件被禁用或重配时由 Manager 在锁外调用。
+func (p *Plugin) Stop() {
+	p.mu.Lock()
+	unsub := p.unsub
+	p.unsub = nil
+	p.mu.Unlock()
+	if unsub != nil {
+		unsub()
+	}
+}
+
+// rescan 扫一遍全部技能根：用户自己的目录，加上外源插件包登记进来的那些。
+//
+// 用户的目录排在最前，重名时它赢：那是用户直接控制的东西，装进来的包不该悄悄
+// 盖掉它。同名的后来者跳过并报一条，而不是两条都收——read_skill 按名字找，
+// 收下两个同名的等于让它随机命中一个。
+func (p *Plugin) rescan() {
+	p.scanMu.Lock()
+	defer p.scanMu.Unlock()
+
+	p.mu.RLock()
+	dir, maxList := p.dir, p.maxList
+	p.mu.RUnlock()
+
+	var merged scanResult
+	seen := map[string]string{} // 技能名 → 来源说明
+
+	take := func(label string, res scanResult) {
+		for _, s := range res.skills {
+			if from, dup := seen[s.Name]; dup {
+				merged.problems = append(merged.problems,
+					fmt.Sprintf("%s：与%s里的同名技能重复，已跳过", s.Name, from))
+				continue
+			}
+			seen[s.Name] = label
+			merged.skills = append(merged.skills, s)
+		}
+		for _, pr := range res.problems {
+			if label != "" {
+				pr = label + " " + pr
+			}
+			merged.problems = append(merged.problems, pr)
+		}
+	}
+
+	own := scan(dir, maxDescRunes)
+	merged.missing = own.missing
+	take("技能目录", own)
+	for _, r := range skillroots.List() {
+		take("插件包 "+r.Label, scan(r.Dir, maxDescRunes))
+	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.dir = dir
-	p.maxList = maxList
-	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
-	p.apply(res, maxList)
-	return nil
+	p.apply(merged, maxList)
+	p.mu.Unlock()
 }
 
 // apply 写入一次扫描结果并重新渲染清单。调用者须持有写锁。
@@ -142,6 +210,9 @@ func (p *Plugin) StatusLines() []string {
 		return nil
 	}
 	line := fmt.Sprintf("📚 技能：已加载 %d 个", len(p.list))
+	if n := len(skillroots.List()); n > 0 {
+		line += fmt.Sprintf("（含 %d 个插件包）", n)
+	}
 	if n := len(p.problems); n > 0 {
 		line += fmt.Sprintf("，%d 个未能加载", n)
 	}

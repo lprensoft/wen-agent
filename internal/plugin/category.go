@@ -12,6 +12,7 @@ const (
 	CategoryBackground = "后台任务"
 	CategoryChannel    = "消息通道"
 	CategoryProgram    = "程序维护"
+	CategoryExternal   = "外源插件"
 	CategoryOther      = "其他"
 )
 
@@ -41,6 +42,7 @@ const (
 	CategoryKeyBackground = "background"
 	CategoryKeyChannel    = "channel"
 	CategoryKeyProgram    = "program"
+	CategoryKeyExternal   = "external"
 	CategoryKeyOther      = "other"
 )
 
@@ -51,6 +53,7 @@ var categoryKeys = map[string]string{
 	CategoryBackground: CategoryKeyBackground,
 	CategoryChannel:    CategoryKeyChannel,
 	CategoryProgram:    CategoryKeyProgram,
+	CategoryExternal:   CategoryKeyExternal,
 	CategoryOther:      CategoryKeyOther,
 }
 

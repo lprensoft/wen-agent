@@ -8,6 +8,7 @@
 wen                        启动服务（等价于 wen serve）
 wen serve [-c 配置] [-p 端口]  启动服务
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
+wen plugins [子命令] [-c 配置]  管理外源插件包（list / install / uninstall / info）
 wen status [-c 配置]           打印当前配置与运行状态
 wen eval <脚本.json> [-o 文件]  回放一段脚本对话，生成文风与角色一致性报告
 wen update [--check] [-y]  检查并安装新版本
@@ -30,3 +31,23 @@ wen help [命令]            显示帮助
 
 表单由插件自己声明的配置项生成，与设置页同源，因此新增插件时两边同时就有了配置界面。插件声明的操作也在这里：选中微信通道会出现「扫码绑定」，二维码直接以字符画在终端里（黑白不随终端配色，深色主题也能扫），码下附链接原文兜底，过期自动刷新重绘——远程服务器上不必再为扫码打开 Web UI。
 
+
+## wen plugins：装外源插件包
+
+外源插件走 [Agent Plugins 1.0](https://agent-plugins.org/) 标准：一个插件包是一个目录，根下有 `plugin.json`，可以带 `skills/`（技能手册）与 `mcp.json`（MCP server 声明）。这份标准由 OpenAI、微软、AWS、Cursor 与 Vercel 在 2026 年 8 月联合发布，ChatGPT、Codex CLI、Cursor、GitHub Copilot、VS Code 等客户端共用同一批插件包。它不含任何可执行代码，因此与宿主用什么语言写无关。
+
+```bash
+wen plugins list                   # 看装了哪些
+wen plugins install ./pdf-tools    # 从目录装
+wen plugins install ./pdf-tools.zip
+wen plugins info pdf-tools
+wen plugins uninstall pdf-tools
+```
+
+装好的包放在配置目录的 `bundles/<插件包名>/`，在设置页上各占一张卡片、归入「外源插件」一节，可以单独开关。插件名前面加了 `ext_` 前缀：插件名全局唯一且会被拼成持久化目录，一个叫 `memory` 的包否则会与内置的记忆插件撞名。
+
+**当前版本只加载技能组件**，包里的 `mcp.json` 会被识别并在界面上标出来，但还不会连接。带技能的包要等「技能手册」插件打开之后才会进清单——它默认是关的，装的时候命令行会提醒一句。
+
+**装完与卸完都要重启服务**：插件在启动期一次性注册，注册顺序还承载着提示词的拼接顺序。服务正在运行时命令行会提醒。
+
+几条安全边界：压缩包里指向外部的路径（`../`）与符号链接一律拒绝；解包有大小与文件数上限；插件包里的每一条路径都必须落在包目录之内。校验在复制之前完成，装一个坏包不会在配置目录里留下残骸。
