@@ -125,10 +125,12 @@ func isPluginKey(k string) bool { return len(k) > 7 && k[:7] == "plugin." }
 
 // 这几条 plugin.* 的键不是从插件声明推出来的，因此不算死键：
 //   - 「未启用」那句提示由翻译层缀在候选项后面，与具体插件无关；
-//   - 「其他」分组只在插件没声明分组时出现，内置插件都声明了，外部插件才会走到。
+//   - 「其他」分组只在插件没声明分组时出现，内置插件都声明了，外部插件才会走到；
+//   - 「外源插件」分组只有装进来的插件包才会用到，而它们不在内置清单里。
 var derivedElsewhere = map[string]bool{
-	plugin.UnavailableKey:                           true,
-	plugin.CategoryTextKey(plugin.CategoryKeyOther): true,
+	plugin.UnavailableKey:                              true,
+	plugin.CategoryTextKey(plugin.CategoryKeyOther):    true,
+	plugin.CategoryTextKey(plugin.CategoryKeyExternal): true,
 }
 
 func keySet(keys []string) map[string]bool {

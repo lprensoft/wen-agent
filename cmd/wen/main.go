@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"wen/internal/agentplugin"
 	"wen/internal/config"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/agenda"
@@ -308,7 +309,31 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
+	registerBundles(m, cfg.BaseDir)
 	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
 	m.Resolve()
 	return m
+}
+
+// registerBundles 把已安装的外源插件包（Agent Plugins 1.0）注册进来，一个包一张卡片。
+//
+// 排在全部内置插件之后：它们不注入任何提示词，注册顺序对它们只剩展示含义。默认启用
+// ——装一个包是用户特意做的动作，装完还要再去开一次开关是多余的一步；不想要就卸掉，
+// 或在设置页上关掉（关掉的状态记在 plugins.state.json 里，与内置插件同一套）。
+//
+// 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
+func registerBundles(m *plugin.Manager, baseDir string) {
+	bundles, problems := agentplugin.NewStore(baseDir).List()
+	for _, p := range problems {
+		log.Printf("警告: 插件包 %s", p)
+	}
+	for _, b := range bundles {
+		p := agentplugin.NewPlugin(b)
+		if err := m.RegisterExternal(p, plugin.PluginConfig{Enabled: true}); err != nil {
+			log.Printf("警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
+			continue
+		}
+		// 包自己的提醒（未知字段之类）不在这里打：buildPlugins 也被 wen config 与
+		// wen plugins 调用，日志会糊在 TUI 上。它们由 wen plugins list / info 展示。
+	}
 }

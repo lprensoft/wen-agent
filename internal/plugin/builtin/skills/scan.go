@@ -71,6 +71,12 @@ func scan(dir string, descLimit int) scanResult {
 			continue
 		}
 		sdir := filepath.Join(dir, name)
+		// 技能目录不得经符号链接指到技能根之外。用户自己的目录里这大多是手滑，
+		// 但插件包是从外面拿来的，Agent Plugins 标准明确要求客户端拒绝这种逃逸。
+		if !within(dir, sdir) {
+			res.problems = append(res.problems, name+"：指向技能目录之外，已跳过")
+			continue
+		}
 		path := filepath.Join(sdir, skillFile)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -100,6 +106,25 @@ func scan(dir string, descLimit int) scanResult {
 		})
 	}
 	return res
+}
+
+// within 报告 sub 解析完符号链接之后是否仍落在 root 之内。
+// 两边都要解析：技能根自己可能就在一条符号链接下面（macOS 的 /tmp、把配置目录
+// 搬到别的盘），只解析一边会把每个技能都判成越界。
+func within(root, sub string) bool {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	realSub, err := filepath.EvalSymlinks(sub)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(realRoot, realSub)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // meta 是 SKILL.md 开头 frontmatter 里我们关心的字段。

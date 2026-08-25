@@ -134,6 +134,7 @@
   "plugin.body_sense.field.state_max_delta_per_call.label": "Largest single change to body state",
   "plugin.category.background": "Background work",
   "plugin.category.channel": "Chat channels",
+  "plugin.category.external": "External plugins",
   "plugin.category.memory": "Memory and search",
   "plugin.category.other": "Other",
   "plugin.category.persona": "Roleplay",

@@ -55,6 +55,17 @@ func commands() []command {
 			run: runEval,
 		},
 		{
+			name:    "plugins",
+			usage:   "wen plugins [list|install|uninstall|info] [-c 配置文件]",
+			summary: "管理外源插件包",
+			detail: "装的是 Agent Plugins 1.0 格式的插件包：一个目录，里面有 plugin.json，\n" +
+				"可带 skills/（技能）与 mcp.json（MCP server 声明）。\n" +
+				"install 认本地目录与 .zip；装好的包在设置页上各占一张卡片，标记为「外源」。\n" +
+				"插件在启动期注册，装完或卸完要重启服务才生效。\n" +
+				"本版只加载技能，包里的 MCP 声明尚未支持。",
+			run: runPlugins,
+		},
+		{
 			name:    "status",
 			usage:   "wen status [-c 配置文件]",
 			summary: "打印当前配置与运行状态",
