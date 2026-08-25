@@ -323,12 +323,13 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 //
 // 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
 func registerBundles(m *plugin.Manager, baseDir string) {
-	bundles, problems := agentplugin.NewStore(baseDir).List()
+	store := agentplugin.NewStore(baseDir)
+	bundles, problems := store.List()
 	for _, p := range problems {
 		log.Printf("警告: 插件包 %s", p)
 	}
 	for _, b := range bundles {
-		p := agentplugin.NewPlugin(b)
+		p := agentplugin.NewPlugin(b, store)
 		if err := m.RegisterExternal(p, plugin.PluginConfig{Enabled: true}); err != nil {
 			log.Printf("警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
 			continue
