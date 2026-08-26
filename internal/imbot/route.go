@@ -2,7 +2,6 @@ package imbot
 
 import (
 	"context"
-	"log"
 	"sort"
 	"sync"
 
@@ -121,16 +120,18 @@ func ServedBy(channel, sessionID string) bool {
 
 // Deliver 把一段文本投到指定通道上该会话对应的用户，返回是否真的交给了平台。
 // 原样一条发出；助手的最终回复走 deliverTo 的 paced 路径，由目标通道按自己的开关分条。
-func Deliver(ctx context.Context, channel, sessionID, text string) bool {
-	return deliverTo(ctx, channel, sessionID, text, false)
+// lang 是**发送方**的语言：投不出去那句日志是说给这一侧听的，而目标通道此刻可能
+// 根本没起来，问不到它的语言。
+func Deliver(ctx context.Context, lang, channel, sessionID, text string) bool {
+	return deliverTo(ctx, lang, channel, sessionID, text, false)
 }
 
-func deliverTo(ctx context.Context, channel, sessionID, text string, paced bool) bool {
+func deliverTo(ctx context.Context, lang, channel, sessionID, text string, paced bool) bool {
 	regMu.RLock()
 	core := liveCores[channel]
 	regMu.RUnlock()
 	if core == nil {
-		log.Printf("imbot: 通道 %s 当前未启用，无法投递", channel)
+		i18n.Logf(lang, "log.imbot.channel_down", "imbot: 通道 %s 当前未启用，无法投递", channel)
 		return false
 	}
 	return core.pushTo(ctx, sessionID, text, paced)
@@ -165,7 +166,7 @@ func unregisterLive(c *Core) {
 // 是这个功能能造成的最坏后果，宁可不送达。
 func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) bool {
 	if c.cfg.Push == nil {
-		log.Printf("%s: 未提供主动推送能力，无法接收转投", c.cfg.PluginName)
+		i18n.Logf(c.cfg.Lang, "log.imbot.no_push", "%s: 未提供主动推送能力，无法接收转投", c.cfg.PluginName)
 		return false
 	}
 	if !c.Running() {
@@ -176,24 +177,24 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) b
 	if len(users) == 0 {
 		known := c.binding.Users()
 		if len(known) != 1 {
-			log.Printf("%s: 没有可投递的用户（已知 %d 人，需要恰好 1 人才能自动接入会话）",
+			i18n.Logf(c.cfg.Lang, "log.imbot.no_recipient", "%s: 没有可投递的用户（已知 %d 人，需要恰好 1 人才能自动接入会话）",
 				c.cfg.PluginName, len(known))
 			return false
 		}
 		prev := c.binding.Get(known[0])
 		if err := c.binding.Set(known[0], sessionID); err != nil {
-			log.Printf("%s: 保存会话映射失败: %v", c.cfg.PluginName, err)
+			i18n.Logf(c.cfg.Lang, "log.imbot.save_binding_failed", "%s: 保存会话映射失败: %v", c.cfg.PluginName, err)
 			return false
 		}
 		if prev != "" && prev != sessionID {
 			// 接管改写了一个已有的绑定：那个用户原本在别的会话里，此刻被搬了过来。
 			// 装了会话锚之后这该是罕见事（各通道本就共用一个会话），留痕是为了万一
 			// 再漂时有迹可循——此前它是完全无声的，表现出来就是「切回来接不上了」。
-			log.Printf("%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
+			i18n.Logf(c.cfg.Lang, "log.imbot.rebound", "%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
 			c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.rebound",
 				"「%s」上的用户原本在会话 %s 里，已改绑到当前会话。", c.cfg.PluginName, prev))
 		} else {
-			log.Printf("%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
+			i18n.Logf(c.cfg.Lang, "log.imbot.adopted", "%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
 		}
 		users = known
 	}

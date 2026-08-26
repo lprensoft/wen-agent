@@ -3,7 +3,6 @@ package imbot
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 
 	"wen/internal/i18n"
@@ -31,7 +30,7 @@ func HelpText(lang string) string {
 func (c *Core) process(ctx context.Context, msg Message) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%s: 处理消息时 panic（已隔离）: %v", c.cfg.PluginName, r)
+			i18n.Logf(c.cfg.Lang, "log.imbot.handle_panic", "%s: 处理消息时 panic（已隔离）: %v", c.cfg.PluginName, r)
 		}
 	}()
 
@@ -128,10 +127,10 @@ func (c *Core) deliver(ctx context.Context, msg Message, sessionID, text string,
 		return
 	}
 	// 转投到别的通道时，分不分条由那条通道自己的开关决定：节奏是出口的属性
-	if deliverTo(ctx, target, sessionID, text, paced) {
+	if deliverTo(ctx, c.cfg.Lang, target, sessionID, text, paced) {
 		return
 	}
-	log.Printf("%s: 本轮回复该发往 %s，那条通道投不出去，已丢弃", c.cfg.PluginName, target)
+	i18n.Logf(c.cfg.Lang, "log.imbot.route_dropped", "%s: 本轮回复该发往 %s，那条通道投不出去，已丢弃", c.cfg.PluginName, target)
 	c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.undelivered",
 		"有一段回复该发往「%s」，但那条通道当时投不出去，没能送达。", target))
 }
@@ -142,7 +141,7 @@ func (c *Core) notice(ctx context.Context, sessionID, text string) {
 		return
 	}
 	if err := c.cfg.Notice(ctx, sessionID, text); err != nil {
-		log.Printf("%s: 写会话注记失败: %v", c.cfg.PluginName, err)
+		i18n.Logf(c.cfg.Lang, "log.imbot.notice_failed", "%s: 写会话注记失败: %v", c.cfg.PluginName, err)
 	}
 }
 

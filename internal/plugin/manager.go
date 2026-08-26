@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+
+	"wen/internal/i18n"
 )
 
 // 插件来源。
@@ -250,7 +251,7 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 		if len(fields) > 0 && len(e.userCfg) > 0 {
 			values, err := NormalizeConfig(fields, e.userCfg)
 			if err != nil {
-				log.Printf("插件 %q 的持久化配置无效，改用配置文件的值: %v", name, err)
+				i18n.Logf(m.lang(), "log.plugin.bad_saved_config", "插件 %q 的持久化配置无效，改用配置文件的值: %v", name, err)
 				values = nil
 			}
 			e.userCfg = values
@@ -263,7 +264,7 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 	if e.enabled && !m.noInit {
 		if err := p.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.enabled = false
-			log.Printf("插件 %q 初始化失败，保持禁用: %v", name, err)
+			i18n.Logf(m.lang(), "log.plugin.init_failed", "插件 %q 初始化失败，保持禁用: %v", name, err)
 		} else {
 			e.inited = true
 		}
@@ -468,14 +469,21 @@ func reversed[T any](s []T) []T {
 // safely 执行一次插件回调，panic 只记日志：单个插件不该连累整轮对话。
 // 从前只有轮次结束的广播做了这层保护，其余回调点各自裸调——同样是插件代码，
 // 没有理由区别对待。
-func safely(name, what string, fn func()) {
+//
+// what 是那个回调的名字（SystemPrompt、OnCompact……）而不是一句中文短语：它是
+// 标识符，因此不必翻译，而且比「在生成系统提示词时」更好查——照着它 grep 就能
+// 落到出事的那个接口上。
+func safely(lang, name, what string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("插件 %q 在%s时 panic: %v", name, what, r)
+			i18n.Logf(lang, "log.plugin.callback_panic", "插件 %q 的 %s 回调 panic: %v", name, what, r)
 		}
 	}()
 	fn()
 }
+
+// lang 是这个 Manager 的进程语言，供各处日志取用。
+func (m *Manager) lang() string { return m.ictx.Lang }
 
 // entrySnapshot 是列表接口在锁内取到的插件状态，插件自己的方法留到锁外调用。
 // 依赖与冲突的推算留在锁内：它们要看整张注册表，必须在一致的快照上进行，
@@ -521,7 +529,7 @@ func (m *Manager) List() []Status {
 			Unmet:     sn.unmet,
 			Conflicts: sn.conflicts, Conflicting: sn.conflicting,
 		}
-		safely(sn.name, "汇报插件状态", func() {
+		safely(m.lang(), sn.name, "List", func() {
 			st.Description = sn.plugin.Description()
 			st.Category = CategoryOf(sn.plugin)
 			st.CategoryKey = CategoryKeyOf(st.Category)
@@ -552,7 +560,7 @@ func (m *Manager) EnabledTools() []Tool {
 	var out []Tool
 	for _, e := range enabledAs[Plugin](m) {
 		var tools []Tool
-		safely(e.name, "列举工具", func() { tools = e.impl.Tools() })
+		safely(m.lang(), e.name, "Tools", func() { tools = e.impl.Tools() })
 		out = append(out, tools...)
 	}
 	return out
@@ -562,7 +570,7 @@ func (m *Manager) EnabledTools() []Tool {
 func (m *Manager) FindTool(name string) (Tool, bool) {
 	for _, e := range enabledAs[Plugin](m) {
 		var tools []Tool
-		safely(e.name, "列举工具", func() { tools = e.impl.Tools() })
+		safely(m.lang(), e.name, "Tools", func() { tools = e.impl.Tools() })
 		for _, t := range tools {
 			if t.Name() == name {
 				return t, true
@@ -577,7 +585,7 @@ func (m *Manager) SystemPrompts() []string {
 	var out []string
 	for _, e := range enabledAs[Plugin](m) {
 		var frag string
-		safely(e.name, "生成系统提示词", func() { frag = e.impl.SystemPrompt() })
+		safely(m.lang(), e.name, "SystemPrompt", func() { frag = e.impl.SystemPrompt() })
 		if frag != "" {
 			out = append(out, frag)
 		}
@@ -591,7 +599,7 @@ func (m *Manager) StatusLines(lang string) []string {
 	var out []string
 	for _, e := range enabledAs[StatusReporter](m) {
 		var lines []string
-		safely(e.name, "汇报状态行", func() { lines = e.impl.StatusLines(lang) })
+		safely(m.lang(), e.name, "StatusLines", func() { lines = e.impl.StatusLines(lang) })
 		for _, line := range lines {
 			if line != "" {
 				out = append(out, line)
@@ -614,20 +622,20 @@ func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
 			sc  Scope
 			err error
 		)
-		safely(e.name, "裁决可见域", func() { sc, err = e.impl.DecideScope(ctx, ev) })
+		safely(m.lang(), e.name, "DecideScope", func() { sc, err = e.impl.DecideScope(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 裁决可见域失败，按不限制处理: %v", e.name, err)
+			i18n.Logf(m.lang(), "log.plugin.scope_failed", "插件 %q 裁决可见域失败，按不限制处理: %v", e.name, err)
 			continue
 		}
 		if sc.IsZero() {
 			continue
 		}
 		if sc.Write != "" && !validName.MatchString(sc.Write) {
-			log.Printf("插件 %q 返回了非法的可见域标签 %q，已忽略", e.name, sc.Write)
+			i18n.Logf(m.lang(), "log.plugin.scope_bad_tag", "插件 %q 返回了非法的可见域标签 %q，已忽略", e.name, sc.Write)
 			continue
 		}
 		if owner != "" {
-			log.Printf("插件 %q 的可见域裁决被忽略：本轮已由插件 %q 决定", e.name, owner)
+			i18n.Logf(m.lang(), "log.plugin.scope_taken", "插件 %q 的可见域裁决被忽略：本轮已由插件 %q 决定", e.name, owner)
 			continue
 		}
 		out, owner = sc, e.name
@@ -654,13 +662,13 @@ func (m *Manager) TranslateFailure(ctx context.Context, ev TurnFailure) (string,
 			text string
 			ok   bool
 		)
-		safely(e.name, "转译轮次失败", func() { text, ok = e.impl.TranslateFailure(ctx, ev) })
+		safely(m.lang(), e.name, "TranslateFailure", func() { text, ok = e.impl.TranslateFailure(ctx, ev) })
 		text = strings.TrimSpace(text)
 		if !ok || text == "" {
 			continue
 		}
 		if owner != "" {
-			log.Printf("插件 %q 的失败转译被忽略：本轮已由插件 %q 接手", e.name, owner)
+			i18n.Logf(m.lang(), "log.plugin.failure_taken", "插件 %q 的失败转译被忽略：本轮已由插件 %q 接手", e.name, owner)
 			continue
 		}
 		if r := []rune(text); len(r) > failureTextMaxRunes {
@@ -680,9 +688,9 @@ func (m *Manager) TurnPrompts(ctx context.Context, ev TurnEvent) []string {
 			frag string
 			err  error
 		)
-		safely(e.name, "生成本轮提示词", func() { frag, err = e.impl.TurnPrompt(ctx, ev) })
+		safely(m.lang(), e.name, "TurnPrompt", func() { frag, err = e.impl.TurnPrompt(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 生成本轮提示词失败: %v", e.name, err)
+			i18n.Logf(m.lang(), "log.plugin.turnprompt_failed", "插件 %q 生成本轮提示词失败: %v", e.name, err)
 			continue
 		}
 		if frag != "" {
@@ -698,7 +706,7 @@ func (m *Manager) CompactPrompts(ctx context.Context) []string {
 	var out []string
 	for _, e := range enabledAs[CompactPrompter](m) {
 		var frag string
-		safely(e.name, "生成压缩提示词", func() { frag = e.impl.CompactPrompt(ctx) })
+		safely(m.lang(), e.name, "CompactPrompt", func() { frag = e.impl.CompactPrompt(ctx) })
 		if frag = strings.TrimSpace(frag); frag != "" {
 			out = append(out, frag)
 		}
@@ -717,9 +725,9 @@ func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
 			note string
 			err  error
 		)
-		safely(e.name, "处理压缩事件", func() { note, err = e.impl.OnCompact(ctx, ev) })
+		safely(m.lang(), e.name, "OnCompact", func() { note, err = e.impl.OnCompact(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 处理压缩事件失败: %v", e.name, err)
+			i18n.Logf(m.lang(), "log.plugin.compact_failed", "插件 %q 处理压缩事件失败: %v", e.name, err)
 			continue
 		}
 		if note != "" {
@@ -733,7 +741,7 @@ func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
 // 广播发生在轮次收尾的同步路径上，实现须快速返回。
 func (m *Manager) NotifyTurnEnd(ctx context.Context, ev TurnEndEvent) {
 	for _, e := range enabledAs[TurnObserver](m) {
-		safely(e.name, "处理轮次结束事件", func() { e.impl.OnTurnEnd(ctx, ev) })
+		safely(m.lang(), e.name, "OnTurnEnd", func() { e.impl.OnTurnEnd(ctx, ev) })
 	}
 }
 
@@ -741,7 +749,7 @@ func (m *Manager) NotifyTurnEnd(ctx context.Context, ev TurnEndEvent) {
 // 在注记写入方的路径上调用，实现须快速返回。
 func (m *Manager) NotifyNotice(ctx context.Context, ev NoticeEvent) {
 	for _, e := range enabledAs[NoticeObserver](m) {
-		safely(e.name, "处理会话注记事件", func() { e.impl.OnNotice(ctx, ev) })
+		safely(m.lang(), e.name, "OnNotice", func() { e.impl.OnNotice(ctx, ev) })
 	}
 }
 
@@ -795,6 +803,6 @@ func (m *Manager) saveStateLocked() {
 	_ = os.MkdirAll(filepath.Dir(m.statePath), 0o755)
 	// 0600：插件配置里可能有用户不愿外泄的内容（提示词设定、触发词等），与 models.json 一致
 	if err := os.WriteFile(m.statePath, raw, 0o600); err != nil {
-		log.Printf("保存插件状态失败: %v", err)
+		i18n.Logf(m.lang(), "log.plugin.save_state_failed", "保存插件状态失败: %v", err)
 	}
 }

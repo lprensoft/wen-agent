@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -382,7 +381,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			if result == "" {
 				result = a.execute(ctx, call)
 			} else {
-				log.Printf("agent: 拦下重复的工具调用 %s（本轮第 %d 次拦截）", call.Name, guard.hits)
+				i18n.Logf(a.opts.Lang, "log.agent.tool_blocked", "agent: 拦下重复的工具调用 %s（本轮第 %d 次拦截）", call.Name, guard.hits)
 			}
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
@@ -398,7 +397,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		// 「就地收尾」——前台由 FailureTranslator 演成一句走神，后台的发起方（心跳、
 		// 日程）据此记一次失败并按自己的节奏重来，两边都比返回一句空话强。
 		if guard.exhausted() {
-			log.Printf("agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
+			i18n.Logf(a.opts.Lang, "log.agent.tool_loop_abort", "agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
 			return "", toolLoopError(a.opts.Lang)
 		}
 	}
@@ -494,7 +493,7 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 	note := i18n.Tf(a.opts.Lang, "agent.notice.failure_translated",
 		"本轮模型调用失败，回复由插件转译生成。原始错误：%s", cause.Error())
 	if err := a.AppendNotice(ctx, sessionID, note); err != nil {
-		log.Printf("写失败转译注记失败: %v", err)
+		i18n.Logf(a.opts.Lang, "log.agent.notice_failed", "写失败转译注记失败: %v", err)
 	}
 	return text, true
 }

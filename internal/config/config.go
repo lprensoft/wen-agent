@@ -2,11 +2,13 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"wen/internal/i18n"
+	"wen/internal/oslocale"
 
 	"gopkg.in/yaml.v3"
 
@@ -113,13 +115,16 @@ func Default() *Config {
 // 于是配置文件里的内容会慢慢变成误导。这里只警告不报错——不该因为一段过时的配置
 // 就让程序起不来。
 func warnLegacyPlugins(path string, raw []byte) {
+	// 语言只能自己再认一次：这句警告在 Load 里打出来，而 Load 正是那个还没算出
+	// 语言的地方（配置刚读进来、外面的 adoptLang 还没跑）。PeekLang 只读 lang: 一个键。
+	lang := i18n.Match(PeekLang(path), oslocale.Current())
 	var probe struct {
 		Plugins map[string]any `yaml:"plugins"`
 	}
 	if err := yaml.Unmarshal(raw, &probe); err != nil || len(probe.Plugins) == 0 {
 		return
 	}
-	log.Printf("提示: %s 中的 plugins 段已不再生效，可以删掉。"+
+	i18n.Logf(lang, "log.config.legacy_plugins", "提示: %s 中的 plugins 段已不再生效，可以删掉。"+
 		"插件的开关与配置请在设置页调整（存于 <配置目录>/plugins.state.json）", path)
 }
 

@@ -1,0 +1,9 @@
+lang: en
+model:
+  provider: test
+  name: test-model
+providers:
+  test:
+    type: openai_compat
+    base_url: https://example.invalid/v1
+    api_key: "123"

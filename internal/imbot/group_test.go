@@ -123,7 +123,7 @@ func TestAdoptionFromAnotherSessionLeavesNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !Deliver(context.Background(), "b_bot", "sess-new", "一段话") {
+	if !Deliver(context.Background(), "", "b_bot", "sess-new", "一段话") {
 		t.Fatal("应投递成功")
 	}
 	rec.expect(t)

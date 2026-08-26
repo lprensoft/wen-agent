@@ -152,10 +152,10 @@ func TestRouterInstallAndClear(t *testing.T) {
 func TestDeliverNeedsALiveChannel(t *testing.T) {
 	resetRegistry(t)
 	Declare("b_bot", "B")
-	if Deliver(context.Background(), "b_bot", "sess-1", "话") {
+	if Deliver(context.Background(), "", "b_bot", "sess-1", "话") {
 		t.Error("通道声明了但没启动，不该报投递成功")
 	}
-	if Deliver(context.Background(), "不存在", "sess-1", "话") {
+	if Deliver(context.Background(), "", "不存在", "sess-1", "话") {
 		t.Error("未知通道不该报投递成功")
 	}
 }
@@ -170,7 +170,7 @@ func TestDeliverUsesUsersAlreadyBoundToSession(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 
-	if !Deliver(context.Background(), "b_bot", "sess-9", "里人格的话") {
+	if !Deliver(context.Background(), "", "b_bot", "sess-9", "里人格的话") {
 		t.Fatal("已有用户绑在该会话上，应投递成功")
 	}
 	got := rec.expect(t)
@@ -188,7 +188,7 @@ func TestDeliverAdoptsTheSoleKnownUser(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 
-	if !Deliver(context.Background(), "b_bot", "sess-9", "接手了") {
+	if !Deliver(context.Background(), "", "b_bot", "sess-9", "接手了") {
 		t.Fatal("只有一位已知用户时应把他接到目标会话并投递")
 	}
 	if got := rec.expect(t); got.userID != "v1" {
@@ -213,7 +213,7 @@ func TestDeliverRefusesWhenRecipientIsAmbiguous(t *testing.T) {
 	b, _, rec := newNamedCore(t, "b_bot")
 
 	// 一个用户都没有：没人可投
-	if Deliver(context.Background(), "b_bot", "sess-9", "话") {
+	if Deliver(context.Background(), "", "b_bot", "sess-9", "话") {
 		t.Error("该通道还没有任何用户说过话，不该报投递成功")
 	}
 
@@ -224,7 +224,7 @@ func TestDeliverRefusesWhenRecipientIsAmbiguous(t *testing.T) {
 	if err := b.Bind("v2", "sess-b"); err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if Deliver(context.Background(), "b_bot", "sess-9", "话") {
+	if Deliver(context.Background(), "", "b_bot", "sess-9", "话") {
 		t.Error("已知用户不止一个时不该自动选人投递")
 	}
 	rec.expectNone(t, 200*time.Millisecond)
@@ -239,7 +239,7 @@ func TestDeliverNeedsPushCapability(t *testing.T) {
 	if err := c.Bind("v1", "sess-9"); err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if Deliver(context.Background(), "b_bot", "sess-9", "话") {
+	if Deliver(context.Background(), "", "b_bot", "sess-9", "话") {
 		t.Error("通道不支持主动推送时不该报投递成功")
 	}
 }

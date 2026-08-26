@@ -12,7 +12,6 @@ package imbot
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -207,7 +206,7 @@ func (c *Core) SessionFor(userID string) (string, error) {
 			if err := c.binding.Set(userID, sid); err != nil {
 				return "", err
 			}
-			log.Printf("%s: 用户 %s 加入分通道的当前会话 %s", c.cfg.PluginName, userID, sid)
+			i18n.Logf(c.cfg.Lang, "log.imbot.joined_anchor", "%s: 用户 %s 加入分通道的当前会话 %s", c.cfg.PluginName, userID, sid)
 		}
 		return sid, nil
 	}
@@ -240,7 +239,7 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		return
 	}
 	if !c.allowed(msg.UserID) {
-		log.Printf("%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", c.cfg.PluginName, msg.UserID)
+		i18n.Logf(c.cfg.Lang, "log.imbot.rejected", "%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", c.cfg.PluginName, msg.UserID)
 		return
 	}
 	if c.cfg.OnAccepted != nil {
@@ -391,7 +390,7 @@ func (c *Core) PushNotice(ev plugin.NoticeEvent) {
 		go func(userID string) {
 			defer c.wg.Done()
 			if !c.cfg.Push(ctx, userID, ev.Text) {
-				log.Printf("%s: 注记推送未送达 %s", c.cfg.PluginName, userID)
+				i18n.Logf(c.cfg.Lang, "log.imbot.notice_undelivered", "%s: 注记推送未送达 %s", c.cfg.PluginName, userID)
 			}
 		}(userID)
 	}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -336,7 +335,7 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 				emit(StreamEvent{Type: EventError, Err: &APIError{Kind: KindContentFilter, Body: i18n.T(p.lang, "llm.err.content_filter", "内容被提供商安全策略拦截（finish_reason=content_filter）")}})
 				return
 			case "length":
-				log.Printf("llm: 输出被 max_tokens 截断（finish_reason=length）")
+				i18n.Logf(p.lang, "log.llm.truncated", "llm: 输出被 max_tokens 截断（finish_reason=length）")
 			}
 			delta := chunk.Choices[0].Delta
 			if delta.ReasoningContent != "" {
