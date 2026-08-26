@@ -54,7 +54,7 @@ func TestInitRequiresStateDir(t *testing.T) {
 }
 
 func TestStoreKeepValidatesAndEvicts(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 
 	if _, err := s.Keep("  ", now, 3); err == nil {
@@ -96,7 +96,7 @@ func TestStoreKeepValidatesAndEvicts(t *testing.T) {
 }
 
 func TestStoreLetGoByIndexAndFragment(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 	if _, err := s.LetGo(1, ""); err == nil {
 		t.Error("空清单应报错")
@@ -148,20 +148,20 @@ func TestRenderExactAndDegrade(t *testing.T) {
 		{Text: "想约他周末去看展，还没开口", Created: now.Add(-time.Hour)},
 	}
 	want := "- 3 天前：他忘了纪念日，说不在意其实还在意\n- 今天：想约他周末去看展，还没开口"
-	if got := renderEntries(es, 0, now); got != want {
+	if got := renderEntries("", es, 0, now); got != want {
 		t.Errorf("全量渲染不对:\n got: %q\nwant: %q", got, want)
 	}
 	// 预算不够：只留最近的，并注明另有几条
-	degraded := renderEntries(es, len(want)-1, now)
+	degraded := renderEntries("", es, len(want)-1, now)
 	if degraded != "- 今天：想约他周末去看展，还没开口\n（另有 1 条更早的未列出）" {
 		t.Errorf("降级不对: %q", degraded)
 	}
 	// 一条都放不下：只报条数
-	if got := renderEntries(es, 10, now); got != "（共 2 条，注入预算不足以列出）" {
+	if got := renderEntries("", es, 10, now); got != "（共 2 条，注入预算不足以列出）" {
 		t.Errorf("最低一级降级不对: %q", got)
 	}
 	// 没有时刻（手改的文件）不标时间
-	if got := renderEntries([]Entry{{Text: "没时间戳"}}, 0, now); got != "- 没时间戳" {
+	if got := renderEntries("", []Entry{{Text: "没时间戳"}}, 0, now); got != "- 没时间戳" {
 		t.Errorf("无时刻: %q", got)
 	}
 }
@@ -177,11 +177,11 @@ func TestAgoText(t *testing.T) {
 		"1 年前":  now.AddDate(0, 0, -400),
 	}
 	for want, at := range cases {
-		if got := agoText(at, now); got != want {
+		if got := agoText("", at, now); got != want {
 			t.Errorf("agoText(%v) = %q, want %q", at, got, want)
 		}
 	}
-	if got := agoText(now.Add(24*time.Hour), now); got != "" {
+	if got := agoText("", now.Add(24*time.Hour), now); got != "" {
 		t.Errorf("时钟倒流不该标: %q", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestTurnPromptDegradesByConfig(t *testing.T) {
 		ok(t, p, ctx, "keep_unspoken", fmt.Sprintf(`{"text":"第 %d 件事，%s"}`, i+1, strings.Repeat("字", 40)))
 	}
 	tp, _ := p.TurnPrompt(ctx, plugin.TurnEvent{})
-	if len(tp)-len(stateHeader)-1 > 256 {
+	if len(tp)-len(stateHeaderZH)-1 > 256 {
 		t.Errorf("正文超出预算: %d 字节", len(tp))
 	}
 	if !strings.Contains(tp, "第 4 件事") || strings.Contains(tp, "第 1 件事") || !strings.Contains(tp, "条更早的未列出") {

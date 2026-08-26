@@ -512,6 +512,8 @@
   "plugin.telegram_bot.field.whitelist.label": "chat_id allowlist",
   "plugin.unspoken.action.clear.desc": "Wipe every unspoken thought, including the separate copies each persona keeps. Cannot be undone.",
   "plugin.unspoken.action.clear.label": "Clear unspoken thoughts",
+  "plugin.unspoken.clear.done": "Cleared %d unspoken list(s).",
+  "plugin.unspoken.clear.failed": "Failed to clear the unspoken list: %s",
   "plugin.unspoken.desc": "Unspoken: what the character has not said out loud — what it really thinks, what it is holding back, what it is waiting for — kept as a bounded list injected each turn that shapes its attitude and subtext without ever being read aloud",
   "plugin.unspoken.field.max_entries.desc": "How many things it can hold at once. When full, the oldest is let go automatically and the model is told so in the receipt.",
   "plugin.unspoken.field.max_entries.label": "Entry limit",
