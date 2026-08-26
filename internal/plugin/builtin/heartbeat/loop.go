@@ -9,6 +9,7 @@ import (
 
 	"wen/internal/cue"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // loop 是心跳插件唯一的常驻 goroutine：按当前间隔发心跳、按固定周期做空闲衰减。
@@ -91,7 +92,8 @@ func (p *Plugin) beat(ctx context.Context) {
 		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
 	}
 	p.lastBeat = now
-	runTurn, prompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
+	runTurn, beatPrompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
+	lang := p.lang
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
@@ -108,7 +110,7 @@ func (p *Plugin) beat(ctx context.Context) {
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
 	cues := cue.Take(time.Now())
-	input := withCues(gapNote(prompt, lastActive, time.Now(), cur), cues)
+	input := withCues(lang, gapNote(lang, beatPrompt, lastActive, time.Now(), cur), cues)
 	if _, err := runTurn(tctx, sid, input); err != nil {
 		// 理由没送达就放回公告板等下一拍（已过期的会被 Post 拒收），别让一次
 		// 会话忙把「刚下起雨」整个吞掉
@@ -125,18 +127,19 @@ func (p *Plugin) beat(ctx context.Context) {
 
 // withCues 把待说的开口理由附在心跳输入末尾。理由给出的是「发生了什么」，
 // 说不说、怎么说仍归模型——与当下不相干的理由硬播出来比沉默更出戏。
-func withCues(prompt string, cues []cue.Cue) string {
+func withCues(lang, beatPrompt string, cues []cue.Cue) string {
 	if len(cues) == 0 {
-		return prompt
+		return beatPrompt
 	}
 	var b strings.Builder
-	b.WriteString(prompt)
-	b.WriteString("\n\n【值得开口的事】")
+	b.WriteString(beatPrompt)
+	b.WriteString(prompt.T(lang, "prompt.heartbeat.cues_header", "\n\n【值得开口的事】"))
 	for _, c := range cues {
 		b.WriteString("\n- ")
 		b.WriteString(c.Text)
 	}
-	b.WriteString("\n值得说就自然地提起，不逐条播报；与当下不相干的可以不提。")
+	b.WriteString(prompt.T(lang, "prompt.heartbeat.cues_tail",
+		"\n值得说就自然地提起，不逐条播报；与当下不相干的可以不提。"))
 	return b.String()
 }
 
@@ -162,9 +165,9 @@ func (p *Plugin) pickSession() (string, time.Time, error) {
 	return sid, time.Time{}, err // 刚建的会话没有“上次对话”可言
 }
 
-// coldWakeNote 是冷唤醒的重定向提示。间隔一长，会话里最后的话题早已过时，
+// coldWakeNoteZH 是冷唤醒的重定向提示。间隔一长，会话里最后的话题早已过时，
 // 顺着上文接话只会显得没睡醒；先回顾再开口才接得自然。
-const coldWakeNote = "距上次对话已久：先回顾已保存的记忆与最近经历，再决定要不要开口、说什么，不要顺着久远的上文接话。"
+const coldWakeNoteZH = "距上次对话已久：先回顾已保存的记忆与最近经历，再决定要不要开口、说什么，不要顺着久远的上文接话。"
 
 // coldWakeAfter 是冷唤醒的最低门槛；实际门槛取它与三个当前间隔中的较大者——
 // 心跳本来就以天计的人，半天不算「久」。
@@ -178,17 +181,18 @@ const coldWakeAfter = 12 * time.Hour
 //
 // 时间未知或不足一分钟时不附：“未知”只是噪声，而刚聊完就心跳本就不应发生（真人
 // 轮次会重置心跳时钟）。间隔超过冷唤醒门槛时另附一句重定向提示。
-func gapNote(prompt string, lastActive, now time.Time, cur time.Duration) string {
+func gapNote(lang, beatPrompt string, lastActive, now time.Time, cur time.Duration) string {
 	if lastActive.IsZero() {
-		return prompt
+		return beatPrompt
 	}
 	gap := now.Sub(lastActive)
 	if gap < time.Minute {
-		return prompt
+		return beatPrompt
 	}
-	out := prompt + "\n\n【距上次对话】" + humanDur(gap)
+	out := beatPrompt + prompt.Tf(lang, "prompt.heartbeat.gap_note", "\n\n【距上次对话】%s",
+		humanDur(lang, gap))
 	if gap >= max(coldWakeAfter, 3*cur) {
-		out += "\n" + coldWakeNote
+		out += "\n" + prompt.T(lang, "prompt.heartbeat.cold_wake", coldWakeNoteZH)
 	}
 	return out
 }

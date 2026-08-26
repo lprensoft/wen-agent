@@ -27,10 +27,7 @@ func TestBlockNamesResolveInEveryLanguage(t *testing.T) {
 	if err := prompt.Err(); err != nil {
 		t.Fatalf("提示词语言包加载失败: %v", err)
 	}
-	zh := map[string]string{}
-	for k, site := range scanRepo(t).Prompt {
-		zh[k] = site.ZH
-	}
+	zh, tr := modelFacingText(t)
 
 	// 定义：某个键的文本以块名打头，那个键就是这个块的产地。
 	// 同一个块名可能有多处定义（如两个插件各注入一次），任一处的译名对上即可。
@@ -49,8 +46,8 @@ func TestBlockNamesResolveInEveryLanguage(t *testing.T) {
 		for k, text := range zh {
 			lead := leadingBlock(text)
 			for _, b := range referencedBlocks(text, lead, owners) {
-				want := translationsOf(l.Code, owners[b], zh)
-				got := prompt.T(l.Code, k, text)
+				want := translationsOf(l.Code, owners[b], zh, tr)
+				got := tr[k](l.Code, text)
 				if !containsAny(got, want) {
 					bad = append(bad, k+" 引用了 "+b+"，译文里却找不到它的译名 "+strings.Join(want, " / "))
 				}
@@ -87,16 +84,42 @@ func referencedBlocks(text, lead string, owners map[string][]string) []string {
 }
 
 // translationsOf 取某个块的全部译名（同一个块名可能有多处定义）。
-func translationsOf(lang string, ownerKeys []string, zh map[string]string) []string {
+func translationsOf(lang string, ownerKeys []string, zh map[string]string, tr map[string]translator) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, k := range ownerKeys {
-		if b := leadingBlock(prompt.T(lang, k, zh[k])); b != "" && !seen[b] {
+		if b := leadingBlock(tr[k](lang, zh[k])); b != "" && !seen[b] {
 			seen[b] = true
 			out = append(out, b)
 		}
 	}
 	return out
+}
+
+// translator 按语言取出某个键的文本。两份语言包各有一个。
+type translator func(lang, zh string) string
+
+// modelFacingText 收齐**会被发给模型**的全部文本：提示词语言包里的那一批，
+// 加上界面语言包里可编辑的默认值——后者是语言包里唯一会进模型上下文的东西
+// （见 plugin.DefaultKey），心跳的情境提示词就在其中，它引用着 [今日安排]。
+func modelFacingText(t *testing.T) (map[string]string, map[string]translator) {
+	t.Helper()
+	zh := map[string]string{}
+	tr := map[string]translator{}
+	for k, site := range scanRepo(t).Prompt {
+		key := k
+		zh[k] = site.ZH
+		tr[k] = func(lang, text string) string { return prompt.T(lang, key, text) }
+	}
+	for k, text := range metadataStrings(t) {
+		if !strings.HasSuffix(k, ".default") {
+			continue
+		}
+		key := k
+		zh[k] = text
+		tr[k] = func(lang, s string) string { return i18n.T(lang, key, s) }
+	}
+	return zh, tr
 }
 
 // suspectRef 找出「看起来像块名、却没有任何地方定义它」的引用。

@@ -349,14 +349,14 @@ func TestStatusLinesShowPauseAndContext(t *testing.T) {
 func TestColdWakeThresholdScalesWithInterval(t *testing.T) {
 	now := time.Now()
 	// 间隔 30 分钟：门槛 12 小时
-	if got := gapNote("p", now.Add(-13*time.Hour), now, 30*time.Minute); !strings.Contains(got, coldWakeNote) {
+	if got := gapNote("", "p", now.Add(-13*time.Hour), now, 30*time.Minute); !strings.Contains(got, coldWakeNoteZH) {
 		t.Error("超过 12 小时应附冷唤醒提示")
 	}
-	if got := gapNote("p", now.Add(-11*time.Hour), now, 30*time.Minute); strings.Contains(got, coldWakeNote) {
+	if got := gapNote("", "p", now.Add(-11*time.Hour), now, 30*time.Minute); strings.Contains(got, coldWakeNoteZH) {
 		t.Error("不足 12 小时不该附")
 	}
 	// 间隔 8 小时：门槛抬到 24 小时，13 小时不算「久」
-	if got := gapNote("p", now.Add(-13*time.Hour), now, 8*time.Hour); strings.Contains(got, coldWakeNote) {
+	if got := gapNote("", "p", now.Add(-13*time.Hour), now, 8*time.Hour); strings.Contains(got, coldWakeNoteZH) {
 		t.Error("心跳以天计时门槛应随间隔抬高")
 	}
 }

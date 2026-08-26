@@ -29,17 +29,11 @@ const (
 func Duration(lang string, d time.Duration) string {
 	switch {
 	case d < time.Hour:
-		return plural(lang, int(d.Minutes()),
-			T(lang, "prompt.duration.minute_one", durMinutesZH),
-			T(lang, "prompt.duration.minutes", durMinutesZH))
+		return Minutes(lang, int(d.Minutes()))
 	case d < 24*time.Hour:
-		return plural(lang, int(d.Hours()),
-			T(lang, "prompt.duration.hour_one", durHoursZH),
-			T(lang, "prompt.duration.hours", durHoursZH))
+		return Hours(lang, int(d.Hours()))
 	case d < 30*24*time.Hour:
-		return plural(lang, int(d.Hours()/24),
-			T(lang, "prompt.duration.day_one", durDaysZH),
-			T(lang, "prompt.duration.days", durDaysZH))
+		return Days(lang, int(d.Hours()/24))
 	case d < 365*24*time.Hour:
 		return plural(lang, int(d.Hours()/24/30),
 			T(lang, "prompt.duration.month_one", durMonthsZH),
@@ -49,6 +43,24 @@ func Duration(lang string, d time.Duration) string {
 			T(lang, "prompt.duration.year_one", durYearsZH),
 			T(lang, "prompt.duration.years", durYearsZH))
 	}
+}
+
+// Minutes / Hours / Days 是单个单位的说法，供要自己拼两段的地方用（心跳的
+// 「2 小时 30 分钟」——Duration 只给一个单位的精度，而「下次什么时候开口」
+// 差半小时是看得出来的）。三对键与 Duration 共用，翻译只有一份。
+func Minutes(lang string, n int) string {
+	return plural(lang, n, T(lang, "prompt.duration.minute_one", durMinutesZH),
+		T(lang, "prompt.duration.minutes", durMinutesZH))
+}
+
+func Hours(lang string, n int) string {
+	return plural(lang, n, T(lang, "prompt.duration.hour_one", durHoursZH),
+		T(lang, "prompt.duration.hours", durHoursZH))
+}
+
+func Days(lang string, n int) string {
+	return plural(lang, n, T(lang, "prompt.duration.day_one", durDaysZH),
+		T(lang, "prompt.duration.days", durDaysZH))
 }
 
 func plural(_ string, n int, one, many string) string {

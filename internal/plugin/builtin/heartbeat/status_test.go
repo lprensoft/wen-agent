@@ -52,7 +52,7 @@ func TestHumanDur(t *testing.T) {
 		72 * time.Hour:     "3 天", // 隔天数的间隔不再报到分钟
 	}
 	for d, want := range cases {
-		if got := humanDur(d); got != want {
+		if got := humanDur("", d); got != want {
 			t.Errorf("humanDur(%v) = %q，期望 %q", d, got, want)
 		}
 	}
