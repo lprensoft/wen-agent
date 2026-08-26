@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -34,14 +35,14 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // StartAction 立即返回，查询在后台进行。
 func (p *Plugin) StartAction(ctx context.Context, key string) error {
 	if key != actionTest {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	s := p.snapshot()
 	// 草稿值必须在这里同步取出：ctx 属于那个 HTTP 请求，响应发出后就失效了，
 	// 而查询是在后台 goroutine 里跑的。
-	targets := draftTargets(plugin.ActionValuesFrom(ctx), s)
+	targets := draftTargets(s.lang, plugin.ActionValuesFrom(ctx), s)
 	if len(targets) == 0 {
-		err := fmt.Errorf("请先填写城市再测试")
+		err := fmt.Errorf("%s", i18n.T(s.lang, "plugin.weather.action.no_city", "请先填写城市再测试"))
 		p.setActionState(plugin.ActionState{Status: plugin.ActionError, Message: err.Error() + "。"})
 		return err
 	}
@@ -52,16 +53,17 @@ func (p *Plugin) StartAction(ctx context.Context, key string) error {
 	}
 
 	seq := p.beginAction(plugin.ActionState{
-		Status:  plugin.ActionPending,
-		Message: "正在查询" + strings.Join(locNames(targets), "、") + "的天气…",
+		Status: plugin.ActionPending,
+		Message: i18n.Tf(s.lang, "plugin.weather.action.querying", "正在查询%s的天气…",
+			strings.Join(locNames(targets), i18n.T(s.lang, "plugin.weather.action.loc_sep", "、"))),
 	})
-	go p.runTest(seq, client, targets)
+	go p.runTest(seq, s.lang, client, targets)
 	return nil
 }
 
 // draftTargets 把草稿值叠加到已保存的配置上，得出本次要测的地点。
 // 归一化与 Init 保持一致：同城只测一处，两处填了同一个地方也只测一处。
-func draftTargets(vals map[string]any, s settings) []target {
+func draftTargets(lang string, vals map[string]any, s settings) []target {
 	personaLoc := plugin.ActionValueOr(vals, "persona_location", s.personaLoc)
 	sameCity := s.sameCity
 	if _, ok := vals["same_city"]; ok {
@@ -78,13 +80,13 @@ func draftTargets(vals map[string]any, s settings) []target {
 	var out []target
 	switch {
 	case sameCity && personaLoc != "":
-		out = append(out, target{label: "角色与我同在", loc: personaLoc})
+		out = append(out, target{label: i18n.T(lang, "plugin.weather.target.both", "角色与我同在"), loc: personaLoc})
 	default:
 		if personaLoc != "" {
-			out = append(out, target{label: "角色所在", loc: personaLoc})
+			out = append(out, target{label: i18n.T(lang, "plugin.weather.target.persona", "角色所在"), loc: personaLoc})
 		}
 		if userLoc != "" {
-			out = append(out, target{label: "我所在", loc: userLoc})
+			out = append(out, target{label: i18n.T(lang, "plugin.weather.target.user", "我所在"), loc: userLoc})
 		}
 	}
 	return out
@@ -102,7 +104,7 @@ func locNames(targets []target) []string {
 //
 // 一处失败不跳过其余的：两处都填了的时候，一次点击就该把两处的结论都给出来，
 // 而不是让人修好一个再发现另一个也不行。
-func (p *Plugin) runTest(seq uint64, client *http.Client, targets []target) {
+func (p *Plugin) runTest(seq uint64, lang string, client *http.Client, targets []target) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout*time.Duration(len(targets)))
 	defer cancel()
 
@@ -114,23 +116,27 @@ func (p *Plugin) runTest(seq uint64, client *http.Client, targets []target) {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		place, rep, err := probe(ctx, client, t.loc)
+		place, rep, err := probe(ctx, lang, client, t.loc)
 		if err != nil {
 			failed++
-			fmt.Fprintf(&b, "%s（%s）：查询失败——%s\n", t.label, t.loc, err.Error())
+			b.WriteString(i18n.Tf(lang, "plugin.weather.report.failed",
+				"%s（%s）：查询失败——%s\n", t.label, t.loc, err.Error()))
 			continue
 		}
-		fmt.Fprintf(&b, "%s：%s（纬度 %.4f，经度 %.4f）\n", t.label, place.Name, place.Lat, place.Lon)
-		b.WriteString("天气：" + renderConditions(rep) + "\n")
+		b.WriteString(i18n.Tf(lang, "plugin.weather.report.place",
+			"%s：%s（纬度 %.4f，经度 %.4f）\n", t.label, place.Name, place.Lat, place.Lon))
+		b.WriteString(i18n.Tf(lang, "plugin.weather.report.now", "天气：%s\n", renderConditions(lang, rep)))
 	}
 
 	st := plugin.ActionState{Status: plugin.ActionDone}
 	if failed > 0 {
 		st.Status = plugin.ActionError
 	} else if len(targets) > 1 {
-		b.WriteString("\n两处都可用。保存后会按刷新间隔自动取用。")
+		b.WriteString(i18n.T(lang, "plugin.weather.report.both_ok",
+			"\n两处都可用。保存后会按刷新间隔自动取用。"))
 	} else {
-		b.WriteString("\n这个城市可用。保存后会按刷新间隔自动取用。")
+		b.WriteString(i18n.T(lang, "plugin.weather.report.one_ok",
+			"\n这个城市可用。保存后会按刷新间隔自动取用。"))
 	}
 	st.Message = strings.TrimRight(b.String(), "\n")
 	p.finishAction(seq, st)
@@ -138,7 +144,7 @@ func (p *Plugin) runTest(seq uint64, client *http.Client, targets []target) {
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionTest {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()

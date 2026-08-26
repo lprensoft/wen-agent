@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -57,6 +58,7 @@ type observation struct {
 // Plugin 是 weather 系统插件。
 type Plugin struct {
 	mu         sync.RWMutex
+	lang       string // 进程语言，注入片段与天气说法据此取用
 	personaLoc string // 角色所在的城市
 	userLoc    string // 用户所在的城市；同城时归一化为空
 	sameCity   bool
@@ -165,11 +167,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	staleMin := plugin.CfgInt(cfg, "stale_minutes", defaultStaleMinutes)
 	tomorrowFrom := plugin.CfgInt(cfg, "tomorrow_from_hour", defaultTomorrowFrom)
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存天气观测")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.weather.no_state_dir",
+			"没有可用的持久化目录，无法保存天气观测"))
 	}
 	if staleMin < refreshMin {
-		return fmt.Errorf("「过期不注入的时限」(%d 分钟) 不能小于「刷新间隔」(%d 分钟)："+
-			"那样刚取到的天气也会立刻被判为过期，等于永远不注入", staleMin, refreshMin)
+		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.weather.err.stale_lt_refresh",
+			"「过期不注入的时限」(%d 分钟) 不能小于「刷新间隔」(%d 分钟)："+
+				"那样刚取到的天气也会立刻被判为过期，等于永远不注入"), staleMin, refreshMin)
 	}
 
 	p.Stop() // 重入：先停上一轮循环，避免两套定时器并行
@@ -195,6 +199,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stateDir = ictx.StateDir
+	p.lang = ictx.Lang
 	p.personaLoc, p.userLoc, p.sameCity = personaLoc, userLoc, sameCity
 	p.refresh = time.Duration(refreshMin) * time.Minute
 	p.stale = time.Duration(staleMin) * time.Minute
@@ -255,6 +260,7 @@ func (p *Plugin) Tools() []plugin.Tool { return nil }
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang         string
 	personaLoc   string
 	userLoc      string
 	sameCity     bool
@@ -268,7 +274,7 @@ type settings struct {
 // tomorrowVisible 判断此刻明天的预报该不该出现在角色眼前：到了傍晚的窗口，或对方
 // 这一轮提到了明天（主动问，就看一眼）。
 func (s settings) tomorrowVisible(now time.Time, input string) bool {
-	return s.inTomorrowWindow(now) || mentionsTomorrow(input)
+	return s.inTomorrowWindow(now) || mentionsTomorrow(s.lang, input)
 }
 
 // inTomorrowWindow 判断此刻是否在「看明天」的时段里。cue 的投递也按它。
@@ -277,9 +283,15 @@ func (s settings) inTomorrowWindow(now time.Time) bool {
 }
 
 // mentionsTomorrow 词面判断一段话里有没有说到明天。
-func mentionsTomorrow(s string) bool {
-	for _, w := range []string{"明天", "明早", "明晚", "明日", "明儿"} {
-		if strings.Contains(s, w) {
+// tomorrowWordsZH 是「说到了明天」的判词，一行一个。整表一个键：它按语言给，
+// 因为判的是对方**输入**里的说法。英文实例下的中文提问因此认不出来——一个双语用户
+// 少一次「看一眼明天」，不值得为它把两种语言的词表并起来（那会让「明」这类短词
+// 在另一种语言的正常句子里误命中）。
+const tomorrowWordsZH = "明天\n明早\n明晚\n明日\n明儿"
+
+func mentionsTomorrow(lang, s string) bool {
+	for _, w := range strings.Split(prompt.T(lang, "prompt.weather.tomorrow_words", tomorrowWordsZH), "\n") {
+		if w != "" && strings.Contains(s, w) {
 			return true
 		}
 	}
@@ -294,10 +306,18 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:       p.lang,
 		personaLoc: p.personaLoc, userLoc: p.userLoc, sameCity: p.sameCity,
 		refresh: p.refresh, stale: p.stale, client: p.client,
 		stateDir: p.stateDir, tomorrowFrom: p.tomorrowFrom,
 	}
+}
+
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 // SystemPrompt 注入天气的使用规则，是静态内容。一个城市都没填时整段不注入：
@@ -306,7 +326,7 @@ func (p *Plugin) SystemPrompt() string {
 	if !p.snapshot().configured() {
 		return ""
 	}
-	return guidePrompt
+	return guideFor(p.langOf())
 }
 
 // TurnPrompt 注入此刻的天气。取不到或已过期时不注入：提示词里已经写了
@@ -321,23 +341,29 @@ func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, err
 	now := p.now()
 	showTomorrow := s.tomorrowVisible(now, ev.UserInput)
 
+	body := func(r Report) string {
+		return renderConditions(s.lang, r) + renderDays(s.lang, r, now, showTomorrow)
+	}
 	var lines []string
 	if s.sameCity {
 		if r, ok := p.forTurn(s, s.personaLoc, now, showTomorrow); ok {
-			lines = append(lines, fmt.Sprintf("%s（你与对方同在）：%s", r.Place, renderConditions(r)+renderDays(r, now, showTomorrow)))
+			lines = append(lines, prompt.Tf(s.lang, "prompt.weather.line.both",
+				"%s（你与对方同在）：%s", r.Place, body(r)))
 		}
 	} else {
 		if r, ok := p.forTurn(s, s.personaLoc, now, showTomorrow); ok {
-			lines = append(lines, "你所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now, showTomorrow))
+			lines = append(lines, prompt.Tf(s.lang, "prompt.weather.line.persona",
+				"你所在的%s：%s", r.Place, body(r)))
 		}
 		if r, ok := p.forTurn(s, s.userLoc, now, showTomorrow); ok {
-			lines = append(lines, "对方所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now, showTomorrow))
+			lines = append(lines, prompt.Tf(s.lang, "prompt.weather.line.user",
+				"对方所在的%s：%s", r.Place, body(r)))
 		}
 	}
 	if len(lines) == 0 {
 		return "", nil
 	}
-	return stateHeader + "\n" + strings.Join(lines, "\n"), nil
+	return stateHeaderFor(s.lang) + "\n" + strings.Join(lines, "\n"), nil
 }
 
 // ---------- 后台刷新 ----------
@@ -428,7 +454,7 @@ func (p *Plugin) observe(ctx context.Context, client *http.Client, loc string) (
 	p.dataMu.RUnlock()
 
 	if !ok {
-		resolved, err := geocode(ctx, client, loc)
+		resolved, err := geocode(ctx, p.langOf(), client, loc)
 		if err != nil {
 			return Report{}, err
 		}
@@ -438,7 +464,7 @@ func (p *Plugin) observe(ctx context.Context, client *http.Client, loc string) (
 		p.dataMu.Unlock()
 		place = resolved
 	}
-	return fetchCurrent(ctx, client, place)
+	return fetchCurrent(ctx, p.langOf(), client, place)
 }
 
 // entryLocked 取（或建）一处地点的缓存条目。调用方须持 dataMu 写锁。
@@ -529,16 +555,17 @@ func (p *Plugin) lastReport(loc string) (Report, bool, string) {
 //
 // 不注入「几分钟前采集」：当前时间由核心的本轮状态块每轮给出，再加一个逐轮变化的
 // 采集间隔只是噪声；数据够不够新已经由过期时限判过了。
-func renderConditions(r Report) string {
+func renderConditions(lang string, r Report) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s，%.0f℃", r.Condition, r.TempC)
+	b.WriteString(prompt.Tf(lang, "prompt.weather.now.temp", "%s，%.0f℃",
+		conditions.For(lang, r.Condition), r.TempC))
 	if diff := r.FeelsC - r.TempC; diff >= 1 || diff <= -1 {
-		fmt.Fprintf(&b, "（体感 %.0f℃）", r.FeelsC)
+		b.WriteString(prompt.Tf(lang, "prompt.weather.now.feels", "（体感 %.0f℃）", r.FeelsC))
 	}
 	if r.Humidity > 0 {
-		fmt.Fprintf(&b, "，湿度 %d%%", r.Humidity)
+		b.WriteString(prompt.Tf(lang, "prompt.weather.now.humidity", "，湿度 %d%%", r.Humidity))
 	}
-	fmt.Fprintf(&b, "，风速 %.0f km/h。", r.WindKmh)
+	b.WriteString(prompt.Tf(lang, "prompt.weather.now.wind", "，风速 %.0f km/h。", r.WindKmh))
 	return b.String()
 }
 
@@ -547,22 +574,27 @@ func renderConditions(r Report) string {
 //
 // 按日期核对而不是信字段名：观测是缓存的，跨过午夜后缓存里的「明天」其实是今天，
 // 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这几项时同样整段为空。
-func renderDays(r Report, now time.Time, showTomorrow bool) string {
+func renderDays(lang string, r Report, now time.Time, showTomorrow bool) string {
 	const layout = "2006-01-02"
 	var parts []string
 	if r.Yesterday.known() && r.Yesterday.Date == now.AddDate(0, 0, -1).Format(layout) {
-		parts = append(parts, fmt.Sprintf("昨天%s，%.0f~%.0f℃", r.Yesterday.Condition, r.Yesterday.MinC, r.Yesterday.MaxC))
+		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.yesterday", "昨天%s，%.0f~%.0f℃",
+			conditions.For(lang, r.Yesterday.Condition), r.Yesterday.MinC, r.Yesterday.MaxC))
 	}
 	if r.Today.known() && r.Today.Date == now.Format(layout) {
-		parts = append(parts, fmt.Sprintf("今天预计%s，%.0f~%.0f℃", r.Today.Condition, r.Today.MinC, r.Today.MaxC))
+		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.today", "今天预计%s，%.0f~%.0f℃",
+			conditions.For(lang, r.Today.Condition), r.Today.MinC, r.Today.MaxC))
 	}
 	if showTomorrow && r.Tomorrow.known() && r.Tomorrow.Date == now.AddDate(0, 0, 1).Format(layout) {
-		parts = append(parts, fmt.Sprintf("明天预计%s，%.0f~%.0f℃%s", r.Tomorrow.Condition, r.Tomorrow.MinC, r.Tomorrow.MaxC, seenNote(r.Tomorrow.Seen, now)))
+		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.tomorrow", "明天预计%s，%.0f~%.0f℃%s",
+			conditions.For(lang, r.Tomorrow.Condition), r.Tomorrow.MinC, r.Tomorrow.MaxC,
+			seenNote(lang, r.Tomorrow.Seen, now)))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, "；") + "。"
+	return strings.Join(parts, prompt.T(lang, "prompt.weather.day.sep", "；")) +
+		prompt.T(lang, "prompt.weather.day.end", "。")
 }
 
 // seenNote 给明天的预报标上「早就知道了」。预报每轮都在眼前，不标的话模型会把几个
@@ -573,9 +605,9 @@ func renderDays(r Report, now time.Time, showTomorrow bool) string {
 // 只有一档措辞：某一天的预报只在它前一天里算「明天」，第一次被看到也必然在那一天，
 // 所以 Seen 与渲染永远落在同一个日历日，不存在「昨天就知道了」；过了午夜「明天」
 // 换成新的一天，carryForecast 不再沿用旧标记。
-func seenNote(seen, now time.Time) string {
+func seenNote(lang string, seen, now time.Time) string {
 	if seen.IsZero() || now.Sub(seen) < 3*time.Hour {
 		return ""
 	}
-	return "（早些时候就知道了）"
+	return prompt.T(lang, "prompt.weather.day.seen", "（早些时候就知道了）")
 }

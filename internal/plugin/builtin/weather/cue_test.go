@@ -25,33 +25,33 @@ func TestChangeTextOnlyOnTransition(t *testing.T) {
 	dry := Report{Place: "杭州", Condition: "多云"}
 	wet := Report{Place: "杭州", Condition: "中雨"}
 
-	if got := changeText("你所在的", dry, wet); !strings.Contains(got, "刚下起了中雨") {
+	if got := changeText("", "你所在的", dry, wet); !strings.Contains(got, "刚下起了中雨") {
 		t.Errorf("开始下雨应报: %q", got)
 	}
-	if got := changeText("你所在的", wet, dry); !strings.Contains(got, "中雨停了") {
+	if got := changeText("", "你所在的", wet, dry); !strings.Contains(got, "中雨停了") {
 		t.Errorf("雨停应报: %q", got)
 	}
 	// 状态未变或雨型互换都不报：状态本来就由 TurnPrompt 每轮注入
-	if got := changeText("你所在的", dry, dry); got != "" {
+	if got := changeText("", "你所在的", dry, dry); got != "" {
 		t.Errorf("无转变不该报: %q", got)
 	}
-	if got := changeText("你所在的", wet, Report{Place: "杭州", Condition: "小雨"}); got != "" {
+	if got := changeText("", "你所在的", wet, Report{Place: "杭州", Condition: "小雨"}); got != "" {
 		t.Errorf("雨大雨小不算转变: %q", got)
 	}
 }
 
 func TestRolePrefixMatchesTurnPromptWording(t *testing.T) {
 	s := settings{personaLoc: "杭州", userLoc: "上海"}
-	if got := s.rolePrefix("杭州"); got != "你所在的" {
+	if got := s.rolePrefix("", "杭州"); got != "你所在的" {
 		t.Errorf("角色所在地 = %q", got)
 	}
-	if got := s.rolePrefix("上海"); got != "对方所在的" {
+	if got := s.rolePrefix("", "上海"); got != "对方所在的" {
 		t.Errorf("用户所在地 = %q", got)
 	}
-	if got := (settings{personaLoc: "杭州", sameCity: true}).rolePrefix("杭州"); got != "你与对方所在的" {
+	if got := (settings{personaLoc: "杭州", sameCity: true}).rolePrefix("", "杭州"); got != "你与对方所在的" {
 		t.Errorf("同城 = %q", got)
 	}
-	if got := s.rolePrefix("北京"); got != "" {
+	if got := s.rolePrefix("", "北京"); got != "" {
 		t.Errorf("配置外的地点不该有措辞: %q", got)
 	}
 }
@@ -64,22 +64,22 @@ func TestRenderDaysChecksDates(t *testing.T) {
 		Today:     DayInfo{Date: now.Format(layout), Condition: "小雨", MinC: 17, MaxC: 22},
 		Tomorrow:  DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18},
 	}
-	got := renderDays(r, now, true)
+	got := renderDays("", r, now, true)
 	if !strings.Contains(got, "昨天阴，16~24℃") || !strings.Contains(got, "今天预计小雨，17~22℃") || !strings.Contains(got, "明天预计中雨，12~18℃") {
 		t.Errorf("renderDays = %q", got)
 	}
 	// 不到看明天的时候：今天照常，明天不出现
-	if got := renderDays(r, now, false); !strings.Contains(got, "今天预计小雨") || strings.Contains(got, "明天") {
+	if got := renderDays("", r, now, false); !strings.Contains(got, "今天预计小雨") || strings.Contains(got, "明天") {
 		t.Errorf("showTomorrow=false 时不该有明天: %q", got)
 	}
 
 	// 跨过午夜后缓存里的「明天」其实是今天，照字面注入就是错话——按日期核对后不注入
-	stale := renderDays(r, now.AddDate(0, 0, 1), true)
+	stale := renderDays("", r, now.AddDate(0, 0, 1), true)
 	if strings.Contains(stale, "明天") {
 		t.Errorf("日期对不上的「明天」不该注入: %q", stale)
 	}
 	// 旧缓存没有这两项：整段为空
-	if got := renderDays(Report{}, now, true); got != "" {
+	if got := renderDays("", Report{}, now, true); got != "" {
 		t.Errorf("无数据应为空: %q", got)
 	}
 }
@@ -183,13 +183,13 @@ func TestSeenNoteMarksStaleForecast(t *testing.T) {
 		{now.Add(-5 * time.Hour), "（早些时候就知道了）"},
 	}
 	for _, c := range cases {
-		if got := seenNote(c.seen, now); got != c.want {
+		if got := seenNote("", c.seen, now); got != c.want {
 			t.Errorf("seenNote(%v) = %q, want %q", c.seen, got, c.want)
 		}
 	}
 	const layout = "2006-01-02"
 	r := Report{Tomorrow: DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18, Seen: now.Add(-8 * time.Hour)}}
-	if got := renderDays(r, now, true); !strings.Contains(got, "明天预计中雨，12~18℃（早些时候就知道了）") {
+	if got := renderDays("", r, now, true); !strings.Contains(got, "明天预计中雨，12~18℃（早些时候就知道了）") {
 		t.Errorf("renderDays 应标出预报早就知道了: %q", got)
 	}
 }
@@ -217,7 +217,7 @@ func TestCarryForecastFollowsSameForecast(t *testing.T) {
 	}
 	// 过了午夜再刷新，「明天」换成新的一天：旧标记不能带到新预报上
 	rolled := carryForecast(prev, DayInfo{Date: "2026-08-23", Condition: "中雨"}, true)
-	if note := seenNote(rolled.Seen, now); note != "" {
+	if note := seenNote("", rolled.Seen, now); note != "" {
 		t.Errorf("新一天的预报不该标早就知道了: %q", note)
 	}
 }

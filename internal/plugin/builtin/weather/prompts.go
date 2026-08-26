@@ -1,5 +1,13 @@
 package weather
 
+import "wen/internal/prompt"
+
+// 两段文本各按语言取一次。
+func guideFor(lang string) string { return prompt.T(lang, "prompt.weather.guide", guidePromptZH) }
+func stateHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.weather.state_header", stateHeaderZH)
+}
+
 // 本文件是 weather 注入的全部提示词常量。它们每轮随 system 消息全额重发，
 // 因此都是定长文本。
 //
@@ -7,7 +15,7 @@ package weather
 // 对方那边的天气才是「一条它知道的事」。早先只给对方的天气、又禁止把天气当话题，
 // 结果是这条信息既进不了角色的环境描写、又不许说出来，模型手里就没有它的用法了。
 
-const guidePrompt = `[天气感知]
+const guidePromptZH = `[天气感知]
 [当前天气] 给出的是现实中此刻的天气，是角色所处环境的一部分。
 - 你自己所在地的天气，就是你此刻身处的环境：光线、声音、冷热、空气、开不开窗、
   出门方不方便，都由它决定。它应当自然地出现在场景与动作的描写里，被感觉到，
@@ -27,5 +35,5 @@ const guidePrompt = `[天气感知]
 - 若 [场景与环境] 设定的舞台并不是这里给出的地方（虚构、历史或别处的场景），
   以舞台为准，这里的天气不参与场景描写。`
 
-// stateHeader 领起本轮注入的当前天气。
-const stateHeader = "[当前天气]"
+// stateHeaderZH 领起本轮注入的当前天气。
+const stateHeaderZH = "[当前天气]"

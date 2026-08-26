@@ -65,7 +65,7 @@ const fcOKDaily = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"
 
 func TestFetchCurrentParsesDays(t *testing.T) {
 	stubServer(t, geoOK, fcOKDaily)
-	rep, err := fetchCurrent(context.Background(), http.DefaultClient, Place{Name: "杭州"})
+	rep, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{Name: "杭州"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestFetchCurrentBadDailyShape(t *testing.T) {
 	bad := `{"current":{"temperature_2m":18.4,"weather_code":61},` +
 		`"daily":{"time":["2026-08-19","2026-08-20"],"weather_code":[3],"temperature_2m_max":[24.2],"temperature_2m_min":[16.5]}}`
 	stubServer(t, geoOK, bad)
-	rep, err := fetchCurrent(context.Background(), http.DefaultClient, Place{})
+	rep, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestFetchCurrentBadDailyShape(t *testing.T) {
 
 func TestGeocodeParsesFirstResult(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
-	pl, err := geocode(context.Background(), http.DefaultClient, "杭州")
+	pl, err := geocode(context.Background(), "", http.DefaultClient, "杭州")
 	if err != nil {
 		t.Fatalf("geocode: %v", err)
 	}
@@ -114,20 +114,20 @@ func TestGeocodeParsesFirstResult(t *testing.T) {
 // 查不到的地名必须报错，不能悄悄回落到某个默认位置——注入一个错的地方比不注入更糟。
 func TestGeocodeNoResultIsError(t *testing.T) {
 	stubServer(t, `{"generationtime_ms":0.1}`, fcOK)
-	if _, err := geocode(context.Background(), http.DefaultClient, "并不存在的地方"); err == nil {
+	if _, err := geocode(context.Background(), "", http.DefaultClient, "并不存在的地方"); err == nil {
 		t.Fatal("查不到地名时应当报错")
 	}
 }
 
 func TestGeocodeEmptyName(t *testing.T) {
-	if _, err := geocode(context.Background(), http.DefaultClient, "   "); err == nil {
+	if _, err := geocode(context.Background(), "", http.DefaultClient, "   "); err == nil {
 		t.Fatal("空地名应当报错")
 	}
 }
 
 func TestFetchCurrent(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
-	rep, err := fetchCurrent(context.Background(), http.DefaultClient, Place{Name: "杭州", Lat: 30.29, Lon: 120.16})
+	rep, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{Name: "杭州", Lat: 30.29, Lon: 120.16})
 	if err != nil {
 		t.Fatalf("fetchCurrent: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestFetchCurrentSendsCoordinates(t *testing.T) {
 	forecastURL = srv.URL
 	defer func() { forecastURL = old }()
 
-	if _, err := fetchCurrent(context.Background(), http.DefaultClient, Place{Lat: 30.2936, Lon: 120.1614}); err != nil {
+	if _, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{Lat: 30.2936, Lon: 120.1614}); err != nil {
 		t.Fatalf("fetchCurrent: %v", err)
 	}
 	for _, want := range []string{"latitude=30.2936", "longitude=120.1614", "temperature_2m",
@@ -167,7 +167,7 @@ func TestFetchCurrentSendsCoordinates(t *testing.T) {
 
 func TestFetchCurrentHTTPError(t *testing.T) {
 	stubServer(t, geoOK, "")
-	if _, err := fetchCurrent(context.Background(), http.DefaultClient, Place{}); err == nil {
+	if _, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{}); err == nil {
 		t.Fatal("接口报错时应当返回错误")
 	}
 }

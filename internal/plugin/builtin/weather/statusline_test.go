@@ -116,7 +116,7 @@ func TestHumanizeAge(t *testing.T) {
 		{50 * time.Hour, "2 天前更新"},
 	}
 	for _, c := range cases {
-		if got := humanizeAge(c.d); got != c.want {
+		if got := humanizeAge("", c.d); got != c.want {
 			t.Errorf("humanizeAge(%v) = %q，期望 %q", c.d, got, c.want)
 		}
 	}

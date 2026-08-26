@@ -23,7 +23,7 @@ func report(place, cond string, temp float64, age time.Duration) Report {
 }
 
 func TestRenderConditions(t *testing.T) {
-	got := renderConditions(Report{Condition: "小雨", TempC: 18.4, FeelsC: 16.9, Humidity: 82, WindKmh: 9.3})
+	got := renderConditions("", Report{Condition: "小雨", TempC: 18.4, FeelsC: 16.9, Humidity: 82, WindKmh: 9.3})
 	want := "小雨，18℃（体感 17℃），湿度 82%，风速 9 km/h。"
 	if got != want {
 		t.Errorf("渲染 = %q\n期望 = %q", got, want)
@@ -32,7 +32,7 @@ func TestRenderConditions(t *testing.T) {
 
 // 体感与气温差不到一度时不写体感：一行里两个一样的数字只是噪声。
 func TestRenderConditionsOmitsCloseApparent(t *testing.T) {
-	got := renderConditions(Report{Condition: "晴", TempC: 18, FeelsC: 18.2, Humidity: 40, WindKmh: 3})
+	got := renderConditions("", Report{Condition: "晴", TempC: 18, FeelsC: 18.2, Humidity: 40, WindKmh: 3})
 	if strings.Contains(got, "体感") {
 		t.Errorf("体感与气温接近时不应写出来: %q", got)
 	}
@@ -368,7 +368,7 @@ func TestMentionsTomorrow(t *testing.T) {
 		"明天会下雨吗": true, "明早要出门": true, "明晚一起吃饭": true, "明日复明日": true,
 		"今天好热": false, "后天呢": false, "": false,
 	} {
-		if got := mentionsTomorrow(in); got != want {
+		if got := mentionsTomorrow("", in); got != want {
 			t.Errorf("mentionsTomorrow(%q) = %v", in, got)
 		}
 	}

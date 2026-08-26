@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // 数据源是 Open-Meteo 的公开接口：免费、无需密钥、返回 JSON。
@@ -82,10 +84,10 @@ func carryForecast(prev, cur DayInfo, prevOK bool) DayInfo {
 func (d DayInfo) known() bool { return d.Condition != "" && d.Date != "" }
 
 // geocode 把地名解析成经纬度。
-func geocode(ctx context.Context, client *http.Client, name string) (Place, error) {
+func geocode(ctx context.Context, lang string, client *http.Client, name string) (Place, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return Place{}, fmt.Errorf("没有填写城市")
+		return Place{}, fmt.Errorf("%s", prompt.T(lang, "prompt.weather.err.no_city", "没有填写城市"))
 	}
 	q := url.Values{}
 	q.Set("name", name)
@@ -103,10 +105,10 @@ func geocode(ctx context.Context, client *http.Client, name string) (Place, erro
 		} `json:"results"`
 	}
 	if err := getJSON(ctx, client, geocodeURL+"?"+q.Encode(), &body); err != nil {
-		return Place{}, fmt.Errorf("解析地址失败: %w", err)
+		return Place{}, fmt.Errorf(prompt.T(lang, "prompt.weather.err.geocode", "解析地址失败: %w"), err)
 	}
 	if len(body.Results) == 0 {
-		return Place{}, fmt.Errorf("找不到 %q 这个地方，换一个写法试试（如「杭州」「Hangzhou」）", name)
+		return Place{}, fmt.Errorf(prompt.T(lang, "prompt.weather.err.not_found", "找不到 %q 这个地方，换一个写法试试（如「杭州」「Hangzhou」）"), name)
 	}
 	r := body.Results[0]
 	parts := []string{r.Name}
@@ -119,7 +121,7 @@ func geocode(ctx context.Context, client *http.Client, name string) (Place, erro
 }
 
 // fetchCurrent 取一处地点此刻的天气。
-func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, error) {
+func fetchCurrent(ctx context.Context, lang string, client *http.Client, p Place) (Report, error) {
 	q := url.Values{}
 	q.Set("latitude", strconv.FormatFloat(p.Lat, 'f', 4, 64))
 	q.Set("longitude", strconv.FormatFloat(p.Lon, 'f', 4, 64))
@@ -147,7 +149,7 @@ func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, er
 		} `json:"daily"`
 	}
 	if err := getJSON(ctx, client, forecastURL+"?"+q.Encode(), &body); err != nil {
-		return Report{}, fmt.Errorf("获取天气失败: %w", err)
+		return Report{}, fmt.Errorf(prompt.T(lang, "prompt.weather.err.fetch", "获取天气失败: %w"), err)
 	}
 	c := body.Current
 	rep := Report{
@@ -196,56 +198,96 @@ func getJSON(ctx context.Context, client *http.Client, u string, out any) error 
 	return nil
 }
 
-// conditions 是 WMO 天气代码到中文说法的对照。取日常说话会用的词，
-// 不用「毛毛雨」这类书面气象术语之外没人说的表述。
-var conditions = map[int]string{
-	0:  "晴",
-	1:  "大致晴朗",
-	2:  "多云",
-	3:  "阴",
-	45: "有雾",
-	48: "雾凇",
-	51: "小雨",
-	53: "细雨",
-	55: "细密的雨",
-	56: "冻雨",
-	57: "冻雨",
-	61: "小雨",
-	63: "中雨",
-	65: "大雨",
-	66: "冻雨",
-	67: "大的冻雨",
-	71: "小雪",
-	73: "中雪",
-	75: "大雪",
-	77: "米雪",
-	80: "阵雨",
-	81: "阵雨",
-	82: "大阵雨",
-	85: "阵雪",
-	86: "大阵雪",
-	95: "雷阵雨",
-	96: "雷阵雨伴冰雹",
-	99: "雷阵雨伴冰雹",
+// 天气现象的说法。取日常说话会用的词，不用「毛毛雨」这类没人说的书面气象术语。
+//
+// 中文是**规范形式**：观测缓存里存下来的就是它，isWet 也按它的用字判断降水，
+// 只在展示时才按语言译出来。这样换一次语言，磁盘上已有的观测一个字都不用动。
+const (
+	condClear         = "晴"
+	condMostlyClear   = "大致晴朗"
+	condCloudy        = "多云"
+	condOvercast      = "阴"
+	condFog           = "有雾"
+	condRimeFog       = "雾凇"
+	condLightRain     = "小雨"
+	condDrizzle       = "细雨"
+	condDenseDrizzle  = "细密的雨"
+	condFreezingRain  = "冻雨"
+	condModerateRain  = "中雨"
+	condHeavyRain     = "大雨"
+	condHeavyFreezing = "大的冻雨"
+	condLightSnow     = "小雪"
+	condModerateSnow  = "中雪"
+	condHeavySnow     = "大雪"
+	condSnowGrains    = "米雪"
+	condShowers       = "阵雨"
+	condHeavyShowers  = "大阵雨"
+	condSnowShowers   = "阵雪"
+	condHeavySnowShow = "大阵雪"
+	condThunder       = "雷阵雨"
+	condThunderHail   = "雷阵雨伴冰雹"
+	condUnknown       = "天气不明"
+)
+
+// conditions 把规范值按语言译出来。声明处是一串 (键, 中文) 字面量，覆盖检查扫得到。
+var conditions = prompt.NewEnum(
+	prompt.Text("prompt.weather.cond.clear", condClear),
+	prompt.Text("prompt.weather.cond.mostly_clear", condMostlyClear),
+	prompt.Text("prompt.weather.cond.cloudy", condCloudy),
+	prompt.Text("prompt.weather.cond.overcast", condOvercast),
+	prompt.Text("prompt.weather.cond.fog", condFog),
+	prompt.Text("prompt.weather.cond.rime_fog", condRimeFog),
+	prompt.Text("prompt.weather.cond.light_rain", condLightRain),
+	prompt.Text("prompt.weather.cond.drizzle", condDrizzle),
+	prompt.Text("prompt.weather.cond.dense_drizzle", condDenseDrizzle),
+	prompt.Text("prompt.weather.cond.freezing_rain", condFreezingRain),
+	prompt.Text("prompt.weather.cond.moderate_rain", condModerateRain),
+	prompt.Text("prompt.weather.cond.heavy_rain", condHeavyRain),
+	prompt.Text("prompt.weather.cond.heavy_freezing_rain", condHeavyFreezing),
+	prompt.Text("prompt.weather.cond.light_snow", condLightSnow),
+	prompt.Text("prompt.weather.cond.moderate_snow", condModerateSnow),
+	prompt.Text("prompt.weather.cond.heavy_snow", condHeavySnow),
+	prompt.Text("prompt.weather.cond.snow_grains", condSnowGrains),
+	prompt.Text("prompt.weather.cond.showers", condShowers),
+	prompt.Text("prompt.weather.cond.heavy_showers", condHeavyShowers),
+	prompt.Text("prompt.weather.cond.snow_showers", condSnowShowers),
+	prompt.Text("prompt.weather.cond.heavy_snow_showers", condHeavySnowShow),
+	prompt.Text("prompt.weather.cond.thunder", condThunder),
+	prompt.Text("prompt.weather.cond.thunder_hail", condThunderHail),
+	prompt.Text("prompt.weather.cond.unknown", condUnknown),
+)
+
+// wmoText 是 WMO 天气代码到规范值的对照。多个代码可以落到同一个说法上。
+var wmoText = map[int]string{
+	0: condClear, 1: condMostlyClear, 2: condCloudy, 3: condOvercast,
+	45: condFog, 48: condRimeFog,
+	51: condLightRain, 53: condDrizzle, 55: condDenseDrizzle,
+	56: condFreezingRain, 57: condFreezingRain,
+	61: condLightRain, 63: condModerateRain, 65: condHeavyRain,
+	66: condFreezingRain, 67: condHeavyFreezing,
+	71: condLightSnow, 73: condModerateSnow, 75: condHeavySnow, 77: condSnowGrains,
+	80: condShowers, 81: condShowers, 82: condHeavyShowers,
+	85: condSnowShowers, 86: condHeavySnowShow,
+	95: condThunder, 96: condThunderHail, 99: condThunderHail,
 }
 
-// conditionOf 翻译 WMO 天气代码。未收录的代码不编造说法，回落到「天气不明」——
-// 注入的内容宁可含糊，也不能是错的。
+// conditionOf 把 WMO 天气代码化成规范值。未收录的代码不编造说法，回落到「天气不明」
+// ——注入的内容宁可含糊，也不能是错的。
 func conditionOf(code int) string {
-	if s, ok := conditions[code]; ok {
+	if s, ok := wmoText[code]; ok {
 		return s
 	}
-	return "天气不明"
+	return condUnknown
 }
 
 // probe 完整走一遍「解析地名 → 取天气」，不经过任何缓存。
 // 设置页的测试按钮用它：测的就是这个城市能不能解析、接口通不通。
-func probe(ctx context.Context, client *http.Client, location string) (Place, Report, error) {
-	place, err := geocode(ctx, client, location)
+func probe(ctx context.Context, lang string, client *http.Client, location string) (Place, Report, error) {
+	place, err := geocode(ctx, lang, client, location)
 	if err != nil {
 		return Place{}, Report{}, err
 	}
-	rep, err := fetchCurrent(ctx, client, place)
+	rep, err := fetchCurrent(ctx, lang, client, place)
 	if err != nil {
 		return place, Report{}, err
 	}

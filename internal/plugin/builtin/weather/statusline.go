@@ -1,11 +1,12 @@
 package weather
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // StatusLines 报一行天气的运行状况。
@@ -17,7 +18,7 @@ import (
 func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	if !s.configured() {
-		return []string{"🌦 天气：未设置城市，不注入"}
+		return []string{i18n.T(lang, "plugin.weather.status.unset", "🌦 天气：未设置城市，不注入")}
 	}
 	now := time.Now()
 
@@ -31,9 +32,9 @@ func (p *Plugin) StatusLines(lang string) []string {
 		}
 		rep, ok, lastErr := p.lastReport(loc)
 		if !ok {
-			text := prefix + loc + " 尚未取得"
+			text := i18n.Tf(lang, "plugin.weather.status.pending", "%s%s 尚未取得", prefix, loc)
 			if lastErr != "" {
-				text += "（" + lastErr + "）"
+				text += i18n.Tf(lang, "plugin.weather.status.reason", "（%s）", lastErr)
 			}
 			parts = append(parts, text)
 			return
@@ -41,9 +42,10 @@ func (p *Plugin) StatusLines(lang string) []string {
 		if rep.Fetched.After(newest) {
 			newest = rep.Fetched
 		}
-		text := fmt.Sprintf("%s%s %s %.0f℃", prefix, shortPlace(rep.Place), rep.Condition, rep.TempC)
+		text := i18n.Tf(lang, "plugin.weather.status.reading", "%s%s %s %.0f℃",
+			prefix, shortPlace(rep.Place), conditions.For(lang, rep.Condition), rep.TempC)
 		if s.stale > 0 && now.Sub(rep.Fetched) > s.stale {
-			text += "（已过期，不注入）"
+			text += i18n.T(lang, "plugin.weather.status.stale", "（已过期，不注入）")
 		}
 		parts = append(parts, text)
 	}
@@ -51,13 +53,14 @@ func (p *Plugin) StatusLines(lang string) []string {
 	if s.sameCity {
 		add("", s.personaLoc)
 	} else {
-		add("角色 ", s.personaLoc)
-		add("我 ", s.userLoc)
+		add(i18n.T(lang, "plugin.weather.status.persona", "角色 "), s.personaLoc)
+		add(i18n.T(lang, "plugin.weather.status.user", "我 "), s.userLoc)
 	}
 
-	line := "🌦 天气：" + strings.Join(parts, " ／ ")
+	line := i18n.T(lang, "plugin.weather.status.prefix", "🌦 天气：") + strings.Join(parts, " ／ ")
 	if !newest.IsZero() {
-		line += fmt.Sprintf("（%s，每 %d 分钟刷新）", humanizeAge(now.Sub(newest)), int(s.refresh.Minutes()))
+		line += i18n.Tf(lang, "plugin.weather.status.age", "（%s，每 %d 分钟刷新）",
+			humanizeAge(lang, now.Sub(newest)), int(s.refresh.Minutes()))
 	}
 	return []string{line}
 }
@@ -73,15 +76,10 @@ func shortPlace(name string) string {
 }
 
 // humanizeAge 把间隔说成人话。
-func humanizeAge(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return "刚刚更新"
-	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前更新", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%d 小时前更新", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%d 天前更新", int(d.Hours()/24))
+func humanizeAge(lang string, d time.Duration) string {
+	if d < time.Minute {
+		return i18n.T(lang, "plugin.weather.status.just_now", "刚刚更新")
 	}
+	// 时长本身走全程序共用的口径，这里只管「……前更新」这层壳
+	return i18n.Tf(lang, "plugin.weather.status.updated_ago", "%s前更新", prompt.Duration(lang, d))
 }
