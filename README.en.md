@@ -19,7 +19,7 @@ The goal is **someone you can keep company with**, not a window that only exists
 
 ## Features
 
-- **[Roleplay](docs/en/plugins/roleplay.md)** — the character sheet, sample lines and "about me" are injected as top-priority prompts; replies open with a 【】 block describing the scene, the action and the expression. A set of natural-expression rules suppresses the mechanical register Chinese LLM output tends to fall into, and time-consistency rules keep the season, the light outside and phrases like "last time" lined up with the real clock. The character may refuse in its own voice, and when a provider blocks a call the failure is translated into the character drifting off mid-sentence rather than a technical error dropped into the conversation
+- **[Roleplay](docs/en/plugins/roleplay.md)** — **a character ships with it** (Wen, twenty-nine, a marketing planner in Shanghai): install it, start talking, and that is who answers, with nothing to configure; rewrite the sheet on the settings page if she is not what you wanted. The character sheet, sample lines and "about me" are injected as top-priority prompts; replies open with a 【】 block describing the scene, the action and the expression. A set of natural-expression rules suppresses the mechanical register Chinese LLM output tends to fall into, and time-consistency rules keep the season, the light outside and phrases like "last time" lined up with the real clock. The character may refuse in its own voice, and when a provider blocks a call the failure is translated into the character drifting off mid-sentence rather than a technical error dropped into the conversation
 - **[A character with state](docs/en/plugins/life.md)** — presence, scenes, belongings, people, agenda, relationship, unspoken thoughts, body, mood, health, weather: each kept by its own plugin, surviving compaction and new sessions. It cooks only with what is actually in the fridge, mentions only friends who exist in its people book, plans two to four things for itself each day and goes and does them, keeps promises in a ledger with a due date and a settled state — and when it rains where the character lives, it really is raining there
 - **[Two personas, outer and inner](docs/en/plugins/roleplay.md)** — switched by trigger phrases. The inner persona's conversations and memories are completely invisible to the outer one: not just the contents, but the counts and titles too. The two sides can each own a chat channel — say the phrase on QQ and the side that takes over answers you on WeChat
 - **[Memory that remembers, and forgets](docs/en/plugins/memory.md)** — a cross-session store of facts whose index is injected every turn, with relevant entries surfacing on their own when you touch on them; distilled periodically during a conversation and once more before the history is compacted; a new conclusion that contradicts an old memory revises it in place; each day's conversation is folded into a one-line timeline the next day; gradual forgetting is available. The raw conversations stay searchable by keyword and date through [history search](docs/en/plugins/memory.md), archives of pre-compaction transcripts included
@@ -49,6 +49,10 @@ go run ./cmd/wen
 # http://127.0.0.1:8080
 ```
 
+There is nothing to configure first: nineteen of the twenty-nine plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The ten that are off either need something filled in (trigger phrases, a city, bot credentials) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
+
+The browser interface's language is chosen at the top right of the settings page. **The prompts sent to the model, the log and the command-line output follow `lang:` in config.yaml**, which falls back to the system locale when unset (see [Configuration and models](docs/en/configuration.md#language)).
+
 Config lookup order: the path given to `-c` → `config.yaml` in the current directory → `~/.wen/config.yaml`.
 
 ```bash
@@ -71,11 +75,11 @@ wen update [--check] [-y]  check for and install a new version
 
 **Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page (or `wen config plugins` on a remote machine) and stored only in `<config dir>/plugins.state.json`; each plugin's own data lives in `<config dir>/plugins/<plugin>/`.
 
-Before deploying to a remote server, read [Deployment and access control](docs/en/deployment.md). The web UI listens on `127.0.0.1` only by default: `exec_command` runs commands and `read_file` reads any file, so unauthorized access means more than someone reading your chat logs.
+Before deploying to a remote server, read [Deployment and access control](docs/en/deployment.md). The web UI listens on `127.0.0.1` only by default. `exec_command` and `read_file` are off by default, but once you turn them on from the settings page, unauthorized access means more than someone reading your chat logs — those two run any command and read any file.
 
 ## Plugins
 
-Twenty-eight built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/en/plugins/README.md).
+Twenty-nine built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/en/plugins/README.md).
 
 | Group | Plugins |
 |---|---|
@@ -86,12 +90,13 @@ Twenty-eight built-in plugins, grouped by function, all toggleable and configura
 | [Background work](docs/en/plugins/background.md) | `heartbeat` `scheduler` |
 | [Chat channels](docs/en/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` |
 | [Maintenance](docs/en/plugins/self-update.md) | `self_update` |
+| [External bundles](docs/en/plugins/external.md) | `bundles` |
 
 ## Documentation
 
 - [CLI](docs/en/cli.md) — the subcommands, and how to change plugin settings on a headless machine
 - [Configuration and models](docs/en/configuration.md) — every option in config.yaml, and provider/model management
-- [Plugin overview](docs/en/plugins/README.md) — what each of the twenty-nine plugins does, with its settings
+- [Plugin overview](docs/en/plugins/README.md) — what each of the twenty-nine plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
 - [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message

@@ -4,7 +4,7 @@
 
 ## Roleplay (roleplay plugin)
 
-Injects the character sheet, the sample lines and what the character knows about you as the highest-priority prompt, along with several sets of expression rules. **Off by default** — it changes how the model behaves substantially, and should be something you turn on deliberately. It hard-depends on `memory` and `session_search`: a character with continuity has to remember things across sessions and be able to look up what was actually said. Without those two, it becomes a stranger again at every new session.
+Injects the character sheet, the sample lines and what the character knows about you as the highest-priority prompt, along with several sets of expression rules. **On by default, and it ships with a character sheet and sample lines of its own** — start talking and the other side is someone with a name, a personality and a life. It hard-depends on `memory` and `session_search`: a character with continuity has to remember things across sessions and be able to look up what was actually said. Without those two, it becomes a stranger again at every new session.
 
 The blocks it injects (each can be turned off on its own, and an empty setting injects nothing at all):
 
@@ -23,11 +23,19 @@ Two more hooks:
 - **Keeping the scene through a compaction**: the **verbatim text of the last `【】`** is left at the end of the summary (a summary drops details like the setting and the posture, so one compaction used to cut the scene off). How long it has been since the last exchange is supplied by the core every turn (see [How the context is organized](../context.md)); this plugin only says how to play a long gap.
 - **Failure translation** (on by default): when a model call fails — most often because the provider's safety policy stopped the content — the vendor's raw error is not thrown at someone in the middle of a conversation. One auxiliary call generates a line in the character's voice, a pause as though it had drifted off (and if even that cannot be generated, a fallback line is used), so a refusal shows up as a state of the character rather than as the system's wall. The original error is filed by the core as a session notice, still visible in the UI, so nothing is lost. Configuration errors (keys, addresses, 401/403/404) are reported verbatim, because that kind of problem is only fixable if you can see the original. Translation happens only on turns with a human present; a background turn such as a heartbeat simply fails.
 
+### The default character
+
+With nothing configured, a built-in sheet is what takes effect: **Wen, twenty-nine, a marketing planner in Shanghai**, renting a one-bedroom in Changning, iced americano in the morning, phone on silent year-round. The specificity is deliberate — "a warm and thoughtful assistant" reads the same no matter who plays it, while "on the very late nights she buys oden at the convenience store on the way home" fixes a voice along with the facts. Four sample exchanges come with it to hold the rhythm and the restraint in place.
+
+Two things are left empty on purpose: `user_profile` (that is about you, and we have no way to know) and her past (the sheet describes only her present life, with no backstory written in — that is left to grow out of talking to her). The sheet also says she does not bring up how she works, and answers honestly and without dodging if asked directly: she will not raise it, but she will not deny it either. A default character should not be taught to lie.
+
+The whole sheet can be rewritten or cleared on the settings page, and takes effect at once. **Under English, the default you get is the English sheet** (she goes by Wen there); changing `lang:` changes which one you get, and once you have saved a sheet of your own you are no longer affected.
+
 | Setting | Default | Description |
 |---|---|---|
-| `persona` | empty | The character sheet (multi-line). Empty leaves only the rules below |
+| `persona` | the built-in Wen | The character sheet (multi-line). Rewrite or clear it freely; cleared, only the rules below remain |
 | `user_profile` | empty | About me: your basic circumstances (multi-line). Can stay empty and be told in conversation instead |
-| `voice_samples` | empty | Sample lines (multi-line), with a blank line between exchanges |
+| `voice_samples` | four built-in | Sample lines (multi-line), with a blank line between exchanges |
 | `interaction` | on | `【】` acting it out |
 | `boundaries` | on | Expressing boundaries |
 | `humanize` | on | Natural expression rules |

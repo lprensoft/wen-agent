@@ -4,7 +4,7 @@
 
 ## Heartbeat (heartbeat plugin)
 
-Lets the character speak first. On an interval it wakes the model and runs a full turn on the **most recently active session** (with the system prompt and every enabled plugin's prompt), and the output goes straight into that session. Off by default — something that burns quota unattended should be turned on deliberately rather than starting to spend money the moment it is installed.
+Lets the character speak first. On an interval it wakes the model and runs a full turn on the **most recently active session** (with the system prompt and every enabled plugin's prompt), and the output goes straight into that session. **On by default** — speaking first is one of the things this project exists to show, and it shows nothing while switched off. The cost should be stated plainly: it spends quota unattended, from the moment it is installed. The interval starts at 30 minutes and the character adjusts it as the conversation goes (closer when things are lively, paused until morning when you say you are going to bed), so in practice it fires less often than the worst case. Turn it off on the settings page, or lengthen the interval, if that is not what you want.
 
 - **A heartbeat does not count as activity**: only sessions a human has interacted with (through the web UI or a chat channel) are candidates, or the heartbeat would keep recognizing itself as active and renew its own lease forever.
 - **It does not interrupt**: the countdown restarts from the moment you finish speaking. The heartbeat is a mechanism for speaking up when nobody is talking; cutting into a conversation both interrupts it and makes the interval setting meaningless.

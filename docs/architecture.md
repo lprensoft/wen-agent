@@ -35,7 +35,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 
 ## 编写插件
 
-实现 `internal/plugin` 的 `Plugin` 接口（`Name` / `Description` / `Init` / `SystemPrompt` / `Tools`），在 `cmd/wen/main.go` 的 `buildPlugins` 注册即可。约定：提示词与描述一律中文、只写功能、不含身份信息；`SystemPrompt()` 返回空串表示不注入；插件名限小写字母、数字与下划线（它会被用来拼持久化目录）。
+实现 `internal/plugin` 的 `Plugin` 接口（`Name` / `Description` / `Init` / `SystemPrompt` / `Tools`），在 `cmd/wen/main.go` 的 `buildPlugins` 注册即可。约定：提示词与描述用中文写，再经 `prompt.T(lang, "键", 中文)` 取用（见[配置与模型](configuration.md#语言)；中文不进语言包，它既是源语言也是兜底），只写功能、不含身份信息；`SystemPrompt()` 返回空串表示不注入；插件名限小写字母、数字与下划线（它会被用来拼持久化目录）。
 
 可选接口（不实现则零成本）：
 
@@ -56,7 +56,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 
 插件之间还有三样共享的基础设施，核心不知道它们：`internal/imbot`（消息通道骨架，见下）、`internal/cue`（「开口理由」公告板——产生方按**事件**投递而不是按状态投递，同 (Source, Key) 幂等覆盖，必须带过期时刻；心跳开口前取走全部未过期的理由。只存内存，检测状态的权威在产生方自己的持久化里）与 `internal/availability`（「忙碌状态」公告板——存状态不存事件，每个写入方只有一条，查询不清、靠到期时刻自然过期；日程在活动进行中写，心跳与消息通道据此把下一拍压后或延后处理入站消息。同样只存内存，重启后由日程从当天的表重建）。
 
-`InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`Sessions`（会话的只读窄查询：最近活跃的会话、某会话是否还在）、`SessionDir`（会话目录，只给需要读会话正文的检索与归档类插件）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`DayFacts`（问某一天有什么可说的，汇总各插件的回答）、`Notice`（往会话里留一行只给人看的说明）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
+`InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`Sessions`（会话的只读窄查询：最近活跃的会话、某会话是否还在）、`SessionDir`（会话目录，只给需要读会话正文的检索与归档类插件）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`DayFacts`（问某一天有什么可说的，汇总各插件的回答）、`Notice`（往会话里留一行只给人看的说明）、`Lang`（这个进程的语言，插件在 `Init` 里存下，此后提示词、工具描述、状态行与日志都按它取）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
 
 `RunTurn` 与 `Notice` 由 Manager 包一层自动注入发起方标记，插件无法伪装成前台；`RunTurn` 在会话忙时立即返回 `ErrSessionBusy` 而不排队——后台任务堆在锁上，只会在解锁瞬间连环轰炸同一个会话。`Notice` 写出的内容落盘、在界面实时展示，但永不进入模型上下文，也不进压缩摘要：后台工作在轮次收尾之后才跑完，那时事件流已经关闭，结果否则只能进日志。
 
