@@ -11,6 +11,7 @@ import (
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // OnCompact 在会话历史被摘要替换之前把原始历史原样归档。
@@ -30,25 +31,29 @@ func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, e
 	}
 	dir := plugin.DomainDir(s.archiveDir, ev.Scope)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("创建归档目录失败: %w", err)
+		return "", fmt.Errorf(prompt.T(s.lang, "prompt.session_search.err.mkdir_archive",
+			"创建归档目录失败: %w"), err)
 	}
 
 	name := fmt.Sprintf("%s-%s.md", sanitizeID(ev.SessionID), time.Now().Format("20060102-150405"))
 	path := filepath.Join(dir, name)
-	raw := []byte(renderArchive(ev))
+	raw := []byte(renderArchive(s.lang, ev))
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		return "", fmt.Errorf("写入归档失败: %w", err)
+		return "", fmt.Errorf(prompt.T(s.lang, "prompt.session_search.err.write_archive",
+			"写入归档失败: %w"), err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("写入归档失败: %w", err)
+		return "", fmt.Errorf(prompt.T(s.lang, "prompt.session_search.err.write_archive",
+			"写入归档失败: %w"), err)
 	}
 	// 按域各留 N 份：全局计数的话，写得频繁的那个域会把别的域的归档挤掉，
 	// 那不是泄漏而是数据丢失
 	pruneArchives(dir, s.maxArchives)
 
-	return fmt.Sprintf("（本次压缩前的完整历史已归档：%s）", archiveRef(ev.Scope, name)), nil
+	return prompt.Tf(s.lang, "prompt.session_search.compact.note",
+		"（本次压缩前的完整历史已归档：%s）", archiveRef(ev.Scope, name)), nil
 }
 
 // archiveRef / parseArchiveRef 是归档在工具接口上的标识：带域的归档写成 <tag>/<name>，
@@ -61,7 +66,7 @@ func archiveRef(tag, name string) string {
 }
 
 // parseArchiveRef 拆出标识里的域与文件名，并确认二者都不指向目录外。
-func parseArchiveRef(ref string) (tag, name string, err error) {
+func parseArchiveRef(lang, ref string) (tag, name string, err error) {
 	ref = strings.TrimSpace(strings.ReplaceAll(ref, "\\", "/"))
 	if i := strings.LastIndex(ref, "/"); i >= 0 {
 		tag, name = ref[:i], ref[i+1:]
@@ -70,13 +75,15 @@ func parseArchiveRef(ref string) (tag, name string, err error) {
 	}
 	name = filepath.Base(name)
 	if name == "" || name == "." {
-		return "", "", fmt.Errorf("归档名 %q 不合法", ref)
+		return "", "", fmt.Errorf(prompt.T(lang, "prompt.session_search.err.bad_ref",
+			"归档名 %q 不合法"), ref)
 	}
 	if !strings.HasSuffix(name, ".md") {
 		name += ".md"
 	}
 	if tag != "" && !validDomain(tag) {
-		return "", "", fmt.Errorf("归档名 %q 不合法", ref)
+		return "", "", fmt.Errorf(prompt.T(lang, "prompt.session_search.err.bad_ref",
+			"归档名 %q 不合法"), ref)
 	}
 	return tag, name, nil
 }
@@ -117,43 +124,45 @@ func sanitizeID(id string) string {
 
 // renderArchive 把历史渲染成可读的 Markdown。与压缩用的序列化不同，
 // 这里不做任何截断——归档的意义就在于保住原文。
-func renderArchive(ev plugin.CompactEvent) string {
+func renderArchive(lang string, ev plugin.CompactEvent) string {
 	var b strings.Builder
-	b.WriteString("# 压缩归档\n\n")
-	fmt.Fprintf(&b, "- 会话：%s\n", ev.SessionID)
-	fmt.Fprintf(&b, "- 归档时间：%s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(&b, "- 消息数：%d\n\n", len(ev.History))
+	b.WriteString(prompt.T(lang, "prompt.session_search.archive.title", "# 压缩归档\n\n"))
+	b.WriteString(prompt.Tf(lang, "prompt.session_search.archive.session", "- 会话：%s\n", ev.SessionID))
+	b.WriteString(prompt.Tf(lang, "prompt.session_search.archive.at", "- 归档时间：%s\n",
+		time.Now().Format("2006-01-02 15:04:05")))
+	b.WriteString(prompt.Tf(lang, "prompt.session_search.archive.count", "- 消息数：%d\n\n", len(ev.History)))
 
-	b.WriteString("## 摘要\n\n")
+	b.WriteString(prompt.T(lang, "prompt.session_search.archive.summary_head", "## 摘要\n\n"))
 	b.WriteString(ev.Summary)
-	b.WriteString("\n\n## 原始历史\n\n")
+	b.WriteString(prompt.T(lang, "prompt.session_search.archive.history_head", "\n\n## 原始历史\n\n"))
 
 	for _, m := range ev.History {
 		switch m.Role {
 		case llm.RoleUser:
-			b.WriteString("### 用户\n\n")
+			b.WriteString(prompt.T(lang, "prompt.session_search.archive.user", "### 用户\n\n"))
 			b.WriteString(m.Content)
 			b.WriteString("\n\n")
 		case llm.RoleAssistant:
-			b.WriteString("### 助手\n\n")
+			b.WriteString(prompt.T(lang, "prompt.session_search.archive.assistant", "### 助手\n\n"))
 			if m.Reasoning != "" {
-				b.WriteString("<思考>\n")
+				b.WriteString(prompt.T(lang, "prompt.session_search.archive.think_open", "<思考>\n"))
 				b.WriteString(m.Reasoning)
-				b.WriteString("\n</思考>\n\n")
+				b.WriteString(prompt.T(lang, "prompt.session_search.archive.think_close", "\n</思考>\n\n"))
 			}
 			if m.Content != "" {
 				b.WriteString(m.Content)
 				b.WriteString("\n\n")
 			}
 			for _, tc := range m.ToolCalls {
-				fmt.Fprintf(&b, "调用工具 `%s`：\n\n```json\n%s\n```\n\n", tc.Name, string(tc.Arguments))
+				b.WriteString(prompt.Tf(lang, "prompt.session_search.archive.tool_call",
+					"调用工具 `%s`：\n\n```json\n%s\n```\n\n", tc.Name, string(tc.Arguments)))
 			}
 		case llm.RoleTool:
-			b.WriteString("### 工具结果\n\n```\n")
+			b.WriteString(prompt.T(lang, "prompt.session_search.archive.tool_result", "### 工具结果\n\n```\n"))
 			b.WriteString(m.Content)
 			b.WriteString("\n```\n\n")
 		case llm.RoleSystem:
-			b.WriteString("### 系统\n\n")
+			b.WriteString(prompt.T(lang, "prompt.session_search.archive.system", "### 系统\n\n"))
 			b.WriteString(m.Content)
 			b.WriteString("\n\n")
 		}

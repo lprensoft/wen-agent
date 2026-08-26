@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 	"wen/internal/session"
 )
 
@@ -30,6 +31,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang            string
 	dir             string
 	archiveDir      string
 	store           *session.Store
@@ -37,6 +39,13 @@ type Plugin struct {
 	maxSnippets     int
 	maxBytes        int
 	maxArchives     int
+}
+
+// langOf 取进程语言。未初始化时是空串，prompt.T 据此回中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 func New() *Plugin {
@@ -103,16 +112,19 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要会话目录；没有则拒绝启用。归档写在插件自己的持久化目录下。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.SessionDir == "" {
-		return fmt.Errorf("没有可用的会话目录，无法检索历史对话")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.session_search.no_session_dir",
+			"没有可用的会话目录，无法检索历史对话"))
 	}
 	store, err := session.NewStore(ictx.SessionDir)
 	if err != nil {
-		return fmt.Errorf("打开会话目录失败: %w", err)
+		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.session_search.err.open_dir",
+			"打开会话目录失败: %w"), err)
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.lang = ictx.Lang
 	p.dir = ictx.SessionDir
 	p.store = store
 	p.archiveDir = ""
@@ -136,6 +148,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照（SetConfig 会在运行时重新 Init）。
 type settings struct {
+	lang            string
 	dir             string
 	archiveDir      string
 	store           *session.Store
@@ -149,6 +162,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:            p.lang,
 		dir:             p.dir,
 		archiveDir:      p.archiveDir,
 		store:           p.store,
@@ -211,14 +225,15 @@ func candidates(dir string, from, to time.Time) ([]candidate, error) {
 }
 
 // parseDay 解析 YYYY-MM-DD；end 为 true 时取当天的最后一刻。
-func parseDay(s string, end bool) (time.Time, error) {
+func parseDay(lang, s string, end bool) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, nil
 	}
 	t, err := time.ParseInLocation("2006-01-02", s, time.Local)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("日期 %q 格式不对，应为 YYYY-MM-DD", s)
+		return time.Time{}, fmt.Errorf(prompt.T(lang, "prompt.session_search.err.bad_date",
+			"日期 %q 格式不对，应为 YYYY-MM-DD"), s)
 	}
 	if end {
 		t = t.AddDate(0, 0, 1).Add(-time.Nanosecond)
@@ -237,16 +252,16 @@ func inRange(ts, from, to time.Time) bool {
 	return true
 }
 
-func roleLabel(role string) string {
+func roleLabel(lang, role string) string {
 	switch role {
 	case "user":
-		return "用户"
+		return prompt.T(lang, "prompt.session_search.role.user", "用户")
 	case "assistant":
-		return "助手"
+		return prompt.T(lang, "prompt.session_search.role.assistant", "助手")
 	case "tool":
-		return "工具结果"
+		return prompt.T(lang, "prompt.session_search.role.tool", "工具结果")
 	case "system":
-		return "系统"
+		return prompt.T(lang, "prompt.session_search.role.system", "系统")
 	}
 	return role
 }
@@ -282,11 +297,12 @@ func snippet(m session.StoredMessage, keyword string, width int) string {
 }
 
 // clip 按字节上限截断输出，并说明被截断。
-func clip(s string, maxBytes int) string {
+func clip(lang, s string, maxBytes int) string {
 	out, truncated := plugin.TruncateUTF8([]byte(s), maxBytes)
 	res := string(out)
 	if truncated {
-		res += fmt.Sprintf("\n...[超过 %d 字节，已截断，请缩小日期范围或用更具体的关键词]", maxBytes)
+		res += prompt.Tf(lang, "prompt.session_search.truncated",
+			"\n...[超过 %d 字节，已截断，请缩小日期范围或用更具体的关键词]", maxBytes)
 	}
 	return res
 }
