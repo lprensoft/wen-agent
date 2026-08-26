@@ -11,7 +11,6 @@ import (
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/people"
-	"wen/internal/prompt"
 )
 
 // 配置默认值。
@@ -159,11 +158,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 应用配置，重建忙碌状态并（重）启动时钟。可重入：先停掉上一轮。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.agenda.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.agenda.no_state_dir",
 			"没有可用的持久化目录，无法保存日程"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.agenda.no_sessions", "当前环境不支持会话查询"))
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.agenda.no_sessions", "当前环境不支持会话查询"))
 	}
 
 	p.Stop() // 重入：先停上一轮时钟，避免两套并行

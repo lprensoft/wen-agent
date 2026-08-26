@@ -105,7 +105,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // 可重入：先停上一轮检查循环再起新的。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.health.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.health.no_state_dir",
 			"没有可用的持久化目录，无法保存身体状况"))
 	}
 

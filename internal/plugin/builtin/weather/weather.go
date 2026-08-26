@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -167,11 +168,11 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	staleMin := plugin.CfgInt(cfg, "stale_minutes", defaultStaleMinutes)
 	tomorrowFrom := plugin.CfgInt(cfg, "tomorrow_from_hour", defaultTomorrowFrom)
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.weather.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.weather.no_state_dir",
 			"没有可用的持久化目录，无法保存天气观测"))
 	}
 	if staleMin < refreshMin {
-		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.weather.err.stale_lt_refresh",
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.weather.err.stale_lt_refresh",
 			"「过期不注入的时限」(%d 分钟) 不能小于「刷新间隔」(%d 分钟)："+
 				"那样刚取到的天气也会立刻被判为过期，等于永远不注入"), staleMin, refreshMin)
 	}

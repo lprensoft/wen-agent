@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -84,15 +85,15 @@ func (p *Plugin) langOf() string {
 
 func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.scheduler.no_state_dir",
 			"没有可用的持久化目录，无法保存任务"))
 	}
 	if ictx.RunTurn == nil {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_run_turn",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.scheduler.no_run_turn",
 			"当前环境不支持插件发起对话轮次"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_sessions",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.scheduler.no_sessions",
 			"当前环境不支持会话查询"))
 	}
 
@@ -106,7 +107,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	p.newSession = ictx.NewSession
 	p.sessions = ictx.Sessions
 	if err := p.loadLocked(); err != nil {
-		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.scheduler.err.load", "加载任务失败: %w"), err)
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.scheduler.err.load", "加载任务失败: %w"), err)
 	}
 	p.catchUpLocked()
 

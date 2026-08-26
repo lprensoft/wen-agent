@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -131,7 +132,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把接触记录散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.body_sense.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.body_sense.no_state_dir",
 			"没有可用的持久化目录，无法保存接触记录"))
 	}
 	// 四档部位表都用原始取值而不是 plugin.CfgString：后者把空串当缺失（判的是

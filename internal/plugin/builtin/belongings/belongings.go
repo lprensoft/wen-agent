@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -82,7 +83,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把清单散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.belongings.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.belongings.no_state_dir",
 			"没有可用的持久化目录，无法保存持有物清单"))
 	}
 

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -180,19 +181,19 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	minIv := time.Duration(plugin.CfgInt(cfg, "min_minutes", defMinMinutes)) * time.Minute
 	maxIv := time.Duration(plugin.CfgInt(cfg, "max_minutes", defMaxMinutes)) * time.Minute
 	if minIv > base || base > maxIv {
-		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.heartbeat.err.range",
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.heartbeat.err.range",
 			"心跳间隔需满足 最快(%v) ≤ 基础(%v) ≤ 最慢(%v)"), minIv, base, maxIv)
 	}
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.heartbeat.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_state_dir",
 			"没有可用的持久化目录，无法记录心跳状态"))
 	}
 	if ictx.RunTurn == nil {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.heartbeat.no_run_turn",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_run_turn",
 			"当前环境不支持插件发起对话轮次"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.heartbeat.no_sessions",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_sessions",
 			"当前环境不支持会话查询"))
 	}
 

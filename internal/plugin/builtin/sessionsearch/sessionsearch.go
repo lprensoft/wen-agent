@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 	"wen/internal/session"
@@ -112,12 +113,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要会话目录；没有则拒绝启用。归档写在插件自己的持久化目录下。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.SessionDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.session_search.no_session_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.session_search.no_session_dir",
 			"没有可用的会话目录，无法检索历史对话"))
 	}
 	store, err := session.NewStore(ictx.SessionDir)
 	if err != nil {
-		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.session_search.err.open_dir",
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.session_search.err.open_dir",
 			"打开会话目录失败: %w"), err)
 	}
 

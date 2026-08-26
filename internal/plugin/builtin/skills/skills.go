@@ -103,13 +103,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if own {
 		// 没有可用的持久化位置时拒绝启用，不退化到写进程当前目录
 		if ictx.StateDir == "" {
-			return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.skills.no_dir",
+			return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.skills.no_dir",
 				"没有可用的技能目录，请在配置里指定一个"))
 		}
 		dir = ictx.StateDir
 		// 默认目录归本插件所有，先建出来，用户才知道该往哪放文件
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf(prompt.T(ictx.Lang, "prompt.skills.err.mkdir",
+			return fmt.Errorf(i18n.T(ictx.Lang, "plugin.skills.err.mkdir",
 				"创建技能目录失败: %w"), err)
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -44,7 +45,7 @@ func (p *Plugin) Requires() []string { return []string{"roleplay"} }
 // Init 需要一个可写目录；没有则拒绝启用，避免把快照散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.relationship.no_state_dir",
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.relationship.no_state_dir",
 			"没有可用的持久化目录，无法保存关系状态"))
 	}
 

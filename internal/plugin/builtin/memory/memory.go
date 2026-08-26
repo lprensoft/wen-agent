@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -53,13 +54,13 @@ const (
 func memoriesDir(ictx plugin.InitContext, library string) (string, error) {
 	if library == libraryProject {
 		if ictx.Workdir == "" {
-			return "", fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.memory.no_workdir",
+			return "", fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.memory.no_workdir",
 				"按项目分库需要工作目录，当前未设置（可改用全局记忆库）"))
 		}
 		return filepath.Join(ictx.Workdir, ".wen", "memories"), nil
 	}
 	if ictx.StateDir == "" {
-		return "", fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.memory.no_state_dir",
+		return "", fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.memory.no_state_dir",
 			"没有可用的持久化目录，无法保存记忆"))
 	}
 	return filepath.Join(ictx.StateDir, "memories"), nil
@@ -337,7 +338,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 跨字段的约束 NormalizeConfig 表达不了（它只认单字段的 Min/Max），在这里挡一次。
 	// 先于任何副作用检查：Init 失败等于拒绝这次配置。
 	if forgetDays <= blurDays {
-		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.memory.err.forget_le_blur",
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.memory.err.forget_le_blur",
 			"「移出记忆库天数」（%d）需大于「细节淡忘天数」（%d）"), forgetDays, blurDays)
 	}
 
