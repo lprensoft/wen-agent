@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // remoteTool 把一件远端工具接成本项目的工具。
@@ -25,7 +27,8 @@ func (t *remoteTool) Name() string { return t.info.Local }
 func (t *remoteTool) Description() string {
 	desc := strings.TrimSpace(t.info.Description)
 	if desc == "" {
-		desc = "外源插件包 " + t.p.bundle.Manifest.Name + " 提供的工具（对方没有给出说明）"
+		desc = prompt.Tf(t.p.langOf(), "prompt.bundle.tool.no_desc",
+			"外源插件包 %s 提供的工具（对方没有给出说明）", t.p.bundle.Manifest.Name)
 	}
 	return desc
 }
@@ -42,21 +45,22 @@ func (t *remoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	p := t.p
 	p.mu.RLock()
 	c, ok := p.clients[t.info.Server]
+	lang := p.lang
 	maxBytes, needConfirm, ready := p.maxBytes, p.confirm, p.ready
 	p.mu.RUnlock()
 
 	if !ready {
-		return "", fmt.Errorf("插件包 %s 尚未就绪", p.bundle.Manifest.Name)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.bundle.err.not_ready", "插件包 %s 尚未就绪"), p.bundle.Manifest.Name)
 	}
 	if !ok {
-		return "", fmt.Errorf("插件包 %s 里没有可用的 %s，这件工具暂时用不了",
+		return "", fmt.Errorf(prompt.T(lang, "prompt.bundle.err.no_server", "插件包 %s 里没有可用的 %s，这件工具暂时用不了"),
 			p.bundle.Manifest.Name, t.info.Server)
 	}
 
 	var parsed map[string]any
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &parsed); err != nil {
-			return "", fmt.Errorf("参数解析失败: %w", err)
+			return "", plugin.BadArgs(lang, err)
 		}
 	}
 
@@ -70,14 +74,14 @@ func (t *remoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	out := truncate(renderResult(res), maxBytes)
+	out := truncate(lang, renderResult(lang, res), maxBytes)
 	if res.IsError {
 		// 远端把失败放在结果里而不是协议错误里，正是为了让模型看见并自行纠正，
 		// 所以照常返回内容，只在前面点明这是一次失败。
-		return "调用失败：\n" + out, nil
+		return prompt.Tf(lang, "prompt.bundle.result.failed", "调用失败：\n%s", out), nil
 	}
 	if out == "" {
-		return "（这次调用没有返回内容）", nil
+		return prompt.T(lang, "prompt.bundle.result.empty", "（这次调用没有返回内容）"), nil
 	}
 	return out, nil
 }
@@ -87,9 +91,11 @@ func (t *remoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 // 拿不到答复一律按拒绝：确认通道取不到（无人值守的后台轮次）、超时、界面断开，
 // 三种情况都不等于同意。要放行就把这个开关关掉，那是个看得见的选择。
 func (t *remoteTool) askFirst(ctx context.Context, args json.RawMessage) error {
+	lang := t.p.langOf()
 	confirm, ok := plugin.ConfirmerFrom(ctx)
 	if !ok {
-		return fmt.Errorf("这个插件包设了调用前确认，而当前轮次没有可确认的人，已按拒绝处理")
+		return fmt.Errorf("%s", prompt.T(lang, "prompt.bundle.err.no_confirmer",
+			"这个插件包设了调用前确认，而当前轮次没有可确认的人，已按拒绝处理"))
 	}
 	detail := t.info.Local
 	if len(args) > 0 {
@@ -97,15 +103,15 @@ func (t *remoteTool) askFirst(ctx context.Context, args json.RawMessage) error {
 	}
 	agreed, err := confirm(ctx, plugin.ConfirmRequest{
 		Source: t.p.name,
-		Title:  "调用外源工具",
+		Title:  i18n.T(lang, "plugin.bundle.confirm.title", "调用外源工具"),
 		Detail: detail,
-		Reason: "插件包 " + t.p.bundle.Manifest.Name + " 开着「调用前确认」",
+		Reason: i18n.Tf(lang, "plugin.bundle.confirm.reason", "插件包 %s 开着「调用前确认」", t.p.bundle.Manifest.Name),
 	})
 	if err != nil {
-		return fmt.Errorf("没能取得确认（%v），已按拒绝处理", err)
+		return fmt.Errorf(prompt.T(lang, "prompt.bundle.err.confirm_failed", "没能取得确认（%v），已按拒绝处理"), err)
 	}
 	if !agreed {
-		return fmt.Errorf("用户拒绝了这次调用")
+		return fmt.Errorf("%s", prompt.T(lang, "prompt.bundle.err.denied", "用户拒绝了这次调用"))
 	}
 	return nil
 }
@@ -113,7 +119,7 @@ func (t *remoteTool) askFirst(ctx context.Context, args json.RawMessage) error {
 // truncate 按字节数截断，不切坏多字节字符，并明说被截过。
 //
 // 明说是必要的：截断之后的内容看起来是完整的一段，模型会拿它当全部事实往下推。
-func truncate(s string, max int) string {
+func truncate(lang, s string, max int) string {
 	if max <= 0 || len(s) <= max {
 		return s
 	}
@@ -121,7 +127,8 @@ func truncate(s string, max int) string {
 	for cut > 0 && !utf8Start(s[cut]) {
 		cut--
 	}
-	return s[:cut] + fmt.Sprintf("\n\n（内容过长，已截断；这里只有前 %d 字节，完整内容共 %d 字节）", cut, len(s))
+	return s[:cut] + prompt.Tf(lang, "prompt.bundle.result.truncated",
+		"\n\n（内容过长，已截断；这里只有前 %d 字节，完整内容共 %d 字节）", cut, len(s))
 }
 
 // utf8Start 报告这个字节是不是一个字符的起始字节。

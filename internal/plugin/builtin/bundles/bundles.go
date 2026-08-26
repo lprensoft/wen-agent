@@ -35,8 +35,8 @@ type Plugin struct {
 
 // New 由 main.go 在建插件时给出配置目录——这与 self_update 拿 Restart 回调是同一种
 // 形状：插件需要一样核心不该替它准备的东西，经构造函数交给它。
-func New(baseDir string) *Plugin {
-	return &Plugin{store: agentplugin.NewStore(baseDir), baseDir: baseDir}
+func New(lang, baseDir string) *Plugin {
+	return &Plugin{lang: lang, store: agentplugin.NewStore(lang, baseDir), baseDir: baseDir}
 }
 
 func (p *Plugin) Name() string     { return "bundles" }

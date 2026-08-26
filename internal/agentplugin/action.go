@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+
+	"wen/internal/i18n"
 )
 
 // actionRefresh 是设置页上的「重新握手」按钮。
@@ -38,8 +40,8 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 	detail := fmt.Sprintf("· %d server · %d tools", len(p.bundle.Servers), len(p.tools))
 	return []plugin.ActionDef{{
 		Key:         actionRefresh,
-		Label:       "重新握手",
-		Description: "连一遍这个包里的 MCP server，把它们提供的工具重新记下来。",
+		Label:       i18n.T(p.langOf(), "plugin.bundle.action.label", "重新握手"),
+		Description: i18n.T(p.langOf(), "plugin.bundle.action.desc", "连一遍这个包里的 MCP server，把它们提供的工具重新记下来。"),
 		Detail:      detail,
 	}}
 }
@@ -47,13 +49,13 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // StartAction 立即返回，握手在后台进行。
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	if key != actionRefresh {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	p.mu.RLock()
 	dir := p.stateDir
 	p.mu.RUnlock()
 	if dir == "" {
-		err := fmt.Errorf("这个插件还没初始化，先启用它再握手")
+		err := fmt.Errorf("%s", i18n.T(p.langOf(), "plugin.bundle.action.not_ready", "这个插件还没初始化，先启用它再握手"))
 		p.finishAction(p.beginAction(plugin.ActionState{}), plugin.ActionState{
 			Status: plugin.ActionError, Message: err.Error() + "。",
 		})
@@ -62,17 +64,17 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 
 	seq := p.beginAction(plugin.ActionState{
 		Status:  plugin.ActionPending,
-		Message: fmt.Sprintf("正在连接 %d 台 server …", len(p.bundle.Servers)),
+		Message: i18n.Tf(p.langOf(), "plugin.bundle.action.connecting", "正在连接 %d 台 server …", len(p.bundle.Servers)),
 	})
-	go p.runRefresh(seq, filepath.Join(dir, DataDirName))
+	go p.runRefresh(seq, p.langOf(), filepath.Join(dir, DataDirName))
 	return nil
 }
 
-func (p *Plugin) runRefresh(seq uint64, dataDir string) {
+func (p *Plugin) runRefresh(seq uint64, lang, dataDir string) {
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
 
-	tools, problems, err := Handshake(ctx, p.bundle, dataDir)
+	tools, problems, err := Handshake(ctx, lang, p.bundle, dataDir)
 	if err != nil {
 		p.finishAction(seq, plugin.ActionState{Status: plugin.ActionError, Message: err.Error()})
 		return
@@ -81,7 +83,7 @@ func (p *Plugin) runRefresh(seq uint64, dataDir string) {
 		if err := p.store.SaveTools(p.bundle.Manifest.Name, tools); err != nil {
 			p.finishAction(seq, plugin.ActionState{
 				Status:  plugin.ActionError,
-				Message: "工具清单没能存下来：" + err.Error(),
+				Message: i18n.Tf(lang, "plugin.bundle.action.save_failed", "工具清单没能存下来：%s", err.Error()),
 			})
 			return
 		}
@@ -89,21 +91,21 @@ func (p *Plugin) runRefresh(seq uint64, dataDir string) {
 
 	var b strings.Builder
 	if len(tools) == 0 {
-		b.WriteString("一件工具都没取到。\n")
+		b.WriteString(i18n.T(lang, "plugin.bundle.action.no_tools", "一件工具都没取到。\n"))
 	} else {
-		fmt.Fprintf(&b, "取到 %d 件工具：\n", len(tools))
+		b.WriteString(i18n.Tf(lang, "plugin.bundle.action.got", "取到 %d 件工具：\n", len(tools)))
 		for _, t := range tools {
 			fmt.Fprintf(&b, "· %s\n", t.Local)
 		}
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(&b, "\n有 %d 台没能连上：\n", len(problems))
+		b.WriteString(i18n.Tf(lang, "plugin.bundle.action.failed_n", "\n有 %d 台没能连上：\n", len(problems)))
 		for _, m := range problems {
 			fmt.Fprintf(&b, "· %s\n", m)
 		}
 	}
 	// 说清「记下来了」与「用得上了」不是一回事：插件在启动期注册，工具表这一轮不会变
-	b.WriteString("\n清单已存下。工具表在服务启动时定下，重启之后这些工具才会真的可用。")
+	b.WriteString(i18n.T(lang, "plugin.bundle.action.saved", "\n清单已存下。工具表在服务启动时定下，重启之后这些工具才会真的可用。"))
 
 	st := plugin.ActionState{Status: plugin.ActionDone, Message: strings.TrimRight(b.String(), "\n")}
 	if len(tools) == 0 && len(problems) > 0 {
@@ -114,7 +116,7 @@ func (p *Plugin) runRefresh(seq uint64, dataDir string) {
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionRefresh {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.act.mu.Lock()
 	defer p.act.mu.Unlock()

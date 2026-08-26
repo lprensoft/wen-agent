@@ -151,7 +151,7 @@ func (p *Plugin) handshake(b *agentplugin.Bundle) ([]agentplugin.ToolInfo, []str
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
 
-	tools, problems, err := agentplugin.Handshake(ctx, b, agentplugin.DataDir(p.baseDir, b.Manifest.Name))
+	tools, problems, err := agentplugin.Handshake(ctx, lang, b, agentplugin.DataDir(p.baseDir, b.Manifest.Name))
 	if err != nil {
 		return nil, append(problems, err.Error())
 	}

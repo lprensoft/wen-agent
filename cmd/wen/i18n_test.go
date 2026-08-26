@@ -74,7 +74,7 @@ func metadataStrings(t *testing.T) map[string]string {
 	//
 	// 掺在里面的运行时事实（技能目录、版本号、已装的包）已经挪进 ActionDef.Detail，
 	// 不进语言包也不该进这份清单。
-	for _, pl := range builtinPlugins(cfg, nil) {
+	for _, pl := range builtinPlugins("", cfg, nil) {
 		a, ok := pl.(plugin.Actionable)
 		if !ok {
 			continue

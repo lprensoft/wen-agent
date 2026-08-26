@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/skillroots"
 )
@@ -62,6 +63,7 @@ type Plugin struct {
 	// mu 保护下面这组：Init 可能在运行时被重复调用（改配置即重新 Init），
 	// 那时可能有 in-flight 的 Execute 正在读它们。
 	mu       sync.RWMutex
+	lang     string             // 进程语言，工具描述与回执据此取用
 	clients  map[string]*client // server 名 → 连接，懒启动
 	stateDir string             // 插件自己的持久化目录，PLUGIN_DATA 在它下面
 	maxBytes int
@@ -74,19 +76,29 @@ type Plugin struct {
 
 // NewPlugin 由一个已加载的插件包生成插件。store 用来读工具清单缓存，可为 nil
 // （那样这个包就只有技能组件可用，工具清单为空）。
-func NewPlugin(b *Bundle, store *Store) *Plugin {
-	p := &Plugin{name: PluginName(b.Manifest.Name), bundle: b, maxBytes: defaultMaxResultBytes, store: store}
+//
+// lang 在这里就要给：插件是在 Init 之前构造的，而这一步已经会产生要给人看的话
+// （工具清单读不出来那一条），构造完再补语言就晚了。
+func NewPlugin(lang string, b *Bundle, store *Store) *Plugin {
+	p := &Plugin{name: PluginName(b.Manifest.Name), lang: lang, bundle: b, maxBytes: defaultMaxResultBytes, store: store}
 	if store != nil {
 		tools, err := store.LoadTools(b.Manifest.Name)
 		if err != nil {
-			b.Problems = append(b.Problems, err.Error()+"，请重新握手一次")
+			b.Problems = append(b.Problems, i18n.Tf(lang, "plugin.bundle.problem.rehandshake", "%s，请重新握手一次", err.Error()))
 		}
 		p.tools = tools
 	}
 	return p
 }
 
-func (p *Plugin) Name() string     { return p.name }
+func (p *Plugin) Name() string { return p.name }
+
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 func (p *Plugin) Category() string { return CategoryExternal }
 
 // Description 直接用清单里的说明。
@@ -95,12 +107,13 @@ func (p *Plugin) Category() string { return CategoryExternal }
 // 展示文字查不到译文时回落原文——对外源插件来说原文往往就是英文，中文界面上因此
 // 会看到英文。这是来源如此，不是漏翻。
 func (p *Plugin) Description() string {
+	lang := p.langOf()
 	desc := strings.TrimSpace(p.bundle.Manifest.Description)
 	if desc == "" {
-		desc = "外源插件包（清单里没有写说明）"
+		desc = i18n.T(lang, "plugin.bundle.desc.none", "外源插件包（清单里没有写说明）")
 	}
 	if v := p.bundle.Manifest.Version; v != "" {
-		desc += "（" + v + "）"
+		desc += i18n.Tf(lang, "plugin.bundle.desc.version", "（%s）", v)
 	}
 	return desc
 }
@@ -137,13 +150,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	b := p.bundle
 	if b.SkillsDir == "" && !b.HasMCP {
-		return fmt.Errorf("这个插件包里既没有技能也没有 MCP 声明，没有可用的内容")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.bundle.err.empty", "这个插件包里既没有技能也没有 MCP 声明，没有可用的内容"))
 	}
 
 	var clients map[string]*client
 	if len(b.Servers) > 0 {
 		if ictx.StateDir == "" {
-			return fmt.Errorf("没有可用的持久化目录，无法为这个包里的 MCP server 准备数据目录")
+			return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.bundle.err.no_state_dir", "没有可用的持久化目录，无法为这个包里的 MCP server 准备数据目录"))
 		}
 		dataDir := filepath.Join(ictx.StateDir, DataDirName)
 		clients = make(map[string]*client, len(b.Servers))
@@ -151,13 +164,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 			resolved, err := s.Resolve(b.Root, dataDir)
 			if err != nil {
 				// 单台不可用不该拖垮整个包，其余的照常
-				log := fmt.Sprintf("mcp.json 里的 %s 用不了：%v", s.Name, err)
+				log := i18n.Tf(ictx.Lang, "plugin.bundle.err.bad_server", "mcp.json 里的 %s 用不了：%v", s.Name, err)
 				if !contains(b.Problems, log) {
 					b.Problems = append(b.Problems, log)
 				}
 				continue
 			}
-			clients[s.Name] = newClient(resolved)
+			clients[s.Name] = newClient(ictx.Lang, resolved)
 		}
 	}
 
@@ -165,6 +178,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	old := p.clients
 	p.clients = clients
+	p.lang = ictx.Lang
 	p.stateDir = ictx.StateDir
 	p.maxBytes = plugin.CfgInt(cfg, "max_result_bytes", defaultMaxResultBytes)
 	p.confirm = plugin.CfgBool(cfg, "confirm", false)
@@ -229,23 +243,24 @@ func (p *Plugin) StatusLines(lang string) []string {
 	b := p.bundle
 	var parts []string
 	if b.SkillsDir != "" {
-		parts = append(parts, "技能已并入技能清单")
+		parts = append(parts, i18n.T(lang, "plugin.bundle.status.skills", "技能已并入技能清单"))
 	}
 	switch {
 	case live > 0 && len(p.tools) > 0:
-		parts = append(parts, fmt.Sprintf("%d 台 server、%d 件工具", live, len(p.tools)))
+		parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.tools", "%d 台 server、%d 件工具", live, len(p.tools)))
 	case live > 0:
-		parts = append(parts, fmt.Sprintf("%d 台 server 尚未握手（工具清单为空）", live))
+		parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.pending", "%d 台 server 尚未握手（工具清单为空）", live))
 	case b.HasMCP:
-		parts = append(parts, "带 MCP 声明但没有可用的 server")
+		parts = append(parts, i18n.T(lang, "plugin.bundle.status.no_server", "带 MCP 声明但没有可用的 server"))
 	}
 	if n := len(b.Problems); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d 处需要留意", n))
+		parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.problems", "%d 处需要留意", n))
 	}
 	if len(parts) == 0 {
 		return nil
 	}
-	return []string{"🧩 " + b.Manifest.Name + "：" + strings.Join(parts, "，")}
+	return []string{i18n.Tf(lang, "plugin.bundle.status.line", "🧩 %s：%s", b.Manifest.Name,
+		strings.Join(parts, i18n.T(lang, "plugin.bundle.status.sep", "，")))}
 }
 
 // Problems 返回加载时记下的问题，供 CLI 展示。

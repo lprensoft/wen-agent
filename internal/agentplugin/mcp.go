@@ -64,13 +64,13 @@ type mcpServerJSON struct {
 // MCP 组件整个作废（返回 error），但技能组件照常；单台 server 的字段不对或传输方式
 // 不支持 → 只跳过那一台，其余照常（记一条 warning）。一台 server 写错不该让同一个
 // 包里另外两台一起失效。
-func ParseMCP(data []byte) ([]MCPServer, []string, error) {
+func ParseMCP(lang string, data []byte) ([]MCPServer, []string, error) {
 	return parseMCP(data, true)
 }
 
 // ParseMCPLoose 解析别家格式的 MCP 声明：内容形状一样，但没有 $schema 那一行
 // （那是 Agent Plugins 加的）。除此之外的校验一视同仁。
-func ParseMCPLoose(data []byte) ([]MCPServer, []string, error) {
+func ParseMCPLoose(lang string, data []byte) ([]MCPServer, []string, error) {
 	return parseMCP(data, false)
 }
 

@@ -267,7 +267,7 @@ var defaultOffPlugins = map[string]bool{
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdate.RestartFunc, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
-	builtins := builtinPlugins(cfg, restart)
+	builtins := builtinPlugins(ictx.Lang, cfg, restart)
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
 		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
@@ -275,7 +275,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
-	registerBundles(m, cfg.BaseDir)
+	registerBundles(m, ictx.Lang, cfg.BaseDir)
 	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
 	m.Resolve()
 	return m
@@ -288,14 +288,14 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 // 或在设置页上关掉（关掉的状态记在 plugins.state.json 里，与内置插件同一套）。
 //
 // 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
-func registerBundles(m *plugin.Manager, baseDir string) {
-	store := agentplugin.NewStore(baseDir)
+func registerBundles(m *plugin.Manager, lang, baseDir string) {
+	store := agentplugin.NewStore(lang, baseDir)
 	bundles, problems := store.List()
 	for _, p := range problems {
 		log.Printf("警告: 插件包 %s", p)
 	}
 	for _, b := range bundles {
-		p := agentplugin.NewPlugin(b, store)
+		p := agentplugin.NewPlugin(lang, b, store)
 		if err := m.RegisterExternal(p, plugin.PluginConfig{Enabled: true}); err != nil {
 			log.Printf("警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
 			continue
@@ -310,7 +310,7 @@ func registerBundles(m *plugin.Manager, baseDir string) {
 // 与 buildPlugins 分开，是为了让检查工具能拿到插件实例本身而不只是注册后的状态：
 // 操作（Actions）只在插件启用且初始化之后才经 Manager 暴露出来，而漏译的检查不该
 // 要求把消息通道、心跳与定时任务真的跑起来。
-func builtinPlugins(cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
+func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
 	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
@@ -354,6 +354,6 @@ func builtinPlugins(cfg *config.Config, restart selfupdate.RestartFunc) []plugin
 		// bundles 排在 self_update 旁边，理由相同：它不注入任何提示词，注册顺序对它
 		// 只剩展示含义。它得排在下面 registerBundles 注册的那些包**之前**，设置页上
 		// 「外源插件」这一节才会以「装一个新的」开头，而不是把入口埋在一堆卡片后面。
-		bundles.New(cfg.BaseDir),
+		bundles.New(lang, cfg.BaseDir),
 	}
 }

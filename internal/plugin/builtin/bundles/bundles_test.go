@@ -46,7 +46,7 @@ func writeBundle(t *testing.T, dir string) string {
 
 func newAt(t *testing.T, baseDir string) *Plugin {
 	t.Helper()
-	p := New(baseDir)
+	p := New("", baseDir)
 	if err := p.Init(plugin.InitContext{}, nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestRefreshWithNothingInstalled(t *testing.T) {
 
 // 没有可用的配置目录时拒绝启用，而不是退化到往进程当前目录里写。
 func TestInitWithoutBaseDir(t *testing.T) {
-	if err := New("").Init(plugin.InitContext{}, nil); err == nil {
+	if err := New("", "").Init(plugin.InitContext{}, nil); err == nil {
 		t.Fatal("没有配置目录却启用成功了")
 	}
 }

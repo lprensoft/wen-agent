@@ -37,7 +37,7 @@ func runPlugins(args []string) error {
 		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
 	adoptLang(cfg)
-	store := agentplugin.NewStore(cfg.BaseDir)
+	store := agentplugin.NewStore(uiLang, cfg.BaseDir)
 	if store.Dir() == "" {
 		return fmt.Errorf("%s", tr("cli.plugins.no_base_dir", "没有可用的配置目录，无法管理插件包"))
 	}
@@ -156,7 +156,7 @@ func installBundle(store *agentplugin.Store, src string, cfg *config.Config, noC
 
 // refreshBundle 连一遍包里的 MCP server，把工具清单重取一遍。
 func refreshBundle(store *agentplugin.Store, name string, cfg *config.Config) error {
-	b, err := agentplugin.Load(store.Path(name))
+	b, err := agentplugin.Load(uiLang, store.Path(name))
 	if err != nil {
 		return fmt.Errorf("%s：%w", name, err)
 	}
@@ -189,7 +189,7 @@ func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Conf
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	tools, problems, err := agentplugin.Handshake(ctx, b, agentplugin.DataDir(cfg.BaseDir, b.Manifest.Name))
+	tools, problems, err := agentplugin.Handshake(ctx, uiLang, b, agentplugin.DataDir(cfg.BaseDir, b.Manifest.Name))
 	if err != nil {
 		return err
 	}
@@ -219,7 +219,7 @@ func uninstallBundle(store *agentplugin.Store, name, baseDir string) error {
 }
 
 func bundleInfo(store *agentplugin.Store, name string) error {
-	b, err := agentplugin.Load(store.Path(name))
+	b, err := agentplugin.Load(uiLang, store.Path(name))
 	if err != nil {
 		return fmt.Errorf("%s：%w", name, err)
 	}

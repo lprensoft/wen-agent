@@ -16,7 +16,7 @@ const goodManifest = `{
 }`
 
 func TestParseManifestGood(t *testing.T) {
-	m, warnings, err := ParseManifest([]byte(goodManifest))
+	m, warnings, err := ParseManifest("", []byte(goodManifest))
 	if err != nil {
 		t.Fatalf("不该报错: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestParseManifestUnknownFieldIsWarningNotError(t *testing.T) {
 	  "name": "x",
 	  "futureThing": {"a": 1}
 	}`
-	m, warnings, err := ParseManifest([]byte(src))
+	m, warnings, err := ParseManifest("", []byte(src))
 	if err != nil {
 		t.Fatalf("未知字段不该让插件包报废: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestParseManifestRejects(t *testing.T) {
 		"不是 JSON": `not json at all`,
 	}
 	for name, src := range cases {
-		if _, _, err := ParseManifest([]byte(src)); err == nil {
+		if _, _, err := ParseManifest("", []byte(src)); err == nil {
 			t.Errorf("%s：应当拒绝但通过了", name)
 		}
 	}
@@ -75,7 +75,7 @@ func TestParseManifestRejects(t *testing.T) {
 func TestParseManifestExtensionsNotObject(t *testing.T) {
 	src := `{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 		"name": "x", "extensions": 12}`
-	_, warnings, err := ParseManifest([]byte(src))
+	_, warnings, err := ParseManifest("", []byte(src))
 	if err != nil {
 		t.Fatalf("extensions 不是对象不该让插件包报废: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestLoadComponents(t *testing.T) {
 		map[string]string{"summarize": "---\nname: summarize\ndescription: 摘要\n---\n正文"},
 		`{"mcpServers": {}}`)
 
-	b, err := Load(dir)
+	b, err := Load("", dir)
 	if err != nil {
 		t.Fatalf("加载失败: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestLoadComponents(t *testing.T) {
 
 func TestLoadWithoutManifest(t *testing.T) {
 	dir := writeBundle(t, filepath.Join(t.TempDir(), "pkg"), "", nil, "")
-	if _, err := Load(dir); err == nil {
+	if _, err := Load("", dir); err == nil {
 		t.Fatal("没有 plugin.json 的目录不该被当成插件包")
 	}
 }
@@ -156,7 +156,7 @@ func TestInstallFromDir(t *testing.T) {
 	src := writeBundle(t, filepath.Join(base, "src"), goodManifest,
 		map[string]string{"a": "---\nname: a\ndescription: d\n---\n"}, "")
 
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	b, err := store.Install(src)
 	if err != nil {
 		t.Fatalf("安装失败: %v", err)
@@ -189,7 +189,7 @@ func TestInstallFromDir(t *testing.T) {
 func TestInstallBadBundleLeavesNothing(t *testing.T) {
 	base := t.TempDir()
 	src := writeBundle(t, filepath.Join(base, "src"), `{"name": "x"}`, nil, "")
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	if _, err := store.Install(src); err == nil {
 		t.Fatal("清单不合法却装成功了")
 	}
@@ -206,7 +206,7 @@ func TestInstallFromZip(t *testing.T) {
 		"pdf-tools-main/plugin.json":       goodManifest,
 		"pdf-tools-main/skills/a/SKILL.md": "---\nname: a\ndescription: d\n---\n",
 	})
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	b, err := store.Install(zipPath)
 	if err != nil {
 		t.Fatalf("从 zip 安装失败: %v", err)
@@ -231,7 +231,7 @@ func TestInstallZipSlipRejected(t *testing.T) {
 		"plugin.json":    goodManifest,
 		"../escaped.txt": "gotcha",
 	})
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	if _, err := store.Install(zipPath); err == nil {
 		t.Fatal("越界的压缩包应当被拒绝")
 	}
