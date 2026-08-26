@@ -48,10 +48,10 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 				useMD = false
 				log.Printf("telegram_bot: MarkdownV2 解析失败（%s），对 %s 降级为纯文本（%v 后重新探测）",
 					ae.Description, chatID, mdOffTTL)
-				err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+				err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 			}
 		} else {
-			err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+			err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 		}
 
 		// 限流：官方给了等待秒数，等一次再试一次。其余错误不重试——
@@ -65,7 +65,7 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 				if useMD {
 					err = p.sendMessage(ctx, client, chatID, toMarkdownV2(p.langOf(), chunk), "MarkdownV2", replyTo)
 				} else {
-					err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+					err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 				}
 			}
 		}

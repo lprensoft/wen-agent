@@ -187,7 +187,7 @@ func (c *Core) cmdStatus(ctx context.Context, msg Message) {
 		return
 	}
 	// 措辞三处输出共用一份实现，见 internal/statustext
-	c.send(ctx, msg, statustext.Render(info, sid))
+	c.send(ctx, msg, statustext.Render(c.cfg.Lang, info, sid))
 }
 
 func (c *Core) cmdCompact(ctx context.Context, msg Message) {

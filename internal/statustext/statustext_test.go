@@ -39,7 +39,7 @@ func TestRenderMergesLines(t *testing.T) {
 	info.MessageCount = 12
 	info.MeasuredTokens = 45231
 
-	got := Render(info, "sess-1")
+	got := Render("", info, "sess-1")
 	lines := strings.Split(got, "\n")
 
 	if lines[0] != "📊 Wen Agent v0.1.3" {
@@ -73,7 +73,7 @@ func TestRenderEstimated(t *testing.T) {
 	info.MeasuredTokens = -1
 	info.EstTokens = 2048
 
-	line := strings.Split(Render(info, ""), "\n")[2]
+	line := strings.Split(Render("", info, ""), "\n")[2]
 	if line != "当前会话：3 条消息，约 2,048 / 1,000,000 tokens（占用 0.2%）" {
 		t.Errorf("估算行 = %q", line)
 	}
@@ -84,7 +84,7 @@ func TestRenderEstimated(t *testing.T) {
 
 // 无会话时仍要能看到上下文窗口——它是模型配置的一部分，不随会话消失。
 func TestRenderWithoutSession(t *testing.T) {
-	got := Render(base(), "")
+	got := Render("", base(), "")
 	if !strings.Contains(got, "当前会话：无（上下文窗口 1,000,000 tokens）") {
 		t.Errorf("无会话时的输出 = %q", got)
 	}
@@ -95,14 +95,14 @@ func TestRenderWithoutSession(t *testing.T) {
 
 func TestCacheLine(t *testing.T) {
 	info := base()
-	if CacheLine(info) != "" {
+	if CacheLine("", info) != "" {
 		t.Error("没用上缓存时应返回空串")
 	}
 	info.CachedTokens = 30000
 	info.CacheWriteTokens = 5000
 	info.PromptTokens = 45000
 	want := "提示词缓存：命中 30,000 / 写入 5,000 tokens（占本轮输入 66.7%）"
-	if got := CacheLine(info); got != want {
+	if got := CacheLine("", info); got != want {
 		t.Errorf("缓存行 = %q\nwant %q", got, want)
 	}
 }
@@ -111,7 +111,7 @@ func TestCacheLine(t *testing.T) {
 func TestRenderAppendsPluginLines(t *testing.T) {
 	info := base()
 	info.PluginLines = []string{"💓 心跳：…", "🧠 记忆：…"}
-	lines := strings.Split(Render(info, ""), "\n")
+	lines := strings.Split(Render("", info, ""), "\n")
 	if lines[len(lines)-2] != "💓 心跳：…" || lines[len(lines)-1] != "🧠 记忆：…" {
 		t.Errorf("插件行未按序附在末尾:\n%s", strings.Join(lines, "\n"))
 	}

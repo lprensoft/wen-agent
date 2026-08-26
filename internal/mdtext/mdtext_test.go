@@ -58,7 +58,7 @@ func TestToPlainText(t *testing.T) {
 		"x := \"**不要动我**\"",
 		"```",
 	}, "\n")
-	out := ToPlainText(md)
+	out := ToPlainText("", md)
 	for _, bad := range []string{"# ", "**加粗**", "*斜体*", "~~", "- 列表项", "> ", "](", "```"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("纯文本残留 %q:\n%s", bad, out)

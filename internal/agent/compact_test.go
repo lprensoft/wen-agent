@@ -259,7 +259,7 @@ func TestCompactPromptCarriesPluginRequirements(t *testing.T) {
 	}
 	prompt := provider.reqs[0].Messages[0].Content
 	if !strings.Contains(prompt, compactExtrasHeaderZH+"- 保留关系状态\n") {
-		t.Errorf("插件的要求应随补充段进入提示词:\n%s", truncateRunes(prompt, 400))
+		t.Errorf("插件的要求应随补充段进入提示词:\n%s", truncateRunes("", prompt, 400))
 	}
 	// 补充段在基础要求之后、历史正文之前：它要盖过基础要求，又不能混进对话内容
 	if strings.Index(prompt, compactExtrasHeaderZH) > strings.Index(prompt, compactHistoryHeaderZH) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -181,7 +182,7 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 		return fmt.Errorf("load session: %w", err)
 	}
 	if len(history) == 0 {
-		return fmt.Errorf("会话为空，无需压缩")
+		return fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty", "会话为空，无需压缩"))
 	}
 
 	groups := groupByTag(history)
@@ -267,7 +268,7 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 		return "", err
 	}
 	if strings.TrimSpace(summary.String()) == "" {
-		return "", fmt.Errorf("摘要生成失败：模型返回为空")
+		return "", fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
 	}
 	return summary.String(), nil
 }
@@ -301,20 +302,20 @@ func serializeHistory(lang string, msgs []session.StoredMessage) string {
 			}
 			for _, tc := range m.ToolCalls {
 				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.tool_call", "[助手调用工具 %s，参数 %s]\n"),
-					tc.Name, truncateRunes(string(tc.Arguments), 200))
+					tc.Name, truncateRunes(lang, string(tc.Arguments), 200))
 			}
 		case llm.RoleTool:
 			fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.tool_result", "[工具结果] %s\n"),
-				truncateRunes(m.Content, 500))
+				truncateRunes(lang, m.Content, 500))
 		}
 	}
 	return b.String()
 }
 
-func truncateRunes(s string, max int) string {
+func truncateRunes(lang, s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
 		return s
 	}
-	return string(r[:max]) + "…(截断)"
+	return string(r[:max]) + prompt.T(lang, "prompt.core.compact.truncated", "…(截断)")
 }

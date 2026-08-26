@@ -31,7 +31,7 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 	if useMD {
 		chunks = mdtext.ChunkMarkdown(text, chunkLimit)
 	} else {
-		chunks = mdtext.ChunkMarkdown(mdtext.ToPlainText(text), chunkLimit)
+		chunks = mdtext.ChunkMarkdown(mdtext.ToPlainText(p.langOf(), text), chunkLimit)
 	}
 
 	total := len(chunks)
@@ -52,7 +52,7 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 				p.disableMarkdown(openid)
 				useMD = false
 				log.Printf("qq_bot: 平台拒绝原生 markdown，对 %s 降级为纯文本（%v 后重新探测）", openid, mdOffTTL)
-				err = p.sendC2C(ctx, openid, mdtext.ToPlainText(chunk), msgID, seq)
+				err = p.sendC2C(ctx, openid, mdtext.ToPlainText(p.langOf(), chunk), msgID, seq)
 			}
 		} else {
 			err = p.sendC2C(ctx, openid, chunk, msgID, seq)

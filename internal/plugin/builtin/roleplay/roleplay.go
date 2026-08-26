@@ -157,7 +157,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.lang = ictx.Lang
 	// 三段共享一个预算，截断顺序 设定 > 我的信息 > 样例：设定是这个插件存在的
 	// 理由，样例没了角色仍然成立，只是味道淡
-	p.persona, p.userProfile, p.voiceSamples = clipTriple(persona, profile, samples, limit)
+	p.persona, p.userProfile, p.voiceSamples = clipTriple(ictx.Lang, persona, profile, samples, limit)
 	p.interaction = plugin.CfgBool(cfg, "interaction", defaultInteraction)
 	p.humanize = plugin.CfgBool(cfg, "humanize", defaultHumanize)
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)

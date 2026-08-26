@@ -28,12 +28,12 @@ func (t countingTool) Execute(context.Context, json.RawMessage) (string, error) 
 func TestGuardBlocksIdenticalCall(t *testing.T) {
 	var g toolGuard
 	call := llm.ToolCall{ID: "1", Name: "echo", Arguments: json.RawMessage(`{"a":1,"b":2}`)}
-	if msg := g.check(call); msg != "" {
+	if msg := g.check("", call); msg != "" {
 		t.Fatalf("第一次调用不该被拦: %s", msg)
 	}
 	// 同一次调用换个键序、加些空白，仍是同一次调用
 	same := llm.ToolCall{ID: "2", Name: "echo", Arguments: json.RawMessage(`{ "b": 2, "a": 1 }`)}
-	msg := g.check(same)
+	msg := g.check("", same)
 	if msg == "" {
 		t.Fatal("同名同参的重复调用该被拦下")
 	}
@@ -42,7 +42,7 @@ func TestGuardBlocksIdenticalCall(t *testing.T) {
 	}
 	// 参数不同就该放行：绕圈的那种每次都会变一点，靠下面的次数上限管
 	other := llm.ToolCall{ID: "3", Name: "echo", Arguments: json.RawMessage(`{"a":1,"b":3}`)}
-	if msg := g.check(other); msg != "" {
+	if msg := g.check("", other); msg != "" {
 		t.Fatalf("参数不同不该被拦: %s", msg)
 	}
 }
@@ -51,16 +51,16 @@ func TestGuardBlocksTooManySameTool(t *testing.T) {
 	var g toolGuard
 	for i := range maxSameTool {
 		call := llm.ToolCall{Name: "echo", Arguments: json.RawMessage(`{"n":` + string(rune('0'+i)) + `}`)}
-		if msg := g.check(call); msg != "" {
+		if msg := g.check("", call); msg != "" {
 			t.Fatalf("第 %d 次就被拦了: %s", i+1, msg)
 		}
 	}
 	over := llm.ToolCall{Name: "echo", Arguments: json.RawMessage(`{"n":"x"}`)}
-	if msg := g.check(over); msg == "" {
+	if msg := g.check("", over); msg == "" {
 		t.Fatalf("同一工具第 %d 次调用该被拦下", maxSameTool+1)
 	}
 	// 另一个工具不受影响：上限是按工具名各算各的
-	if msg := g.check(llm.ToolCall{Name: "other", Arguments: json.RawMessage(`{}`)}); msg != "" {
+	if msg := g.check("", llm.ToolCall{Name: "other", Arguments: json.RawMessage(`{}`)}); msg != "" {
 		t.Fatalf("别的工具不该受牵连: %s", msg)
 	}
 }

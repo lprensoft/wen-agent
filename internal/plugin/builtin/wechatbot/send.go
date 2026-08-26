@@ -28,7 +28,7 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 	}
 
 	if format == formatPlain {
-		text = mdtext.ToPlainText(text)
+		text = mdtext.ToPlainText(p.langOf(), text)
 	}
 	chunks := mdtext.ChunkMarkdown(text, chunkLimit)
 	total := len(chunks)

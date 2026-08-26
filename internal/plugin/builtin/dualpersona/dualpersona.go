@@ -160,8 +160,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
 	// 两段共享一个预算，设定优先：样例没了里人格仍然成立，只是味道淡
-	p.innerPersona = textclip.Clip(persona, limit)
-	p.innerSamples = textclip.ClipSegments(samples, limit-len(p.innerPersona))
+	p.innerPersona = textclip.Clip(ictx.Lang, persona, limit)
+	p.innerSamples = textclip.ClipSegments(ictx.Lang, samples, limit-len(p.innerPersona))
 	p.toInner = parseKeywords(plugin.CfgString(cfg, "to_inner", ""))
 	p.toOuter = parseKeywords(plugin.CfgString(cfg, "to_outer", ""))
 	p.matchMode = plugin.CfgString(cfg, "match_mode", defaultMatch)

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
@@ -377,7 +378,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		for _, call := range r.toolCalls {
 			emit(Event{Type: EventToolStart, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 			// 护栏先看一眼：重复的调用不执行，把「已经做完了」当场告诉模型
-			result := guard.check(call)
+			result := guard.check(a.opts.Lang, call)
 			if result == "" {
 				result = a.execute(ctx, call)
 			} else {
@@ -398,7 +399,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		// 日程）据此记一次失败并按自己的节奏重来，两边都比返回一句空话强。
 		if guard.exhausted() {
 			log.Printf("agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
-			return "", errToolLoop
+			return "", toolLoopError(a.opts.Lang)
 		}
 	}
 	return "", fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
@@ -490,7 +491,9 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 		// 但那是磁盘故障级别的场景，一致性让位于把问题报出来。
 		return "", false
 	}
-	if err := a.AppendNotice(ctx, sessionID, "本轮模型调用失败，回复由插件转译生成。原始错误："+cause.Error()); err != nil {
+	note := i18n.Tf(a.opts.Lang, "agent.notice.failure_translated",
+		"本轮模型调用失败，回复由插件转译生成。原始错误：%s", cause.Error())
+	if err := a.AppendNotice(ctx, sessionID, note); err != nil {
 		log.Printf("写失败转译注记失败: %v", err)
 	}
 	return text, true
