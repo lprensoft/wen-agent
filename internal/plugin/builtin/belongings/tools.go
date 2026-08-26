@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -136,7 +137,7 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	log.Printf("belongings: 更新%s（%s）", res.Container, strings.TrimSpace(a.Reason))
+	i18n.Logf(t.p.langOf(), "log.belongings.updated", "belongings: 更新%s（%s）", res.Container, strings.TrimSpace(a.Reason))
 
 	// 回显本次变化：本轮的清单注入在对话开始时就已定型，回执让变化立刻可见，
 	// 避免同一轮里重复更新。

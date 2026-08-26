@@ -384,7 +384,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 再装一次等于把刚攒的几轮退回旧值
 	if !p.loaded {
 		p.loaded = true
-		if windows, marks := loadWindowState(p.windowDir); windows != nil {
+		if windows, marks := loadWindowState(ictx.Lang, p.windowDir); windows != nil {
 			p.windows, p.lastSweep, p.lastTimeline = windows, marks.lastSweep, marks.lastTimeline
 		}
 	}

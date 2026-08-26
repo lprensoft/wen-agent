@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
+
+	"wen/internal/i18n"
 
 	"github.com/gorilla/websocket"
 )
@@ -53,7 +54,7 @@ func (p *Plugin) gatewayLoop(ctx context.Context) {
 		}
 		wait := backoff[min(attempt, len(backoff)-1)]
 		attempt++
-		log.Printf("qq_bot: 网关连接断开（%v），%v 后重连", err, wait)
+		i18n.Logf(p.langOf(), "log.qq.gateway_disconnected", "qq_bot: 网关连接断开（%v），%v 后重连", err, wait)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -178,9 +179,9 @@ func (p *Plugin) handleDispatch(ctx context.Context, frame wsFrame, sessionID *s
 		}
 		_ = json.Unmarshal(frame.D, &d)
 		*sessionID = d.SessionID
-		log.Printf("qq_bot: 网关已就绪（%s）", d.User.Username)
+		i18n.Logf(p.langOf(), "log.qq.gateway_ready", "qq_bot: 网关已就绪（%s）", d.User.Username)
 	case "RESUMED":
-		log.Printf("qq_bot: 网关连接已恢复")
+		i18n.Logf(p.langOf(), "log.qq.gateway_restored", "qq_bot: 网关连接已恢复")
 	case "C2C_MESSAGE_CREATE":
 		var d struct {
 			ID      string `json:"id"`
@@ -190,7 +191,7 @@ func (p *Plugin) handleDispatch(ctx context.Context, frame wsFrame, sessionID *s
 			} `json:"author"`
 		}
 		if err := json.Unmarshal(frame.D, &d); err != nil {
-			log.Printf("qq_bot: 消息事件解析失败: %v", err)
+			i18n.Logf(p.langOf(), "log.qq.event_parse_failed", "qq_bot: 消息事件解析失败: %v", err)
 			return
 		}
 		p.handleInbound(ctx, inbound{openid: d.Author.UserOpenID, msgID: d.ID, content: d.Content})

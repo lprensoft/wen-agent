@@ -3,9 +3,10 @@ package heartbeat
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/cue"
 	"wen/internal/plugin"
@@ -102,7 +103,7 @@ func (p *Plugin) beat(ctx context.Context) {
 
 	sid, lastActive, err := p.pickSession()
 	if err != nil {
-		log.Printf("heartbeat: 找不到可用会话，本次心跳跳过: %v", err)
+		i18n.Logf(p.langOf(), "log.heartbeat.no_session", "heartbeat: 找不到可用会话，本次心跳跳过: %v", err)
 		return
 	}
 	tctx, cancel := context.WithTimeout(ctx, beatTimeout)
@@ -118,9 +119,9 @@ func (p *Plugin) beat(ctx context.Context) {
 			cue.Post(c)
 		}
 		if errors.Is(err, plugin.ErrSessionBusy) {
-			log.Printf("heartbeat: 会话 %s 忙，本次心跳跳过", sid)
+			i18n.Logf(p.langOf(), "log.heartbeat.session_busy", "heartbeat: 会话 %s 忙，本次心跳跳过", sid)
 		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
-			log.Printf("heartbeat: 心跳轮次失败: %v", err)
+			i18n.Logf(p.langOf(), "log.heartbeat.turn_failed", "heartbeat: 心跳轮次失败: %v", err)
 		}
 	}
 }
@@ -221,7 +222,7 @@ func (p *Plugin) maybeDecay() {
 	// 写盘放在锁外：持锁写会自锁，而为了绕开自锁另起 goroutine
 	// 就会让这次写脱离循环的生命周期（Stop 等不到它）
 	persistState(dir, st)
-	log.Printf("heartbeat: 无人聊天，心跳放缓至 %v", next)
+	i18n.Logf(p.langOf(), "log.heartbeat.decayed", "heartbeat: 无人聊天，心跳放缓至 %v", next)
 }
 
 // OnTurnEnd 观察每轮对话：真人交互的轮次刷新活跃时间并重置心跳时钟。

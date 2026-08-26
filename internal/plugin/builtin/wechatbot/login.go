@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +173,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 
 	fail := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
-		log.Printf("wechat_bot: 绑定失败: %s", msg)
+		i18n.Logf(lang, "log.wechat.bind_failed", "wechat_bot: 绑定失败: %s", msg)
 		p.setBind(gen, plugin.ActionError,
 			i18n.Tf(lang, "plugin.wechat_bot.bind.failed", "绑定失败：%s", msg), nil, "")
 	}
@@ -253,7 +252,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 			p.mu.Lock()
 			p.creds = creds
 			p.mu.Unlock()
-			log.Printf("wechat_bot: 绑定成功，bot_id=%s 绑定人=%s", creds.BotID, creds.BinderUserID)
+			i18n.Logf(lang, "log.wechat.bind_ok", "wechat_bot: 绑定成功，bot_id=%s 绑定人=%s", creds.BotID, creds.BinderUserID)
 			p.setBind(gen, plugin.ActionDone,
 				i18n.Tf(lang, "plugin.wechat_bot.bind.done",
 					"✅ 绑定成功！绑定人 %s 已自动放行，现在可以在微信里和助手对话了。", creds.BinderUserID), nil, "")

@@ -3,7 +3,6 @@ package larkbot
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"regexp"
 	"strings"
 
@@ -43,9 +42,9 @@ func (p *Plugin) runWS(ctx context.Context, appID, appSecret, base string) {
 
 	go func() {
 		defer p.wg.Done()
-		log.Printf("%s: 正在建立长连接（%s）", p.Name(), base)
+		i18n.Logf(p.langOf(), "log.lark.connecting", "%s: 正在建立长连接（%s）", p.Name(), base)
 		if err := cli.Start(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
+			i18n.Logf(p.langOf(), "log.lark.disconnected", "%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
 				"并订阅了「接收消息」事件、开通了 im:message 与 im:message:send_as_bot 权限",
 				p.Name(), err)
 		}
@@ -75,7 +74,7 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		return
 	}
 	if ct := deref(msg.ChatType); ct != "p2p" {
-		log.Printf("%s: 忽略非单聊消息（chat_type=%s，仅支持单聊）", p.Name(), ct)
+		i18n.Logf(p.langOf(), "log.lark.group_ignored", "%s: 忽略非单聊消息（chat_type=%s，仅支持单聊）", p.Name(), ct)
 		return
 	}
 

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -128,7 +129,7 @@ func (p *Plugin) appendDayBuf(s settings, tag string, ev plugin.TurnEndEvent) {
 		text = text[nl+1:]
 	}
 	f.Days[idx].Text = text
-	saveDayBuf(dir, f)
+	saveDayBuf(s.lang, dir, f)
 }
 
 func loadDayBuf(dir string) dayBufFile {
@@ -144,7 +145,7 @@ func loadDayBuf(dir string) dayBufFile {
 }
 
 // saveDayBuf 落盘缓冲。0600：内容是对话原文。失败只影响时间线的完整性，不打断对话。
-func saveDayBuf(dir string, f dayBufFile) {
+func saveDayBuf(lang, dir string, f dayBufFile) {
 	if len(f.Days) == 0 {
 		_ = os.Remove(filepath.Join(dir, dayBufFileName))
 		return
@@ -157,7 +158,7 @@ func saveDayBuf(dir string, f dayBufFile) {
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, dayBufFileName), raw, 0o600); err != nil {
-		log.Printf("时间线：当日缓冲写入失败：%v", err)
+		i18n.Logf(lang, "log.memory.daybuf_write_failed", "时间线：当日缓冲写入失败：%v", err)
 	}
 }
 
@@ -198,7 +199,7 @@ func (p *Plugin) runTimeline(s settings) {
 			cancel()
 			if err != nil {
 				if s.ctx.Err() == nil {
-					log.Printf("时间线：收束 %s 失败，下次日切再试：%v", day.Date, err)
+					i18n.Logf(s.lang, "log.memory.timeline_close_failed", "时间线：收束 %s 失败，下次日切再试：%v", day.Date, err)
 				}
 				continue // 缓冲留着，明天的收束会连它一起处理
 			}
@@ -206,7 +207,7 @@ func (p *Plugin) runTimeline(s settings) {
 			if summary != "" && !strings.EqualFold(summary, "SKIP") {
 				e := timelineEntry{Date: day.Date, Summary: summary, Facts: p.factsFor(day.Date)}
 				p.appendTimeline(dir, e)
-				log.Printf("时间线：%s | %s", day.Date, renderEntry(s.lang, e))
+				i18n.Logf(s.lang, "log.memory.timeline_entry", "时间线：%s | %s", day.Date, renderEntry(s.lang, e))
 			}
 			p.dropDay(dir, day.Date)
 		}
@@ -225,7 +226,7 @@ func (p *Plugin) dropDay(dir, date string) {
 		}
 	}
 	f.Days = out
-	saveDayBuf(dir, f)
+	saveDayBuf(p.langOf(), dir, f)
 }
 
 // appendTimeline 追加一行时间线并按日期排好，超出上限丢最早的。
@@ -246,7 +247,7 @@ func (p *Plugin) appendTimeline(dir string, e timelineEntry) {
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600); err != nil {
-		log.Printf("时间线：写入失败：%v", err)
+		i18n.Logf(p.langOf(), "log.memory.timeline_write_failed", "时间线：写入失败：%v", err)
 	}
 }
 

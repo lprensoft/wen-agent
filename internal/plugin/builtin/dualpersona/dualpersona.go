@@ -16,9 +16,10 @@ package dualpersona
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
+
+	"wen/internal/i18n"
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
@@ -274,11 +275,11 @@ func (p *Plugin) DecideScope(_ context.Context, ev plugin.TurnEvent) (plugin.Sco
 	cur := s.store.personaFor(ev.SessionID)
 	next := switchTo(cur, ev.UserInput, s)
 	if next != cur {
-		log.Printf("人格切换：%s → %s（会话 %s）", cur, next, ev.SessionID)
+		i18n.Logf(p.lang, "log.dualpersona.switched", "人格切换：%s → %s（会话 %s）", cur, next, ev.SessionID)
 	}
 	// 每轮都写：状态文件是权威来源，历史推导不可靠（压缩会重排标签顺序）
 	if err := s.store.remember(ev.SessionID, next); err != nil {
-		log.Printf("保存人格状态失败，重启后可能回到表人格: %v", err)
+		i18n.Logf(p.lang, "log.dualpersona.save_failed", "保存人格状态失败，重启后可能回到表人格: %v", err)
 	}
 	return scopeFor(next), nil
 }

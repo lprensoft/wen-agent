@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
@@ -155,7 +154,7 @@ func (p *Plugin) persistWindows(dir string, windows map[windowKey]*window, marks
 		return // 已经写过更新的快照了，这一份是旧的
 	}
 	p.savedSeq = seq
-	saveWindowState(dir, windows, marks)
+	saveWindowState(p.langOf(), dir, windows, marks)
 }
 
 // snapshotWindowsLocked 深拷贝当前缓冲，供锁外写盘使用。
@@ -241,14 +240,14 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 	res, err := p.extractMemories(ctx, s, complete, w.text(s.lang, turnExtractBytes))
 	if err != nil {
 		if ctx.Err() == nil { // 取消与超时是正常收尾，不值得记一行错误
-			log.Printf("记忆提炼：本轮失败：%v", err)
+			i18n.Logf(s.lang, "log.memory.extract_failed", "记忆提炼：本轮失败：%v", err)
 		}
 		return
 	}
 	if res.empty() {
 		return
 	}
-	log.Printf("记忆提炼：新增/修订 %d 条（%s），另刷新 %d 条的最后提及时间",
+	i18n.Logf(s.lang, "log.memory.extract_saved", "记忆提炼：新增/修订 %d 条（%s），另刷新 %d 条的最后提及时间",
 		len(res.saved)+len(res.revised), strings.Join(res.names(s.lang), "、"), res.touched)
 	p.postNotice(ctx, s.lang, key.session, res)
 }
@@ -276,7 +275,7 @@ func (p *Plugin) postNotice(ctx context.Context, lang, sessionID string, res ext
 	text := i18n.Tf(lang, "plugin.memory.notice.line", "🧠 记忆提炼：%s",
 		strings.Join(parts, i18n.T(lang, "plugin.memory.notice.sep", "，")))
 	if err := notice(ctx, sessionID, text); err != nil {
-		log.Printf("记忆提炼：注记写入失败：%v", err)
+		i18n.Logf(lang, "log.memory.notice_failed", "记忆提炼：注记写入失败：%v", err)
 	}
 }
 

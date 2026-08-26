@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/mdtext"
 )
@@ -39,7 +40,7 @@ func (p *Plugin) send(ctx context.Context, openID, text, _ string) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("%s: 发送失败: %v", p.Name(), err)
+			i18n.Logf(p.langOf(), "log.lark.send_failed", "%s: 发送失败: %v", p.Name(), err)
 		}
 	}
 }

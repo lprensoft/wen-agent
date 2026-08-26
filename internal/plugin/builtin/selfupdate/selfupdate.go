@@ -14,7 +14,6 @@ package selfupdate
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -184,7 +183,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.autoCheck = autoCheck
 	p.interval = time.Duration(hours) * time.Hour
 	p.autoRestart = autoRestart
-	p.st = loadState(ictx.StateDir)
+	p.st = loadState(ictx.Lang, ictx.StateDir)
 	p.mu.Unlock()
 
 	// 上一次更新留下的残留（Windows 上运行中删不掉的旧映像、下载用的工作目录）
@@ -244,7 +243,7 @@ func (p *Plugin) reconcile() {
 
 	if msg != "" {
 		p.setAction(plugin.ActionState{Status: plugin.ActionDone, Message: msg})
-		log.Printf("self_update: 已更新到 %s（原 %s）", pend.To, pend.From)
+		i18n.Logf(p.langOf(), "log.selfupdate.updated", "self_update: 已更新到 %s（原 %s）", pend.To, pend.From)
 		return
 	}
 	// 文件换过了，跑起来的却还是旧版本：多半是重启没到位，或者程序被从别处启动。
@@ -253,7 +252,7 @@ func (p *Plugin) reconcile() {
 		"上次已把程序更新到 %s，但当前运行的仍是 %s。重启程序即可用上新版。",
 		pend.To, version.Version)
 	p.setAction(plugin.ActionState{Status: plugin.ActionError, Message: warn})
-	log.Printf("self_update: %s", warn)
+	i18n.Logf(p.langOf(), "log.selfupdate.warning", "self_update: %s", warn)
 }
 
 // snapshot 是一次调用期间使用的配置与状态快照。

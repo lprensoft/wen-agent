@@ -3,11 +3,12 @@ package wechatbot
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"wen/internal/i18n"
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
@@ -38,7 +39,7 @@ func loadTokens(stateDir string) (*tokenStore, error) {
 	return s, nil
 }
 
-func (s *tokenStore) remember(userID, token string) {
+func (s *tokenStore) remember(lang, userID, token string) {
 	if userID == "" || token == "" {
 		return
 	}
@@ -49,17 +50,17 @@ func (s *tokenStore) remember(userID, token string) {
 	}
 	s.m[userID] = token
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		log.Printf("wechat_bot: 保存推送票据失败: %v", err)
+		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
 		return
 	}
 	raw, _ := json.MarshalIndent(s.m, "", "  ")
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("wechat_bot: 保存推送票据失败: %v", err)
+		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		log.Printf("wechat_bot: 保存推送票据失败: %v", err)
+		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
 	}
 }
 
@@ -144,7 +145,7 @@ func pushWith(ctx context.Context, p *Plugin, tokens *tokenStore, userID, text s
 	token := tokens.get(userID)
 	if token == "" {
 		// 该用户还没发过消息（或票据文件丢失），没有可用的 context_token
-		log.Printf("wechat_bot: 无法把消息推给 %s：缺少 context_token（对方先发一条消息后即可）", userID)
+		i18n.Logf(p.langOf(), "log.wechat.no_context_token", "wechat_bot: 无法把消息推给 %s：缺少 context_token（对方先发一条消息后即可）", userID)
 		return false
 	}
 	p.send(ctx, userID, text, token)

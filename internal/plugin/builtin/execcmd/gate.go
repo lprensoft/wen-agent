@@ -3,7 +3,8 @@ package execcmd
 import (
 	"context"
 	"fmt"
-	"log"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -18,7 +19,7 @@ func (t *tool) gate(ctx context.Context, s settings, command string) error {
 	case verdictAllow:
 		return nil
 	case verdictDeny:
-		log.Printf("exec_command 拒绝执行（%s）: %s", reason, command)
+		i18n.Logf(s.lang, "log.execcmd.blocked", "exec_command 拒绝执行（%s）: %s", reason, command)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.exec_command.result.denied",
 			"这条命令被拒绝执行：%s。这类操作不可撤销且影响整台机器，请改用范围更小的做法，不要尝试绕过"), reason)
 	}
@@ -28,7 +29,7 @@ func (t *tool) gate(ctx context.Context, s settings, command string) error {
 		// 没有可交互的界面时一律拒绝，不给「无人值守就放行」的开关：
 		// 拿不到答复不等于得到许可。确实要在无人值守下跑破坏性命令的，
 		// 把 guard 关掉——那是一个明确的、看得见的选择，而不是一个容易被忘记的例外。
-		log.Printf("exec_command 无人值守拒绝（%s）: %s", reason, command)
+		i18n.Logf(s.lang, "log.execcmd.unattended", "exec_command 无人值守拒绝（%s）: %s", reason, command)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.exec_command.result.no_ui",
 			"这条命令需要对方确认（%s），但当前没有可交互的界面，已按拒绝处理。"+
 				"请改用不需要确认的做法，或告知对方手动执行"), reason)
@@ -47,12 +48,12 @@ func (t *tool) gate(ctx context.Context, s settings, command string) error {
 		Reason: reason,
 	})
 	if err != nil {
-		log.Printf("exec_command 确认未完成（%v）: %s", err, command)
+		i18n.Logf(s.lang, "log.execcmd.no_answer", "exec_command 确认未完成（%v）: %s", err, command)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.exec_command.result.no_answer",
 			"这条命令需要对方确认（%s），但没有得到答复（%v），已按拒绝处理"), reason, err)
 	}
 	if !approved {
-		log.Printf("exec_command 用户拒绝（%s）: %s", reason, command)
+		i18n.Logf(s.lang, "log.execcmd.refused", "exec_command 用户拒绝（%s）: %s", reason, command)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.exec_command.result.refused",
 			"对方拒绝执行这条命令（%s）。请说明你打算做什么并另找办法，不要改写命令重试"), reason)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"wen/internal/i18n"
@@ -32,7 +31,7 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	today := s.today(p.now()).Format(dateLayout)
 	pl, err := st.LoadPlan()
 	if err != nil {
-		log.Printf("agenda: 读取日程表失败: %v", err)
+		i18n.Logf(p.langOf(), "log.agenda.read_plan_failed", "agenda: 读取日程表失败: %v", err)
 		return
 	}
 	if pl.Date == today {
@@ -83,7 +82,7 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 
 	cs, err := st.LoadCommitments()
 	if err != nil {
-		log.Printf("agenda: 读取约定失败: %v", err)
+		i18n.Logf(p.langOf(), "log.agenda.read_commitments_failed", "agenda: 读取约定失败: %v", err)
 		return
 	}
 	var todayCs []Commitment
@@ -110,7 +109,7 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 			return
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if attempt+1 >= defBusyRetryMax {
-				log.Printf("agenda: 会话 %s 持续繁忙，本次规划放弃", sid)
+				i18n.Logf(p.langOf(), "log.agenda.plan_session_busy", "agenda: 会话 %s 持续繁忙，本次规划放弃", sid)
 				return
 			}
 			select {
@@ -122,7 +121,7 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 			if ctx.Err() != nil {
 				return // 插件停止，不记失败
 			}
-			log.Printf("agenda: 规划轮次失败: %v", err)
+			i18n.Logf(p.langOf(), "log.agenda.plan_turn_failed", "agenda: 规划轮次失败: %v", err)
 			p.countAttempt(nctx, st, sid, today, "规划轮次失败")
 			return
 		}
@@ -139,7 +138,7 @@ func (p *Plugin) countAttempt(ctx context.Context, st *Store, sid, today, why st
 		return true, nil
 	})
 	if err != nil {
-		log.Printf("agenda: 记录规划尝试失败: %v", err)
+		i18n.Logf(p.langOf(), "log.agenda.count_attempt_failed", "agenda: 记录规划尝试失败: %v", err)
 		return
 	}
 	if pl.Attempts.Count >= defMaxPlanAttempts {
@@ -167,7 +166,7 @@ func (p *Plugin) pruneCommitments(ctx context.Context, st *Store, sid, today str
 		return changed, nil
 	})
 	if err != nil {
-		log.Printf("agenda: 清理过期约定失败: %v", err)
+		i18n.Logf(p.langOf(), "log.agenda.prune_failed", "agenda: 清理过期约定失败: %v", err)
 		return
 	}
 	for _, c := range dropped {
@@ -180,10 +179,10 @@ func (p *Plugin) pruneCommitments(ctx context.Context, st *Store, sid, today str
 func (p *Plugin) postNotice(ctx context.Context, sid, text string) {
 	s := p.snapshot()
 	if s.notice == nil || sid == "" {
-		log.Printf("agenda: %s", text)
+		i18n.Logf(p.langOf(), "log.agenda.notice", "agenda: %s", text)
 		return
 	}
 	if err := s.notice(ctx, sid, text); err != nil {
-		log.Printf("agenda: 写会话注记失败（%s）: %v", text, err)
+		i18n.Logf(p.langOf(), "log.agenda.notice_failed", "agenda: 写会话注记失败（%s）: %v", text, err)
 	}
 }

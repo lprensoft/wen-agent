@@ -18,7 +18,6 @@ package weather
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -491,7 +490,7 @@ func (p *Plugin) noteError(loc string, err error) {
 	o.lastErr = msg
 	p.dataMu.Unlock()
 	if !repeated {
-		log.Printf("weather: %s: %s", loc, msg)
+		i18n.Logf(p.langOf(), "log.weather.error", "weather: %s: %s", loc, msg)
 	}
 }
 

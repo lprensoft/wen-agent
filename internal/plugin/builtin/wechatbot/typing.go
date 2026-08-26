@@ -3,7 +3,8 @@ package wechatbot
 import (
 	"context"
 	"encoding/json"
-	"log"
+
+	"wen/internal/i18n"
 )
 
 // 「正在输入」状态是锦上添花：任何失败都静默降级，绝不影响消息链路。
@@ -74,7 +75,7 @@ func (p *Plugin) fetchTypingTicket(ctx context.Context, creds credentials, userI
 		return "", err
 	}
 	if resp.Ret != 0 {
-		log.Printf("wechat_bot: 获取输入状态票据失败 ret=%d（忽略）", resp.Ret)
+		i18n.Logf(p.langOf(), "log.wechat.typing_ticket_failed", "wechat_bot: 获取输入状态票据失败 ret=%d（忽略）", resp.Ret)
 		return "", nil
 	}
 	return resp.TypingTicket, nil

@@ -3,7 +3,6 @@ package selfupdate
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -127,7 +126,7 @@ func (p *Plugin) run(seq uint64, install bool, s snapshot) {
 func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel updater.Release) {
 	fail := func(err error) {
 		p.finish(seq, plugin.ActionState{Status: plugin.ActionError, Message: err.Error()})
-		log.Printf("self_update: 更新到 %s 失败: %v", rel.Tag, err)
+		i18n.Logf(p.langOf(), "log.selfupdate.install_failed", "self_update: 更新到 %s 失败: %v", rel.Tag, err)
 	}
 
 	// 先确认安装目录可写：装在系统目录或由包管理器装的，这一步就该停，
@@ -177,7 +176,7 @@ func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel update
 	p.st.Pending = &pendingUpdate{From: from, To: rel.Tag, At: p.now()}
 	p.saveLocked()
 	p.mu.Unlock()
-	log.Printf("self_update: 已把程序文件替换为 %s（原 %s）", rel.Tag, from)
+	i18n.Logf(p.langOf(), "log.selfupdate.replaced", "self_update: 已把程序文件替换为 %s（原 %s）", rel.Tag, from)
 
 	if !s.autoRestart || s.restart == nil {
 		why := i18n.T(s.lang, "plugin.self_update.why.disabled", "「更新后自动重启」是关的")

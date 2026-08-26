@@ -2,8 +2,9 @@ package memory
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // 本文件是记忆的逐步遗忘。只作用于保存时被标记为 Decay 的条目，未标记的记忆永久
@@ -66,6 +67,6 @@ func (p *Plugin) runSweep(s settings) {
 		return
 	}
 	// 只记条数不记标题：这行会进进程日志，而各可见域的记忆标题不该被写平到一处
-	log.Printf("记忆淡忘：%d 条只剩要点，%d 条移出记忆库（可在记忆库的 %s 目录找回）",
+	i18n.Logf(s.lang, "log.memory.decayed", "记忆淡忘：%d 条只剩要点，%d 条移出记忆库（可在记忆库的 %s 目录找回）",
 		blurred, forgotten, forgottenDir)
 }

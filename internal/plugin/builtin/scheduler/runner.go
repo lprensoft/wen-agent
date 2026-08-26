@@ -3,8 +3,9 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -86,7 +87,7 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 	defer p.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("scheduler: 任务 %s 执行时 panic（已隔离）: %v", t.ID, r)
+			i18n.Logf(p.langOf(), "log.scheduler.task_panic", "scheduler: 任务 %s 执行时 panic（已隔离）: %v", t.ID, r)
 			p.setNote(t, prompt.T(p.langOf(), "prompt.scheduler.note.panic", "执行异常"))
 		}
 	}()
@@ -100,7 +101,7 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 		sid, err := p.pickSession()
 		if err != nil {
 			cancel()
-			log.Printf("scheduler: 任务 %s 找不到可用会话: %v", t.ID, err)
+			i18n.Logf(p.langOf(), "log.scheduler.no_session", "scheduler: 任务 %s 找不到可用会话: %v", t.ID, err)
 			p.setNote(t, prompt.T(lang, "prompt.scheduler.note.no_session", "找不到可用会话"))
 			return
 		}
@@ -113,12 +114,12 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 			return
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if t.Type != typeOnce {
-				log.Printf("scheduler: 会话忙，周期任务 %s 跳过本次", t.ID)
+				i18n.Logf(p.langOf(), "log.scheduler.session_busy", "scheduler: 会话忙，周期任务 %s 跳过本次", t.ID)
 				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy", "上次因会话忙跳过"))
 				return
 			}
 			if attempt+1 >= busyRetryMax {
-				log.Printf("scheduler: 任务 %s 重试 %d 次仍撞上会话忙，放弃本次", t.ID, busyRetryMax)
+				i18n.Logf(p.langOf(), "log.scheduler.give_up", "scheduler: 任务 %s 重试 %d 次仍撞上会话忙，放弃本次", t.ID, busyRetryMax)
 				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy_gave_up", "会话持续繁忙，本次未执行"))
 				return
 			}
@@ -131,7 +132,7 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 			if ctx.Err() != nil {
 				return // 进程退出/插件停止，不记错
 			}
-			log.Printf("scheduler: 任务 %s 执行失败: %v", t.ID, err)
+			i18n.Logf(p.langOf(), "log.scheduler.task_failed", "scheduler: 任务 %s 执行失败: %v", t.ID, err)
 			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.failed", "上次执行失败：%s", truncate(err.Error(), 100)))
 			return
 		}

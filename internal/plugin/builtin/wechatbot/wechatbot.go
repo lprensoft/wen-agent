@@ -17,11 +17,12 @@ package wechatbot
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
@@ -248,7 +249,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if bound {
 		p.startPolling()
 	} else {
-		log.Printf("wechat_bot: 尚未绑定微信，请到设置页的插件卡片上点击「扫码绑定微信」")
+		i18n.Logf(p.langOf(), "log.wechat.not_bound_hint", "wechat_bot: 尚未绑定微信，请到设置页的插件卡片上点击「扫码绑定微信」")
 	}
 	return nil
 }
@@ -265,7 +266,7 @@ func (p *Plugin) rememberToken(msg imbot.Message) {
 	p.mu.Lock()
 	tokens := p.tokens
 	p.mu.Unlock()
-	tokens.remember(msg.UserID, msg.ReplyTo)
+	tokens.remember(p.langOf(), msg.UserID, msg.ReplyTo)
 }
 
 // onTyping 把骨架的「正在输入」回调接到微信协议层。

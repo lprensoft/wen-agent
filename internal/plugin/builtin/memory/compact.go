@@ -3,8 +3,9 @@ package memory
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -36,12 +37,12 @@ func (p *Plugin) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string,
 		return "", err
 	}
 	if res.empty() {
-		log.Printf("记忆提炼：本次压缩没有找出值得长期保留的内容")
+		i18n.Logf(p.langOf(), "log.memory.compact_nothing", "记忆提炼：本次压缩没有找出值得长期保留的内容")
 		return "", nil
 	}
 
 	names := res.names(s.lang)
-	log.Printf("记忆提炼：压缩前新增/修订 %d 条（%s）", len(names), strings.Join(names, "、"))
+	i18n.Logf(p.langOf(), "log.memory.compact_saved", "记忆提炼：压缩前新增/修订 %d 条（%s）", len(names), strings.Join(names, "、"))
 	if len(names) == 0 {
 		return "", nil // 只刷新了提及时间，没有可交代的内容
 	}

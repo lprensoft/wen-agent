@@ -3,9 +3,10 @@ package qqbot
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/mdtext"
 )
@@ -51,7 +52,7 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 				// 平台按机器人/用户粒度拒绝原生 markdown：记住并当场降级纯文本重发
 				p.disableMarkdown(openid)
 				useMD = false
-				log.Printf("qq_bot: 平台拒绝原生 markdown，对 %s 降级为纯文本（%v 后重新探测）", openid, mdOffTTL)
+				i18n.Logf(p.langOf(), "log.qq.markdown_downgraded", "qq_bot: 平台拒绝原生 markdown，对 %s 降级为纯文本（%v 后重新探测）", openid, mdOffTTL)
 				err = p.sendC2C(ctx, openid, mdtext.ToPlainText(p.langOf(), chunk), msgID, seq)
 			}
 		} else {
@@ -61,11 +62,11 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 			if ctx.Err() != nil {
 				return
 			}
-			kind := "被动回复"
+			kind := i18n.T(p.langOf(), "log.qq.kind.reply", "被动回复")
 			if msgID == "" {
-				kind = "主动消息（官方策略下可能受限）"
+				kind = i18n.T(p.langOf(), "log.qq.kind.push", "主动消息（官方策略下可能受限）")
 			}
-			log.Printf("qq_bot: %s发送失败: %v", kind, err)
+			i18n.Logf(p.langOf(), "log.qq.send_failed", "qq_bot: %s发送失败: %v", kind, err)
 		}
 	}
 }

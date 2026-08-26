@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -62,7 +63,7 @@ func (t *keepTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if res.Duplicate {
 		return prompt.Tf(s.lang, "prompt.unspoken.result.duplicate", "已经记着这一条了（第 %d 条）。", res.Index), nil
 	}
-	log.Printf("unspoken: 记下一条（第 %d 条）", res.Index)
+	i18n.Logf(t.p.langOf(), "log.unspoken.kept", "unspoken: 记下一条（第 %d 条）", res.Index)
 	out := prompt.Tf(s.lang, "prompt.unspoken.result.kept", "已记下（第 %d 条）。", res.Index)
 	if len(res.Dropped) > 0 {
 		out += prompt.Tf(s.lang, "prompt.unspoken.result.dropped",
@@ -115,6 +116,6 @@ func (t *letGoTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	log.Printf("unspoken: 放下一条")
+	i18n.Logf(t.p.langOf(), "log.unspoken.let_go", "unspoken: 放下一条")
 	return prompt.Tf(lang, "prompt.unspoken.result.let_go", "已放下：「%s」。", removed.Text), nil
 }

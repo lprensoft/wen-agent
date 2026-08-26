@@ -12,7 +12,6 @@ package stylewatch
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -233,7 +232,7 @@ func (p *Plugin) record(s settings, scope plugin.Scope, ev plugin.TurnEndEvent, 
 
 	if s.notify && len(hits) > 0 && s.notice != nil && ev.SessionID != "" {
 		if err := s.notice(plugin.WithScope(s.ctx, scope), ev.SessionID, renderNotice(s.lang, hits)); err != nil {
-			log.Printf("文风观察：注记写入失败：%v", err)
+			i18n.Logf(s.lang, "log.stylewatch.notice_failed", "文风观察：注记写入失败：%v", err)
 		}
 	}
 }
@@ -247,7 +246,7 @@ func (p *Plugin) persist(dir string, snap stats, seq uint64) {
 	}
 	p.savedSeq = seq
 	if err := saveStats(dir, snap); err != nil {
-		log.Printf("文风观察：统计写入失败：%v", err)
+		i18n.Logf(p.lang(), "log.stylewatch.stats_write_failed", "文风观察：统计写入失败：%v", err)
 	}
 }
 

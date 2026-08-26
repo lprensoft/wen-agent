@@ -3,7 +3,6 @@ package agenda
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"wen/internal/cue"
@@ -24,18 +23,11 @@ const (
 	kindCatchUp                     // 离线期间整项都过去了，补记一句
 )
 
-// String 只给日志用，保持中文。给人看的那一处走 name。
-func (k activityKind) String() string {
-	switch k {
-	case kindStart:
-		return "开始"
-	case kindCatchUp:
-		return "补记"
-	}
-	return "结束"
-}
-
-// name 是会话注记里的说法，跟随界面语言。
+// name 是这一档在会话注记与日志里的说法，跟随语言。
+//
+// 从前另有一个 String() 专给日志用、固定说中文——那时日志本来就是中文的。现在
+// 日志也跟着语言走，再留一个说中文的 String() 就只是个陷阱：忘了带 lang 的调用点
+// 照样编得过，只是在英文日志里冒出两个汉字。
 func (k activityKind) name(lang string) string {
 	switch k {
 	case kindStart:
@@ -181,7 +173,7 @@ func (p *Plugin) tick(ctx context.Context) {
 			return changed, nil
 		})
 		if err != nil {
-			log.Printf("agenda: 扫表失败: %v", err)
+			i18n.Logf(p.langOf(), "log.agenda.scan_failed", "agenda: 扫表失败: %v", err)
 		}
 	}
 	p.sweepPromises(ctx, day)
@@ -218,7 +210,7 @@ func (p *Plugin) sweepPromises(ctx context.Context, day time.Time) {
 			}
 			return changed, nil
 		}); err != nil {
-			log.Printf("agenda: 收束答应过的事失败: %v", err)
+			i18n.Logf(p.langOf(), "log.agenda.sweep_failed", "agenda: 收束答应过的事失败: %v", err)
 		}
 	}
 	if len(missed) == 0 {
@@ -245,7 +237,7 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 	defer p.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("agenda: %s「%s」的%s轮次 panic（已隔离）: %v", d.item.ID, d.item.Title, d.kind, r)
+			i18n.Logf(p.langOf(), "log.agenda.activity_panic", "agenda: %s「%s」的%s轮次 panic（已隔离）: %v", d.item.ID, d.item.Title, d.kind.name(p.langOf()), r)
 		}
 	}()
 	s := p.snapshot()
@@ -254,7 +246,7 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 	}
 	sid, _, err := s.sessions.LastActive()
 	if err != nil || sid == "" {
-		log.Printf("agenda: 没有可用会话，「%s」的%s轮次跳过", d.item.Title, d.kind)
+		i18n.Logf(p.langOf(), "log.agenda.no_session", "agenda: 没有可用会话，「%s」的%s轮次跳过", d.item.Title, d.kind.name(p.langOf()))
 		return
 	}
 	day := s.today(now)
@@ -283,7 +275,7 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 			return
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if attempt+1 >= defBusyRetryMax {
-				log.Printf("agenda: 会话 %s 持续繁忙，「%s」的%s轮次放弃", sid, d.item.Title, d.kind)
+				i18n.Logf(p.langOf(), "log.agenda.session_busy", "agenda: 会话 %s 持续繁忙，「%s」的%s轮次放弃", sid, d.item.Title, d.kind.name(p.langOf()))
 				p.postNotice(nctx, sid, i18n.Tf(s.lang, "plugin.agenda.notice.busy_gave_up",
 					"「%s」的%s轮次因会话持续繁忙而放弃。", d.item.Title, d.kind.name(s.lang)))
 				return
@@ -295,7 +287,7 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 			}
 		default:
 			if ctx.Err() == nil {
-				log.Printf("agenda: 「%s」的%s轮次失败: %v", d.item.Title, d.kind, err)
+				i18n.Logf(p.langOf(), "log.agenda.activity_failed", "agenda: 「%s」的%s轮次失败: %v", d.item.Title, d.kind.name(p.langOf()), err)
 				// 轮次挂了不等于什么都没发生：经历是工具当场落盘的，模型可能已经写好了，
 				// 只是收尾那次模型调用没回来（实际见过：done 已经记上，随后的调用等了
 				// 六十秒没等到响应头）。这条理由本来就只看落盘的结果（见 postBackCue），

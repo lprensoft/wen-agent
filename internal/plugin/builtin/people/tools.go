@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -93,7 +94,7 @@ func (t *upsertTool) Execute(ctx context.Context, args json.RawMessage) (string,
 
 	// 回显本次变化：本轮的清单注入在对话开始时就已定型，回执让变化立刻可见。
 	if res.Created {
-		log.Printf("people: 登记 %s", res.Name)
+		i18n.Logf(t.p.langOf(), "log.people.added", "people: 登记 %s", res.Name)
 		line := prompt.Tf(s.lang, "prompt.people.result.created", "已登记 %s（%s，%s）。",
 			res.Name, closenessOf(s.lang, a.Closeness), trimmed(a.Relation))
 		if a.MetNow {
@@ -105,7 +106,7 @@ func (t *upsertTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if len(res.Changes) == 0 {
 		return prompt.Tf(s.lang, "prompt.people.result.no_change", "%s 的记录没有变化。", res.Name), nil
 	}
-	log.Printf("people: 更新 %s（%s）", res.Name, strings.Join(res.Changes, changeSep))
+	i18n.Logf(t.p.langOf(), "log.people.updated", "people: 更新 %s（%s）", res.Name, strings.Join(res.Changes, changeSep))
 	return prompt.Tf(s.lang, "prompt.people.result.updated", "已更新 %s：%s。",
 		res.Name, strings.Join(res.Changes, changeSep)), nil
 }
@@ -266,6 +267,6 @@ func (t *removeTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	log.Printf("people: 移除 %s（%s）", removed, strings.TrimSpace(a.Reason))
+	i18n.Logf(t.p.langOf(), "log.people.removed", "people: 移除 %s（%s）", removed, strings.TrimSpace(a.Reason))
 	return prompt.Tf(s.lang, "prompt.people.result.removed", "已移除 %s。", removed), nil
 }

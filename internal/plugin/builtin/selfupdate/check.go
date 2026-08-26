@@ -2,8 +2,9 @@ package selfupdate
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/updater"
 	"wen/internal/version"
@@ -73,12 +74,12 @@ func (p *Plugin) backgroundCheck(ctx context.Context) {
 	rel, err := p.check(cctx, s)
 	if err != nil {
 		if ctx.Err() == nil { // 停止插件导致的取消不必报警
-			log.Printf("self_update: 检查更新失败: %v", err)
+			i18n.Logf(p.langOf(), "log.selfupdate.check_failed", "self_update: 检查更新失败: %v", err)
 		}
 		return
 	}
 	if updater.Newer(version.Version, rel.Tag) {
-		log.Printf("self_update: 有新版 %s 可更新（当前 %s），在设置页的「程序更新」里一键更新",
+		i18n.Logf(p.langOf(), "log.selfupdate.available", "self_update: 有新版 %s 可更新（当前 %s），在设置页的「程序更新」里一键更新",
 			rel.Tag, version.Version)
 	}
 }

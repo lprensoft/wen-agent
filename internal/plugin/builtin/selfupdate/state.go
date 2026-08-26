@@ -2,10 +2,11 @@ package selfupdate
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // 检查状态的持久化。
@@ -45,14 +46,14 @@ func statePath(dir string) string { return filepath.Join(dir, stateFile) }
 
 // loadState 读回上次的状态。文件缺失或损坏时当作从未检查过——
 // 这份状态全部可以重新取得，坏了不值得让插件起不来。
-func loadState(dir string) state {
+func loadState(lang, dir string) state {
 	raw, err := os.ReadFile(statePath(dir))
 	if err != nil {
 		return state{}
 	}
 	var st state
 	if err := json.Unmarshal(raw, &st); err != nil {
-		log.Printf("self_update: 状态文件已损坏，按从未检查过处理")
+		i18n.Logf(lang, "log.selfupdate.state_corrupt", "self_update: 状态文件已损坏，按从未检查过处理")
 		return state{}
 	}
 	return st
@@ -71,11 +72,11 @@ func (p *Plugin) saveLocked() {
 		return
 	}
 	if err := os.MkdirAll(p.stateDir, 0o755); err != nil {
-		log.Printf("self_update: 创建状态目录失败: %v", err)
+		i18n.Logf(p.langOf(), "log.selfupdate.state_dir_failed", "self_update: 创建状态目录失败: %v", err)
 		return
 	}
 	if err := os.WriteFile(statePath(p.stateDir), raw, 0o644); err != nil {
-		log.Printf("self_update: 状态写入失败: %v", err)
+		i18n.Logf(p.langOf(), "log.selfupdate.state_write_failed", "self_update: 状态写入失败: %v", err)
 	}
 }
 

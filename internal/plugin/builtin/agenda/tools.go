@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/cue"
 	"wen/internal/plugin"
@@ -302,7 +303,7 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 	p.mu.Lock()
 	p.planSubmitted[tag] = true
 	p.mu.Unlock()
-	log.Printf("agenda: 今天（%s）的表已排定，%d 项", today, len(pl.Items))
+	i18n.Logf(t.p.langOf(), "log.agenda.plan_set", "agenda: 今天（%s）的表已排定，%d 项", today, len(pl.Items))
 
 	if len(pl.Items) == 0 {
 		return prompt.T(s.lang, "prompt.agenda.result.plan_empty",
@@ -557,7 +558,7 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 	}
 	p.wakeup()
 	sep := prompt.T(s.lang, "prompt.agenda.render.item_sep", "；")
-	log.Printf("agenda: %s %s", a.ID, strings.Join(changes, sep))
+	i18n.Logf(t.p.langOf(), "log.agenda.plan_updated", "agenda: %s %s", a.ID, strings.Join(changes, sep))
 	return prompt.Tf(s.lang, "prompt.agenda.result.item_changed", "%s %s。", a.ID, strings.Join(changes, sep)), nil
 }
 
@@ -752,7 +753,7 @@ func (t *addCommitmentTool) Execute(ctx context.Context, args json.RawMessage) (
 		overlap = overlapNotes(s.lang, pl.Items, day, s.dayStartHour)
 	}
 	p.wakeup()
-	log.Printf("agenda: 登记约定 %s：%s %s %s", c.ID, c.Date, c.Start, c.Title)
+	i18n.Logf(t.p.langOf(), "log.agenda.commitment_added", "agenda: 登记约定 %s：%s %s %s", c.ID, c.Date, c.Start, c.Title)
 
 	desc := prompt.Tf(s.lang, "prompt.agenda.result.commit_desc", "%s %s%s %s（%s）",
 		fmtDateCN(s.lang, c.Date, now.Location()), c.Start, dashEnd(c.End), c.Title,
@@ -871,7 +872,7 @@ func (t *cancelCommitmentTool) Execute(ctx context.Context, args json.RawMessage
 		}
 	}
 	p.wakeup()
-	log.Printf("agenda: 取消约定 %s（%s）：%s", removed.ID, removed.Title, reason)
+	i18n.Logf(t.p.langOf(), "log.agenda.commitment_cancelled", "agenda: 取消约定 %s（%s）：%s", removed.ID, removed.Title, reason)
 	out := prompt.Tf(s.lang, "prompt.agenda.result.commit_cancelled", "已取消约定 %s（%s %s %s）：%s。",
 		removed.ID, fmtDateCN(s.lang, removed.Date, p.now().Location()), removed.Start, removed.Title, reason)
 	if itemID != "" {

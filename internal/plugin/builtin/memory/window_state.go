@@ -2,11 +2,12 @@ package memory
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/plugin"
 )
@@ -63,7 +64,7 @@ func windowPath(dir string) string { return filepath.Join(dir, windowFile) }
 
 // loadWindowState 读回上次的窗口缓冲。文件缺失或损坏时返回空——
 // 缓冲丢了只是少提炼一次，不值得让插件起不来。
-func loadWindowState(dir string) (map[windowKey]*window, dayMarks) {
+func loadWindowState(lang, dir string) (map[windowKey]*window, dayMarks) {
 	if dir == "" {
 		return nil, dayMarks{}
 	}
@@ -73,7 +74,7 @@ func loadWindowState(dir string) (map[windowKey]*window, dayMarks) {
 	}
 	var st persistedState
 	if json.Unmarshal(raw, &st) != nil {
-		log.Printf("记忆提炼：窗口缓冲已损坏，忽略并重新开始累计")
+		i18n.Logf(lang, "log.memory.window_corrupt", "记忆提炼：窗口缓冲已损坏，忽略并重新开始累计")
 		return nil, dayMarks{}
 	}
 
@@ -96,7 +97,7 @@ func loadWindowState(dir string) (map[windowKey]*window, dayMarks) {
 }
 
 // saveWindowState 落盘当前缓冲。失败只影响下次启动的连续性，不打断任何事。
-func saveWindowState(dir string, windows map[windowKey]*window, marks dayMarks) {
+func saveWindowState(lang, dir string, windows map[windowKey]*window, marks dayMarks) {
 	if dir == "" {
 		return
 	}
@@ -132,6 +133,6 @@ func saveWindowState(dir string, windows map[windowKey]*window, marks dayMarks) 
 	}
 	// 0600：里面是对话原文
 	if err := os.WriteFile(windowPath(dir), raw, 0o600); err != nil {
-		log.Printf("记忆提炼：窗口缓冲写入失败：%v", err)
+		i18n.Logf(lang, "log.memory.window_write_failed", "记忆提炼：窗口缓冲写入失败：%v", err)
 	}
 }
