@@ -5,6 +5,8 @@ import (
 	"log"
 	"sort"
 	"sync"
+
+	"wen/internal/i18n"
 )
 
 // 通道路由：让一轮对话的回复落到「另一条」通道上。
@@ -188,7 +190,8 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) b
 			// 装了会话锚之后这该是罕见事（各通道本就共用一个会话），留痕是为了万一
 			// 再漂时有迹可循——此前它是完全无声的，表现出来就是「切回来接不上了」。
 			log.Printf("%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
-			c.notice(ctx, sessionID, "「"+c.cfg.PluginName+"」上的用户原本在会话 "+prev+" 里，已改绑到当前会话。")
+			c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.rebound",
+				"「%s」上的用户原本在会话 %s 里，已改绑到当前会话。", c.cfg.PluginName, prev))
 		} else {
 			log.Printf("%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
 		}

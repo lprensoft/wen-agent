@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
@@ -39,6 +40,7 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
+	lang      string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	appID     string
 	appSecret string
 	apiBase   string
@@ -146,14 +148,23 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 }
 
 // Init 应用配置并（重）启动网关连接。可重入：先停旧连接与骨架。
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	appID := strings.TrimSpace(plugin.CfgString(cfg, "app_id", ""))
 	appSecret := strings.TrimSpace(plugin.CfgString(cfg, "app_secret", ""))
 	if appID == "" || appSecret == "" {
-		return fmt.Errorf("请先在配置中填写 AppID 与 AppSecret")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.qq_bot.err.no_credentials",
+			"请先在配置中填写 AppID 与 AppSecret"))
 	}
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.qq_bot.err.no_state_dir",
+			"没有可用的持久化目录"))
 	}
 
 	whitelist := map[string]bool{}
@@ -171,6 +182,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.appID, p.appSecret = appID, appSecret
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
+	p.lang = ictx.Lang
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.mdOff = map[string]time.Time{}
 	p.tokens = newTokenSource(appID, appSecret)
@@ -183,6 +195,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	core, err := imbot.New(imbot.Config{
 		PluginName:     p.Name(),
 		Sender:         sender{p: p},
+		Lang:           ictx.Lang,
 		StateDir:       ictx.StateDir,
 		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
 		TurnTimeout:    turnTimeout,

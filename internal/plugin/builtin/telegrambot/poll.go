@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"wen/internal/imbot"
+
+	"wen/internal/i18n"
 )
 
 // getUpdates 长轮询主循环。
@@ -139,7 +141,8 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 		if c := strings.TrimSpace(m.Caption); c != "" {
 			text = c
 		} else {
-			note = "暂不支持该消息类型，请发文字。"
+			note = i18n.T(p.langOf(), "plugin.telegram_bot.msg.unsupported",
+				"暂不支持该消息类型，请发文字。")
 		}
 	}
 

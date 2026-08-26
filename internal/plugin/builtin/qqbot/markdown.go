@@ -1,9 +1,10 @@
 package qqbot
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // QQ 的原生 markdown 只支持一个有限子集（加粗/斜体/链接/行内代码/代码块/引用/
@@ -12,8 +13,8 @@ import (
 
 // sanitizeForQQ 是 markdown 方言降级管线，顺序固定：表格 → 图片 → 长代码块
 // （表格必须在图片之前，否则单元格里的图片语法会干扰行匹配）。
-func sanitizeForQQ(text string) string {
-	return truncateLongCode(downgradeImages(downgradeTables(text)))
+func sanitizeForQQ(lang, text string) string {
+	return truncateLongCode(lang, downgradeImages(lang, downgradeTables(lang, text)))
 }
 
 var (
@@ -27,7 +28,7 @@ const maxTableRows = 3
 
 // downgradeTables 把 GFM 表格降级成「表头: 值 ｜ 表头: 值」的键值行。
 // QQ 不渲染表格，纯文本下管道对齐也必崩（无等宽字体），键值列表是唯一可读的形态。
-func downgradeTables(text string) string {
+func downgradeTables(lang, text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	var block []string
@@ -82,7 +83,8 @@ func downgradeTables(text string) string {
 			}
 		}
 		if hidden := total - 1 - len(data); hidden > 0 {
-			out = append(out, fmt.Sprintf("…（另有 %d 行数据，表格已折叠）", hidden))
+			out = append(out, i18n.Tf(lang, "plugin.qq_bot.md.table_folded",
+				"…（另有 %d 行数据，表格已折叠）", hidden))
 		}
 		block = nil
 	}
@@ -106,12 +108,12 @@ func downgradeTables(text string) string {
 }
 
 // downgradeImages 把行内图片降级为普通链接（QQ 不渲染 markdown 图片）。
-func downgradeImages(text string) string {
+func downgradeImages(lang, text string) string {
 	return imageRe.ReplaceAllStringFunc(text, func(m string) string {
 		sub := imageRe.FindStringSubmatch(m)
 		alt := sub[1]
 		if alt == "" {
-			alt = "图片"
+			alt = i18n.T(lang, "plugin.qq_bot.md.image", "图片")
 		}
 		return "[" + alt + "](" + sub[2] + ")"
 	})
@@ -120,7 +122,7 @@ func downgradeImages(text string) string {
 // maxCodeRunes 单个代码块的内容上限，超出截断（回退到最近的换行处）。
 const maxCodeRunes = 1200
 
-func truncateLongCode(text string) string {
+func truncateLongCode(lang, text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	var code []string
@@ -141,7 +143,8 @@ func truncateLongCode(text string) string {
 				if i := strings.LastIndexByte(cut, '\n'); i > maxCodeRunes/2 {
 					cut = cut[:i]
 				}
-				body = cut + fmt.Sprintf("\n…（代码过长已截断，共 %d 字符）", len(r))
+				body = cut + i18n.Tf(lang, "plugin.qq_bot.md.code_truncated",
+					"\n…（代码过长已截断，共 %d 字符）", len(r))
 			}
 			out = append(out, body, line)
 			continue

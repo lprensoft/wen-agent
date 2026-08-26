@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 出站的「像人一样发消息」：回复拆成几条、带打字间隔陆续发出，并在本通道发起的
@@ -31,7 +32,12 @@ const (
 // ChatStylePrompt 是开着 HumanPace 时注入本通道轮次的说话引导，五条通道共用一份。
 // 随 <本轮状态> 走、不进 system，且只在本通道发起的轮次里出现：Web UI 与 CLI 的
 // 轮次不受影响。
-const ChatStylePrompt = "[对话渠道]\n这是在即时通讯软件里的聊天：像发消息那样说话——短句、口语，一次一两句就好，不写长篇；不用标题、列表与加粗。"
+const chatStylePromptZH = "[对话渠道]\n这是在即时通讯软件里的聊天：像发消息那样说话——短句、口语，一次一两句就好，不写长篇；不用标题、列表与加粗。"
+
+// ChatStylePrompt 按语言取出这段引导。
+func ChatStylePrompt(lang string) string {
+	return prompt.T(lang, "prompt.imbot.chat_style", chatStylePromptZH)
+}
 
 // TurnPrompt 返回本轮该注入的说话引导：开关开着且本轮由本通道发起时才有，否则空串。
 // 通道插件的 TurnPrompt 直接转交给它即可。
@@ -39,7 +45,7 @@ func (c *Core) TurnPrompt(ctx context.Context) string {
 	if !c.cfg.HumanPace || plugin.TurnOriginFrom(ctx) != c.cfg.PluginName {
 		return ""
 	}
-	return ChatStylePrompt
+	return ChatStylePrompt(c.cfg.Lang)
 }
 
 // PushReply 把一段「角色在说话」的文本主动推给某个用户（后台轮次的结果落在绑定

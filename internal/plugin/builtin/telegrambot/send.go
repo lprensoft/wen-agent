@@ -40,7 +40,7 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 
 		var err error
 		if useMD {
-			err = p.sendMessage(ctx, client, chatID, toMarkdownV2(chunk), "MarkdownV2", replyTo)
+			err = p.sendMessage(ctx, client, chatID, toMarkdownV2(p.langOf(), chunk), "MarkdownV2", replyTo)
 			var ae *apiError
 			if errors.As(err, &ae) && ae.isParseError() {
 				// 转换漏了某个字符：记住并当场降级纯文本重发，这一条不能丢
@@ -63,7 +63,7 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 				log.Printf("telegram_bot: 触发限流，%v 后重试", wait)
 				sleepCtx(ctx, wait)
 				if useMD {
-					err = p.sendMessage(ctx, client, chatID, toMarkdownV2(chunk), "MarkdownV2", replyTo)
+					err = p.sendMessage(ctx, client, chatID, toMarkdownV2(p.langOf(), chunk), "MarkdownV2", replyTo)
 				} else {
 					err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
 				}

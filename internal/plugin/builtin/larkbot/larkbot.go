@@ -26,6 +26,7 @@ import (
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 
+	"wen/internal/i18n"
 	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
@@ -117,6 +118,7 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
+	lang      string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	appID     string
 	appSecret string
 	apiBase   string
@@ -226,18 +228,29 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 }
 
 // Init 应用配置并（重）启动长连接。可重入：先停旧连接与骨架。
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	appID := strings.TrimSpace(plugin.CfgString(cfg, "app_id", ""))
 	appSecret := strings.TrimSpace(plugin.CfgString(cfg, "app_secret", ""))
 	if appID == "" || appSecret == "" {
-		return fmt.Errorf("请先在配置中填写 App ID 与 App Secret（%s）",
-			joinCN(p.v.label, "开发者后台："+p.v.consoleURL))
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.lark_bot.err.no_credentials",
+			"请先在配置中填写 App ID 与 App Secret（%s）"),
+			joinCN(p.v.label, i18n.Tf(ictx.Lang, "plugin.lark_bot.err.console",
+				"开发者后台：%s", p.v.consoleURL)))
 	}
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.lark_bot.err.no_state_dir",
+			"没有可用的持久化目录"))
 	}
 	if err := os.MkdirAll(ictx.StateDir, 0o755); err != nil {
-		return fmt.Errorf("创建状态目录失败: %w", err)
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.lark_bot.err.mkdir",
+			"创建状态目录失败: %w"), err)
 	}
 
 	whitelist := map[string]bool{}
@@ -253,6 +266,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.Stop()
 
 	p.mu.Lock()
+	p.lang = ictx.Lang
 	p.appID, p.appSecret = appID, appSecret
 	p.apiBase = base
 	p.whitelist = whitelist
@@ -264,6 +278,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	core, err := imbot.New(imbot.Config{
 		PluginName:     p.Name(),
 		Sender:         sender{p: p},
+		Lang:           ictx.Lang,
 		StateDir:       ictx.StateDir,
 		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
 		TurnTimeout:    turnTimeout,

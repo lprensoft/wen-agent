@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -128,14 +129,17 @@ func New(cfg Config) (*Core, error) {
 		return nil, fmt.Errorf("imbot: 需要持久化目录")
 	}
 	if cfg.RunTurn == nil || cfg.NewSession == nil {
-		return nil, fmt.Errorf("当前环境不支持插件发起对话轮次")
+		return nil, fmt.Errorf("%s", i18n.T(cfg.Lang, "imbot.err.no_run_turn",
+			"当前环境不支持插件发起对话轮次"))
 	}
 	if cfg.Sessions == nil {
-		return nil, fmt.Errorf("当前环境不支持会话查询")
+		return nil, fmt.Errorf("%s", i18n.T(cfg.Lang, "imbot.err.no_sessions",
+			"当前环境不支持会话查询"))
 	}
 	binding, err := loadBinding(cfg.StateDir)
 	if err != nil {
-		return nil, fmt.Errorf("加载会话映射失败: %w", err)
+		return nil, fmt.Errorf(i18n.T(cfg.Lang, "imbot.err.load_bindings",
+			"加载会话映射失败: %w"), err)
 	}
 	if cfg.TurnTimeout <= 0 {
 		cfg.TurnTimeout = DefaultTurnTimeout
@@ -261,15 +265,15 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		approved := text == "/apply"
 		ch, ok := c.broker.take(msg.UserID)
 		if !ok {
-			c.send(ctx, msg, "当前没有等待确认的操作。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.none", "当前没有等待确认的操作。"))
 			return
 		}
 		// 先回执、再投答复：反过来的话，被解开的那一轮可能抢在回执前面把结果发出去，
 		// 用户会先看到执行结果再看到「已允许」
 		if approved {
-			c.send(ctx, msg, "✅ 已允许，继续执行。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.applied", "✅ 已允许，继续执行。"))
 		} else {
-			c.send(ctx, msg, "🚫 已拒绝该操作。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.denied", "🚫 已拒绝该操作。"))
 		}
 		ch <- approved
 		return
@@ -313,7 +317,7 @@ func (c *Core) enqueue(ctx context.Context, msg Message) {
 	select {
 	case q <- msg:
 	default:
-		c.send(ctx, msg, "上一条消息还在处理中，请稍候再发。")
+		c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.queue_full", "上一条消息还在处理中，请稍候再发。"))
 	}
 }
 

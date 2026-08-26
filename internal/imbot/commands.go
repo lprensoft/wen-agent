@@ -6,12 +6,14 @@ import (
 	"log"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/statustext"
 )
 
-// HelpText 是各通道共用的命令说明。命令集统一，换一条通道不用重新学。
-const HelpText = `支持的命令：
+// helpTextZH 是各通道共用的命令说明。命令集统一，换一条通道不用重新学。
+// 命令本身（/new 这些）不翻译——它们是要照着打进去的字面量。
+const helpTextZH = `支持的命令：
 /new     新建一个会话（之后的消息进入新会话）
 /status  查看当前会话状态
 /compact 压缩当前会话历史
@@ -19,6 +21,11 @@ const HelpText = `支持的命令：
 /apply   允许等待中的危险操作
 /deny    拒绝等待中的危险操作
 其他内容将作为消息发给助手。`
+
+// HelpText 按语言给出命令说明。
+func HelpText(lang string) string {
+	return i18n.T(lang, "imbot.help", helpTextZH)
+}
 
 // process 处理一条已排到队首的消息：命令直接答复，其余作为一轮对话执行。
 func (c *Core) process(ctx context.Context, msg Message) {
@@ -31,7 +38,7 @@ func (c *Core) process(ctx context.Context, msg Message) {
 	text := strings.TrimSpace(msg.Text)
 	switch {
 	case text == "/help":
-		c.send(ctx, msg, HelpText)
+		c.send(ctx, msg, HelpText(c.cfg.Lang))
 	case text == "/new":
 		c.cmdNew(ctx, msg)
 	case text == "/status":
@@ -39,7 +46,8 @@ func (c *Core) process(ctx context.Context, msg Message) {
 	case text == "/compact":
 		c.cmdCompact(ctx, msg)
 	case strings.HasPrefix(text, "/"):
-		c.send(ctx, msg, "未知命令："+text+"\n"+HelpText)
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.unknown_command", "未知命令：%s\n%s",
+			text, HelpText(c.cfg.Lang)))
 	default:
 		c.chat(ctx, msg)
 	}
@@ -49,7 +57,7 @@ func (c *Core) process(ctx context.Context, msg Message) {
 func (c *Core) chat(ctx context.Context, msg Message) {
 	sid, err := c.SessionFor(msg.UserID)
 	if err != nil {
-		c.send(ctx, msg, "会话初始化失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.session_init", "会话初始化失败：%s", err.Error()))
 		return
 	}
 
@@ -65,9 +73,9 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 		tctx = plugin.WithTurnNotes(tctx, func(n plugin.TurnNote) {
 			switch {
 			case n.Kind == plugin.NoteThinking && c.cfg.ShowThinking:
-				c.reply(ctx, msg, sid, ThinkingLine(n.Text))
+				c.reply(ctx, msg, sid, ThinkingLine(c.cfg.Lang, n.Text))
 			case n.Kind == plugin.NoteToolCalls && c.cfg.ShowTools:
-				c.reply(ctx, msg, sid, ToolsLine(n.Tools))
+				c.reply(ctx, msg, sid, ToolsLine(c.cfg.Lang, n.Tools))
 			}
 		})
 	}
@@ -77,14 +85,15 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	c.typing(ctx, msg, false)
 	if err != nil {
 		if errors.Is(err, plugin.ErrSessionBusy) {
-			c.send(ctx, msg, "当前会话正忙（可能有其他对话或后台任务在进行），请稍后再试。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.busy",
+				"当前会话正忙（可能有其他对话或后台任务在进行），请稍后再试。"))
 			return
 		}
-		c.send(ctx, msg, "处理失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.turn", "处理失败：%s", err.Error()))
 		return
 	}
 	if strings.TrimSpace(final) == "" {
-		final = "（本轮没有文本回复）"
+		final = i18n.T(c.cfg.Lang, "imbot.no_reply", "（本轮没有文本回复）")
 	}
 	c.replyFinal(ctx, msg, sid, final)
 }
@@ -123,7 +132,8 @@ func (c *Core) deliver(ctx context.Context, msg Message, sessionID, text string,
 		return
 	}
 	log.Printf("%s: 本轮回复该发往 %s，那条通道投不出去，已丢弃", c.cfg.PluginName, target)
-	c.notice(ctx, sessionID, "有一段回复该发往「"+target+"」，但那条通道当时投不出去，没能送达。")
+	c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.undelivered",
+		"有一段回复该发往「%s」，但那条通道当时投不出去，没能送达。", target))
 }
 
 // notice 往会话里留一行只给人看的说明；通道没提供 Notice 就只剩日志。
@@ -146,33 +156,34 @@ func (c *Core) typing(ctx context.Context, msg Message, active bool) {
 func (c *Core) cmdNew(ctx context.Context, msg Message) {
 	sid, err := c.cfg.NewSession()
 	if err != nil {
-		c.send(ctx, msg, "新建会话失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.new_session", "新建会话失败：%s", err.Error()))
 		return
 	}
 	if err := c.binding.Set(msg.UserID, sid); err != nil {
-		c.send(ctx, msg, "保存会话映射失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.save_binding", "保存会话映射失败：%s", err.Error()))
 		return
 	}
 	// 分通道时 /new 移动整组：其余通道在各自的下一条消息上加入这个新会话。
 	// 只搬自己的话，另一条通道会留在旧会话里，两个人格当场分家。
 	setGroupAnchor(sid)
-	c.send(ctx, msg, "✨ 已新建会话（"+sid+"），接下来的消息将进入新会话。")
+	c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.new_session",
+		"✨ 已新建会话（%s），接下来的消息将进入新会话。", sid))
 }
 
 // cmdStatus 的输出与 Web UI 的 /status 命令保持一致（同源数据，同样的措辞与格式）。
 func (c *Core) cmdStatus(ctx context.Context, msg Message) {
 	if c.cfg.Status == nil {
-		c.send(ctx, msg, "当前环境不支持状态查询。")
+		c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.no_status", "当前环境不支持状态查询。"))
 		return
 	}
 	sid, err := c.SessionFor(msg.UserID)
 	if err != nil {
-		c.send(ctx, msg, "会话初始化失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.session_init", "会话初始化失败：%s", err.Error()))
 		return
 	}
 	info, err := c.cfg.Status(sid)
 	if err != nil {
-		c.send(ctx, msg, "获取状态失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.status", "获取状态失败：%s", err.Error()))
 		return
 	}
 	// 措辞三处输出共用一份实现，见 internal/statustext
@@ -181,34 +192,35 @@ func (c *Core) cmdStatus(ctx context.Context, msg Message) {
 
 func (c *Core) cmdCompact(ctx context.Context, msg Message) {
 	if c.cfg.Compact == nil {
-		c.send(ctx, msg, "当前环境不支持压缩。")
+		c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.no_compact", "当前环境不支持压缩。"))
 		return
 	}
 	sid, err := c.SessionFor(msg.UserID)
 	if err != nil {
-		c.send(ctx, msg, "会话初始化失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.session_init", "会话初始化失败：%s", err.Error()))
 		return
 	}
-	c.send(ctx, msg, "开始压缩会话历史，请稍候…")
+	c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.compacting", "开始压缩会话历史，请稍候…"))
 	tctx, cancel := context.WithTimeout(ctx, c.cfg.TurnTimeout)
 	defer cancel()
 	if err := c.cfg.Compact(tctx, sid); err != nil {
-		c.send(ctx, msg, "压缩失败："+err.Error())
+		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.compact", "压缩失败：%s", err.Error()))
 		return
 	}
-	c.send(ctx, msg, "📦 会话历史已压缩完成。")
+	c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.compacted", "📦 会话历史已压缩完成。"))
 }
 
 // ThinkingLine / ToolsLine 的措辞与 Web UI 的过程展示保持一致（🧠 思考过程 / 🔧 调用工具）。
 // 工具名带行内代码标记：markdown 模式由客户端渲染成代码样式，纯文本模式转换为「工具名」。
-func ThinkingLine(text string) string {
-	return "🧠 思考过程\n" + strings.TrimSpace(text)
+func ThinkingLine(lang, text string) string {
+	return i18n.Tf(lang, "imbot.thinking", "🧠 思考过程\n%s", strings.TrimSpace(text))
 }
 
-func ToolsLine(tools []string) string {
+func ToolsLine(lang string, tools []string) string {
 	quoted := make([]string, 0, len(tools))
 	for _, t := range tools {
 		quoted = append(quoted, "`"+t+"`")
 	}
-	return "🔧 调用工具 " + strings.Join(quoted, "、")
+	return i18n.Tf(lang, "imbot.tools", "🔧 调用工具 %s",
+		strings.Join(quoted, i18n.T(lang, "imbot.tools_sep", "、")))
 }

@@ -170,7 +170,7 @@ func TestHumanPaceSplitsReply(t *testing.T) {
 
 	// 命令回执不分条、不延迟
 	c.Handle(ctx, Message{UserID: "u1", DedupID: "b", Text: "/help"})
-	if m := f.expect(t); m.text != HelpText {
+	if m := f.expect(t); m.text != HelpText("") {
 		t.Fatalf("命令回执应原样一条: %q", m.text)
 	}
 	rec.mu.Lock()
@@ -213,7 +213,7 @@ func TestHumanPaceLeavesNotesWhole(t *testing.T) {
 		cfg.sleep = rec.sleep
 	})
 	c.Handle(context.Background(), Message{UserID: "u1", Text: "说"})
-	if m := f.expect(t); m.text != ThinkingLine(thinking) {
+	if m := f.expect(t); m.text != ThinkingLine("", thinking) {
 		t.Fatalf("思考链应原样一条: %q", m.text)
 	}
 	if m := f.expect(t); m.text != "好。" {
@@ -279,7 +279,7 @@ func TestTurnPromptOnlyForOwnTurns(t *testing.T) {
 	other := plugin.WithTurnOrigin(context.Background(), "other_bot")
 	front := context.Background()
 
-	if got := on.TurnPrompt(mine); got != ChatStylePrompt {
+	if got := on.TurnPrompt(mine); got != ChatStylePrompt("") {
 		t.Fatalf("本通道的轮次应注入引导: %q", got)
 	}
 	if got := on.TurnPrompt(other); got != "" {

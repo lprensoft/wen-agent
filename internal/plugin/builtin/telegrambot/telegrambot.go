@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
@@ -42,6 +43,7 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
+	lang      string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	token     string
 	apiBase   string
 	whitelist map[string]bool
@@ -141,21 +143,31 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 }
 
 // Init 应用配置并（重）启动长轮询。可重入：先停旧循环与骨架。
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	token := strings.TrimSpace(plugin.CfgString(cfg, "bot_token", ""))
 	if token == "" {
-		return fmt.Errorf("请先在配置中填写 Bot Token（找 @BotFather 建机器人获取）")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.telegram_bot.err.no_token",
+			"请先在配置中填写 Bot Token（找 @BotFather 建机器人获取）"))
 	}
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.telegram_bot.err.no_state_dir",
+			"没有可用的持久化目录"))
 	}
 	// 目录按约定可能还不存在。收信游标是第一个落盘的东西（比会话绑定还早），
 	// 不先建出来的话首条消息的游标就存不下，重启会重收一遍
 	if err := os.MkdirAll(ictx.StateDir, 0o755); err != nil {
-		return fmt.Errorf("创建状态目录失败: %w", err)
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.telegram_bot.err.mkdir",
+			"创建状态目录失败: %w"), err)
 	}
 
-	transport, err := buildTransport(strings.TrimSpace(plugin.CfgString(cfg, "proxy", "")))
+	transport, err := buildTransport(ictx.Lang, strings.TrimSpace(plugin.CfgString(cfg, "proxy", "")))
 	if err != nil {
 		return err
 	}
@@ -175,6 +187,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.token = token
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
+	p.lang = ictx.Lang
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.mdOff = map[string]time.Time{}
 	p.stateDir = ictx.StateDir
@@ -186,6 +199,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	core, err := imbot.New(imbot.Config{
 		PluginName:     p.Name(),
 		Sender:         sender{p: p},
+		Lang:           ictx.Lang,
 		StateDir:       ictx.StateDir,
 		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
 		TurnTimeout:    turnTimeout,
@@ -227,23 +241,27 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 //
 // 返回接口而不是 *http.Transport：后者的 nil 值赋进 http.Client.Transport 会变成
 // 「非 nil 接口包着 nil 指针」，标准库照着解引用当场 panic。
-func buildTransport(proxy string) (http.RoundTripper, error) {
+func buildTransport(lang, proxy string) (http.RoundTripper, error) {
 	if proxy == "" {
 		return nil, nil
 	}
 	u, err := url.Parse(proxy)
 	if err != nil {
-		return nil, fmt.Errorf("代理地址无法解析: %w", err)
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.telegram_bot.err.proxy_parse",
+			"代理地址无法解析: %w"), err)
 	}
 	switch u.Scheme {
 	case "http", "https", "socks5", "socks5h":
 	case "":
-		return nil, fmt.Errorf("代理地址要带协议前缀，如 socks5://127.0.0.1:1080")
+		return nil, fmt.Errorf("%s", i18n.T(lang, "plugin.telegram_bot.err.proxy_scheme",
+			"代理地址要带协议前缀，如 socks5://127.0.0.1:1080"))
 	default:
-		return nil, fmt.Errorf("不支持的代理协议 %q，可用 http、https、socks5", u.Scheme)
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.telegram_bot.err.proxy_unsupported",
+			"不支持的代理协议 %q，可用 http、https、socks5"), u.Scheme)
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("代理地址缺少主机和端口")
+		return nil, fmt.Errorf("%s", i18n.T(lang, "plugin.telegram_bot.err.proxy_no_host",
+			"代理地址缺少主机和端口"))
 	}
 	return &http.Transport{Proxy: http.ProxyURL(u)}, nil
 }

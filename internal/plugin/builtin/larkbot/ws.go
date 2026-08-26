@@ -13,6 +13,8 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
 	"wen/internal/imbot"
+
+	"wen/internal/i18n"
 )
 
 // runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出。
@@ -77,7 +79,7 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		return
 	}
 
-	text, note := parseContent(deref(msg.MessageType), deref(msg.Content))
+	text, note := parseContent(p.langOf(), deref(msg.MessageType), deref(msg.Content))
 
 	p.mu.Lock()
 	core, ctx := p.core, p.ctx
@@ -97,22 +99,22 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 
 // parseContent 从事件的 content（JSON 字符串）里取出正文。
 // 只认文本与富文本的纯文字部分，其余类型回一句暂不支持。
-func parseContent(msgType, content string) (text, note string) {
+func parseContent(lang, msgType, content string) (text, note string) {
 	switch msgType {
 	case "text":
 		var c struct {
 			Text string `json:"text"`
 		}
 		if err := json.Unmarshal([]byte(content), &c); err != nil {
-			return "", "消息内容解析失败，请重发。"
+			return "", i18n.T(lang, "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。")
 		}
 		text = strings.TrimSpace(mentionRe.ReplaceAllString(c.Text, ""))
 		if text == "" {
-			return "", "没有收到文字内容。"
+			return "", i18n.T(lang, "plugin.lark_bot.msg.no_text", "没有收到文字内容。")
 		}
 		return text, ""
 	default:
-		return "", "暂不支持该消息类型，请发文字。"
+		return "", i18n.T(lang, "plugin.lark_bot.msg.unsupported", "暂不支持该消息类型，请发文字。")
 	}
 }
 

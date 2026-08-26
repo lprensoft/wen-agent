@@ -25,7 +25,7 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 	p.mu.Unlock()
 
 	useMD := format != formatPlain && p.markdownAllowed(openid)
-	text = sanitizeForQQ(text)
+	text = sanitizeForQQ(p.langOf(), text)
 
 	var chunks []string
 	if useMD {

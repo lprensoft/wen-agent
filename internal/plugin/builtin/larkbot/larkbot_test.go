@@ -227,7 +227,7 @@ func TestParseContent(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			text, note := parseContent(c.msgType, c.content)
+			text, note := parseContent("", c.msgType, c.content)
 			if text != c.wantText {
 				t.Errorf("正文 = %q，想要 %q", text, c.wantText)
 			}
