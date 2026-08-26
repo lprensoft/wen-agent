@@ -259,7 +259,7 @@ func TestSerializeHistoryTruncates(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: llm.RoleUser, Content: strings.Repeat("很长的提问内容。", 3000)},
 	}
-	got := serializeHistory(msgs, 4096)
+	got := serializeHistory("", msgs, 4096)
 	if len(got) > 4096+64 {
 		t.Errorf("应截断到上限附近，实际 %d 字节", len(got))
 	}
@@ -400,9 +400,9 @@ func TestExtractPromptMentionsDecayOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-// 两份判据必须逐句同源：promptGuide 管当场保存、extractPrompt 管自动提炼，
+// 两份判据必须逐句同源：promptGuideZH 管当场保存、extractPromptZH 管自动提炼，
 // 措辞不一致时同一句话会在两条路径上得到相反的取舍——生活类内容曾因此在
-// 自动提炼这条主力路径上被窄判据挡在门外（promptGuide 修过的问题在这条路径的残留）。
+// 自动提炼这条主力路径上被窄判据挡在门外（promptGuideZH 修过的问题在这条路径的残留）。
 func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 	defs := []string{
 		"偏好：对方明确表达的、长期有效的喜好与要求",
@@ -413,34 +413,34 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 		"边界：任何一方明确表达过的不愿意与坚持",
 	}
 	for _, d := range defs {
-		if !strings.Contains(extractPrompt, d) {
-			t.Errorf("extractPrompt 缺少判据 %q", d)
+		if !strings.Contains(extractPromptZH, d) {
+			t.Errorf("extractPromptZH 缺少判据 %q", d)
 		}
-		if !strings.Contains(promptGuide, d) {
-			t.Errorf("promptGuide 缺少判据 %q（两份判据应同源）", d)
+		if !strings.Contains(promptGuideZH, d) {
+			t.Errorf("promptGuideZH 缺少判据 %q（两份判据应同源）", d)
 		}
 	}
 	// 生活语境的关键措辞不得再从提炼路径缺席
 	for _, want := range []string{"身份、作息", "喜欢什么、不喜欢什么", "近况"} {
-		if !strings.Contains(extractPrompt, want) {
-			t.Errorf("extractPrompt 缺少生活语境措辞 %q", want)
+		if !strings.Contains(extractPromptZH, want) {
+			t.Errorf("extractPromptZH 缺少生活语境措辞 %q", want)
 		}
 	}
 	// 单次安排归日程这一句同样两边都要有，且措辞一字不差
 	const agendaRule = "定在某天某时的单次安排（明天下午三点见面、周六去看展）不存为记忆，归日程，过后由时间线记经历。"
-	if !strings.Contains(extractPrompt, agendaRule) || !strings.Contains(promptGuide, agendaRule) {
+	if !strings.Contains(extractPromptZH, agendaRule) || !strings.Contains(promptGuideZH, agendaRule) {
 		t.Errorf("「单次安排归日程」的判据应在两份提示词里措辞一致")
 	}
 	// 「边界」与「经历」的分界两边都要写出来：一次拒绝完全符合「自己遇到过的事」，
 	// 不写分界就会被前一类吸走，连带按生活片段淡忘掉。
 	const border = "自己表达的边界归这一类，不归「经历」"
-	if !strings.Contains(extractPrompt, border) || !strings.Contains(promptGuide, border) {
+	if !strings.Contains(extractPromptZH, border) || !strings.Contains(promptGuideZH, border) {
 		t.Error("「边界」与「经历」的分界应在两份提示词里措辞一致")
 	}
 	// 旧的纯工程窄措辞不得回归
 	for _, bad := range []string{"工作方式或表达方式要求", "项目或协作上确定下来"} {
-		if strings.Contains(extractPrompt, bad) {
-			t.Errorf("extractPrompt 仍含纯工程窄判据 %q", bad)
+		if strings.Contains(extractPromptZH, bad) {
+			t.Errorf("extractPromptZH 仍含纯工程窄判据 %q", bad)
 		}
 	}
 }
@@ -451,7 +451,7 @@ func TestBoundaryTypeSortsLast(t *testing.T) {
 	if got := Types[len(Types)-1]; got != typeBoundary {
 		t.Errorf("Types 末位 = %q, want %q", got, typeBoundary)
 	}
-	for _, s := range []string{listSchema(), saveSchema(t)} {
+	for _, s := range []string{listSchema(t), saveSchema(t)} {
 		if !strings.Contains(s, typeBoundary) {
 			t.Errorf("工具 schema 的分类取值缺「%s」：%s", typeBoundary, s)
 		}
@@ -488,7 +488,10 @@ func TestBoundaryTypeNeverDecaysOnExtract(t *testing.T) {
 }
 
 // listSchema / saveSchema 取两个工具的参数表原文，用来核对分类取值。
-func listSchema() string { return string((&listTool{}).Schema()) }
+func listSchema(t *testing.T) string {
+	t.Helper()
+	return string((&listTool{p: newPluginWithComplete(t, nil, nil)}).Schema())
+}
 
 func saveSchema(t *testing.T) string {
 	t.Helper()

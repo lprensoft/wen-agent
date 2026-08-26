@@ -2,12 +2,13 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 本文件是「对话进行中定期提炼」。压缩那条路径信息量足但触发得太少——大部分对话
@@ -57,17 +58,17 @@ func (w *window) add(ev plugin.TurnEndEvent, maxTurns int) {
 }
 
 // text 把窗口渲染成送去提炼的对话文本。
-func (w *window) text(maxBytes int) string {
+func (w *window) text(lang string, maxBytes int) string {
 	var b strings.Builder
 	for _, t := range w.turns {
 		if s := strings.TrimSpace(t.user); s != "" {
-			fmt.Fprintf(&b, "用户: %s\n", s)
+			b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.user", "用户: %s\n", s))
 		}
 		if s := strings.TrimSpace(t.reply); s != "" {
-			fmt.Fprintf(&b, "助手: %s\n", s)
+			b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.assistant", "助手: %s\n", s))
 		}
 	}
-	return clampDialogue(b.String(), maxBytes)
+	return clampDialogue(lang, b.String(), maxBytes)
 }
 
 // OnTurnEnd 累计真人对话并在到点时触发提炼，顺带按天触发一次淡忘清扫。
@@ -237,7 +238,7 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 	ctx, cancel := context.WithTimeout(plugin.WithScope(s.ctx, w.scope), extractTimeout)
 	defer cancel()
 
-	res, err := p.extractMemories(ctx, s, complete, w.text(turnExtractBytes))
+	res, err := p.extractMemories(ctx, s, complete, w.text(s.lang, turnExtractBytes))
 	if err != nil {
 		if ctx.Err() == nil { // 取消与超时是正常收尾，不值得记一行错误
 			log.Printf("记忆提炼：本轮失败：%v", err)
@@ -248,8 +249,8 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 		return
 	}
 	log.Printf("记忆提炼：新增/修订 %d 条（%s），另刷新 %d 条的最后提及时间",
-		len(res.saved)+len(res.revised), strings.Join(res.names(), "、"), res.touched)
-	p.postNotice(ctx, key.session, res)
+		len(res.saved)+len(res.revised), strings.Join(res.names(s.lang), "、"), res.touched)
+	p.postNotice(ctx, s.lang, key.session, res)
 }
 
 // postNotice 把这次提炼记了什么留在会话里给人看。
@@ -257,31 +258,34 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 // 提炼跑在轮次收尾之后，界面那一轮的事件流已经关了，不留下痕迹的话，模型自动改了
 // 什么就只有日志知道。修订尤其需要说出来：它会覆盖已有记忆，虽然覆盖前留了 .bak，
 // 但没人会想到去翻。
-func (p *Plugin) postNotice(ctx context.Context, sessionID string, res extractResult) {
+func (p *Plugin) postNotice(ctx context.Context, lang, sessionID string, res extractResult) {
 	notice := p.noticeFunc()
 	if notice == nil || sessionID == "" {
 		return
 	}
 	var parts []string
 	if len(res.saved) > 0 {
-		parts = append(parts, "新增 "+quoteNames(res.saved))
+		parts = append(parts, i18n.Tf(lang, "plugin.memory.notice.added", "新增 %s", quoteNames(lang, res.saved)))
 	}
 	if len(res.revised) > 0 {
-		parts = append(parts, "修订 "+quoteNames(res.revised))
+		parts = append(parts, i18n.Tf(lang, "plugin.memory.notice.revised", "修订 %s", quoteNames(lang, res.revised)))
 	}
 	if len(parts) == 0 {
 		return // 只刷新了提及时间，没有内容变化，不值得打扰
 	}
-	if err := notice(ctx, sessionID, "🧠 记忆提炼："+strings.Join(parts, "，")); err != nil {
+	text := i18n.Tf(lang, "plugin.memory.notice.line", "🧠 记忆提炼：%s",
+		strings.Join(parts, i18n.T(lang, "plugin.memory.notice.sep", "，")))
+	if err := notice(ctx, sessionID, text); err != nil {
 		log.Printf("记忆提炼：注记写入失败：%v", err)
 	}
 }
 
 // quoteNames 把条目渲染成「分类/标题」的顿号列表。
-func quoteNames(entries []Entry) string {
+func quoteNames(lang string, entries []Entry) string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, "「"+e.Type+"/"+e.Name+"」")
+		out = append(out, i18n.Tf(lang, "plugin.memory.notice.quoted", "「%s/%s」",
+			memTypes.For(lang, e.Type), e.Name))
 	}
-	return strings.Join(out, "、")
+	return strings.Join(out, i18n.T(lang, "plugin.memory.notice.name_sep", "、"))
 }

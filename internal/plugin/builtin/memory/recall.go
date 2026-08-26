@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 本文件是「按相关性自动召回」：用本轮的用户输入对可读的记忆打分，把最相关的几条
@@ -35,12 +36,12 @@ const (
 	// minRecallBodyBytes 是一条正文在预算里至少要占到的字节数，再少就只剩半句话，
 	// 不如不放。
 	minRecallBodyBytes = 120
-	// recallEllipsis 附在被截断的正文末尾，让模型知道后面还有、可按标题读全文。
-	recallEllipsis = "……（后文略，可用 recall_memory 读全文）"
+	// recallEllipsisZH 附在被截断的正文末尾，让模型知道后面还有、可按标题读全文。
+	recallEllipsisZH = "……（后文略，可用 recall_memory 读全文）"
 )
 
-// recallHeader 领起召回块。块本身不解释用法——那一句在 promptGuide 里，每轮稳定不变。
-const recallHeader = "[想起来的事]"
+// recallHeaderZH 领起召回块。块本身不解释用法——那一句在 promptGuideZH 里，每轮稳定不变。
+const recallHeaderZH = "[想起来的事]"
 
 // stopTokens 是不参与打分的虚词：它们在任何一段话里都会出现，命中只是噪音。
 // 中文按二元组列，英文按单词列。
@@ -195,16 +196,18 @@ func pickRecalls(input string, entries []Entry, max, minScore int) []recallHit {
 // renderRecalls 把召回的记忆渲染成注入块，正文按 entryRunes 截断，整块不超过 maxBytes。
 // 装不下时按排序靠后的先让：一条正文能塞进的部分少于 minRecallBodyBytes 就不再放，
 // 半句话没有信息量。返回块文本与实际放进去的条数；一条都装不下时块为空串。
-func renderRecalls(hits []recallHit, entryRunes, maxBytes int) (string, int) {
+func renderRecalls(lang string, hits []recallHit, entryRunes, maxBytes int) (string, int) {
 	var b strings.Builder
-	b.WriteString(recallHeader)
+	b.WriteString(recallHeaderFor(lang))
+	ellipsis := recallEllipsisFor(lang)
 	n := 0
 	for _, h := range hits {
 		e := h.entry
-		head := "\n\n「" + e.Type + "/" + e.Name + "」（更新于 " + e.Updated.Format("2006-01-02") + "）\n"
+		head := "\n\n" + prompt.Tf(lang, "prompt.memory.recall.entry_head", "「%s/%s」（更新于 %s）",
+			memTypes.For(lang, e.Type), e.Name, e.Updated.Format("2006-01-02")) + "\n"
 		body := strings.TrimSpace(e.Content)
 		if entryRunes > 0 && len([]rune(body)) > entryRunes {
-			body = truncateRunes(body, entryRunes) + recallEllipsis
+			body = truncateRunes(body, entryRunes) + ellipsis
 		}
 		if maxBytes > 0 {
 			room := maxBytes - b.Len() - len(head)
@@ -212,8 +215,8 @@ func renderRecalls(hits []recallHit, entryRunes, maxBytes int) (string, int) {
 				break
 			}
 			if len(body) > room {
-				cut, _ := plugin.TruncateUTF8([]byte(body), room-len(recallEllipsis))
-				body = strings.TrimSpace(string(cut)) + recallEllipsis
+				cut, _ := plugin.TruncateUTF8([]byte(body), room-len(ellipsis))
+				body = strings.TrimSpace(string(cut)) + ellipsis
 			}
 		}
 		b.WriteString(head)

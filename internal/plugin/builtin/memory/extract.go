@@ -9,20 +9,21 @@ import (
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // extractTimeout 是单次提炼的时长上限。后台跑的调用必须有上界，
 // 否则一次卡住的请求会把这个会话的提炼窗口一直占着。
 const extractTimeout = 2 * time.Minute
 
-// extractPrompt 让模型从一段对话里挑出值得长期保留的结论，并对照已有记忆做修订与提及标记。
+// extractPromptZH 让模型从一段对话里挑出值得长期保留的结论，并对照已有记忆做修订与提及标记。
 // 刻意要求“没有就返回空数组”——宁可不记，也不要为了凑数造出噪音记忆。
 //
-// 六类定义必须与 memory.go 的 promptGuide 逐句同源。这两份判据一份管当场保存、
+// 六类定义必须与 memory.go 的 promptGuideZH 逐句同源。这两份判据一份管当场保存、
 // 一份管自动提炼，措辞不一致时同一句话会在两条路径上得到相反的取舍：promptGuide
 // 早已改成兼顾生活（纯工程定义让「我早上十点上班」落不进任何一类），这里曾原样
 // 留着窄版本，于是生活类内容在自动提炼这条主力路径上一直被挡在门外。
-const extractPrompt = `请从下面这段对话中挑出**值得长期记住**的结论，供之后的对话使用。
+const extractPromptZH = `请从下面这段对话中挑出**值得长期记住**的结论，供之后的对话使用。
 
 只挑这六类：
 - 偏好：对方明确表达的、长期有效的喜好与要求——喜欢什么、不喜欢什么、希望怎么
@@ -55,14 +56,14 @@ const extractPrompt = `请从下面这段对话中挑出**值得长期记住**�
    没有就给空数组 []。
 %s
 按下面的 JSON 输出，不要输出任何其它文字：
-{"memories":[{"name":"简短标题","description":"一句话摘要","type":"偏好|约定|事实|踩坑|经历|边界","content":"完整内容","mode":"create|replace"%s}],"mentioned":["分类/标题"]}
+{"memories":[{"name":"简短标题","description":"一句话摘要","type":"%s","content":"完整内容","mode":"create|replace"%s}],"mentioned":["分类/标题"]}
 
 对话：
 %s`
 
-// decayGuide 只在开启了淡忘时追加。措辞不涉及任何具体场景——一条记忆会不会随时间
+// decayGuideZH 只在开启了淡忘时追加。措辞不涉及任何具体场景——一条记忆会不会随时间
 // 失去意义是它自身的性质，与产生它的场景无关。
-const decayGuide = `
+const decayGuideZH = `
 每条记忆还要给出 decay：
 - true：会随时间失去意义的内容——近况、心情、当下的处境与安排、生活里的片段。
 - false：长期有效的内容——稳定的偏好、定下的约定、不易重新得知的事实、验证过的踩坑。
@@ -70,7 +71,7 @@ const decayGuide = `
 标 true 的记忆久未提及会逐步淡忘，最终移出记忆库；拿不准就填 false。
 `
 
-const decaySchemaField = `,"decay":true|false`
+const decaySchemaFieldZH = `,"decay":true|false`
 
 // extracted 是模型返回的一条待保存记忆。
 type extracted struct {
@@ -100,13 +101,14 @@ func (r extractResult) empty() bool {
 }
 
 // names 列出本次新增与修订的条目，供日志与压缩注记使用。
-func (r extractResult) names() []string {
+func (r extractResult) names(lang string) []string {
 	out := make([]string, 0, len(r.saved)+len(r.revised))
 	for _, e := range r.saved {
-		out = append(out, e.Type+"/"+e.Name)
+		out = append(out, memTypes.For(lang, e.Type)+"/"+e.Name)
 	}
 	for _, e := range r.revised {
-		out = append(out, e.Type+"/"+e.Name+"（修订）")
+		out = append(out, prompt.Tf(lang, "prompt.memory.name.revised", "%s/%s（修订）",
+			memTypes.For(lang, e.Type), e.Name))
 	}
 	return out
 }
@@ -118,7 +120,7 @@ func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugi
 	var res extractResult
 	store := p.writeStore(ctx)
 	if store == nil {
-		return res, errNotReady
+		return res, errNotReady(s.lang)
 	}
 	// 已有记忆只取本轮可读范围：跨域取的话，不可读域的标题会莫名压掉本域一条合法的保存
 	existing, err := p.visibleEntries(ctx)
@@ -128,10 +130,15 @@ func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugi
 
 	decayBlock, decayField := "", ""
 	if s.decay {
-		decayBlock, decayField = decayGuide, decaySchemaField
+		decayBlock = prompt.T(s.lang, "prompt.memory.extract.decay_guide", decayGuideZH)
+		decayField = prompt.T(s.lang, "prompt.memory.extract.decay_field", decaySchemaFieldZH)
 	}
-	raw, err := complete(ctx, fmt.Sprintf(extractPrompt,
-		renderExisting(existing), decayBlock, decayField, dialogue))
+	// 分类的候选串按语言给，与提炼提示词同一门语言——否则模型照着一列中文分类
+	// 去填一份英文的判据，回来的值两边都对不上。
+	raw, err := complete(ctx, fmt.Sprintf(
+		prompt.T(s.lang, "prompt.memory.extract.prompt", extractPromptZH),
+		renderExisting(s.lang, existing), decayBlock,
+		strings.Join(memTypes.Values(s.lang), "|"), decayField, dialogue))
 	if err != nil {
 		return res, err
 	}
@@ -164,6 +171,9 @@ func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it e
 	if strings.TrimSpace(it.Name) == "" || strings.TrimSpace(it.Content) == "" {
 		return Entry{}, false, fmt.Errorf("标题或内容为空")
 	}
+	// 先换回中文规范值：下面那条「边界类不淡忘」是按规范值判的，模型报回英文时
+	// 直接比会漏掉，一条立场会被标成随时间淡忘。
+	zhType, _ := memTypes.Canonical(it.Type)
 	e := Entry{
 		Name:        it.Name,
 		Description: it.Description,
@@ -172,7 +182,7 @@ func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it e
 		// 边界类强制不淡忘：立场的改变要有来由、由修订承载，不能由 decay 无声发生。
 		// 只拦自动路径——工具那头人为要存一条会淡忘的边界是合法操作，硬拦会把工具
 		// 变成猜不透的黑盒，那里只靠提示词引导。
-		Decay: s.decay && it.Decay && it.Type != typeBoundary,
+		Decay: s.decay && it.Decay && zhType != typeBoundary,
 	}
 
 	old, exists := findEntry(existing, it.Name)
@@ -188,7 +198,7 @@ func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it e
 	// 写错库的结果是同名记忆在两个库里各留一份，索引合并后只显示其中一份。
 	target := p.storeFor(old.Domain)
 	if target == nil {
-		return Entry{}, false, errNotReady
+		return Entry{}, false, errNotReady(s.lang)
 	}
 	e.Name = old.Name // 沿用原标题，避免大小写或分类前缀的差异生成第二条
 	saved, err := target.Save(e, true)
@@ -230,13 +240,13 @@ func (p *Plugin) touchMentioned(s settings, existing []Entry, mentioned []string
 // renderExisting 把已有记忆渲染成给提炼用的清单。带上摘要而不只是标题：只看标题
 // 认不出「饮食禁忌」与「喜欢香菜」说的是同一件事，于是两条互相打架的记忆会一起
 // 留在库里——那比漏记一条更糟。
-func renderExisting(entries []Entry) string {
+func renderExisting(lang string, entries []Entry) string {
 	if len(entries) == 0 {
-		return "（暂无）"
+		return prompt.T(lang, "prompt.memory.extract.none_yet", "（暂无）")
 	}
 	var b strings.Builder
 	for _, e := range entries {
-		b.WriteString(e.Type)
+		b.WriteString(memTypes.For(lang, e.Type))
 		b.WriteString("/")
 		b.WriteString(e.Name)
 		if e.Description != "" {
@@ -320,32 +330,34 @@ func cutOutermost(s string, open, close byte) (string, bool) {
 
 // serializeHistory 把历史压成便于提炼的纯文本。工具结果与思考过程一律截断——
 // 提炼要的是结论，长篇的中间过程只会稀释信号并推高这次调用的成本。
-func serializeHistory(msgs []llm.Message, maxBytes int) string {
+func serializeHistory(lang string, msgs []llm.Message, maxBytes int) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		switch m.Role {
 		case llm.RoleUser:
-			fmt.Fprintf(&b, "用户: %s\n", m.Content)
+			b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.user", "用户: %s\n", m.Content))
 		case llm.RoleAssistant:
 			if m.Content != "" {
-				fmt.Fprintf(&b, "助手: %s\n", m.Content)
+				b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.assistant", "助手: %s\n", m.Content))
 			}
 			for _, tc := range m.ToolCalls {
-				fmt.Fprintf(&b, "[调用工具 %s %s]\n", tc.Name, truncateRunes(string(tc.Arguments), 160))
+				b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.tool_call", "[调用工具 %s %s]\n",
+					tc.Name, truncateRunes(string(tc.Arguments), 160)))
 			}
 		case llm.RoleTool:
-			fmt.Fprintf(&b, "[工具结果] %s\n", truncateRunes(m.Content, 300))
+			b.WriteString(prompt.Tf(lang, "prompt.memory.dialogue.tool_result", "[工具结果] %s\n",
+				truncateRunes(m.Content, 300)))
 		}
 	}
-	return clampDialogue(b.String(), maxBytes)
+	return clampDialogue(lang, b.String(), maxBytes)
 }
 
 // clampDialogue 给送去提炼的对话文本收口。
-func clampDialogue(s string, maxBytes int) string {
+func clampDialogue(lang, s string, maxBytes int) string {
 	out, truncated := plugin.TruncateUTF8([]byte(s), maxBytes)
 	res := string(out)
 	if truncated {
-		res += "\n...[对话过长已截断]"
+		res += prompt.T(lang, "prompt.memory.dialogue.truncated", "\n...[对话过长已截断]")
 	}
 	return res
 }

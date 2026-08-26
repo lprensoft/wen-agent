@@ -31,6 +31,16 @@ func (e Enum) Values(lang string) []string {
 	return out
 }
 
+// ZHValues 给出全部中文规范值，顺序与声明一致。落盘的比对、排序与「这个值合不合法」
+// 都按它来——那一档只认规范形式，与展示无关，因此不经语言。
+func (e Enum) ZHValues() []string {
+	out := make([]string, 0, len(e.items))
+	for _, it := range e.items {
+		out = append(out, it.ZH())
+	}
+	return out
+}
+
 // JSON 给出可直接拼进 Schema 的 JSON 数组。手拼字符串迟早会拼出一个带引号的值。
 func (e Enum) JSON(lang string) string {
 	b, err := json.Marshal(e.Values(lang))

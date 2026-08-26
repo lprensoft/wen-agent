@@ -248,7 +248,7 @@ func TestTimelineRecordsDayFacts(t *testing.T) {
 		t.Fatalf("问的日期不对: %q，期望 %q", asked, dayOf(yesterday))
 	}
 	block := p.timelineBlock(context.Background(), s)
-	want := dayOf(yesterday) + " " + weekdayCN(yesterday) + "，天气：小雨 24~31℃，陪你聊了加班的事"
+	want := dayOf(yesterday) + " " + weekdayName("", yesterday) + "，天气：小雨 24~31℃，陪你聊了加班的事"
 	if !strings.Contains(block, want) {
 		t.Fatalf("日记抬头不符：\n%s\n期望含：%s", block, want)
 	}
@@ -263,7 +263,7 @@ func TestTimelineWithoutDayFacts(t *testing.T) {
 	p.runTimeline(s)
 
 	block := p.timelineBlock(context.Background(), s)
-	want := dayOf(yesterday) + " " + weekdayCN(yesterday) + "，普通的一天"
+	want := dayOf(yesterday) + " " + weekdayName("", yesterday) + "，普通的一天"
 	if !strings.Contains(block, want) {
 		t.Fatalf("没有事实时应只有日期与星期：\n%s\n期望含：%s", block, want)
 	}
@@ -271,12 +271,12 @@ func TestTimelineWithoutDayFacts(t *testing.T) {
 
 // 老条目（没有 facts 字段）照旧渲染，不能因为升级就变形。
 func TestRenderEntryWithoutFacts(t *testing.T) {
-	got := renderEntry(timelineEntry{Date: "2026-08-21", Summary: "旧的一行"})
+	got := renderEntry("", timelineEntry{Date: "2026-08-21", Summary: "旧的一行"})
 	if got != "2026-08-21 周五，旧的一行" {
 		t.Fatalf("老条目渲染不符: %q", got)
 	}
 	// 日期认不出来时只写日期本身，不猜星期几
-	if got := renderEntry(timelineEntry{Date: "不是日期", Summary: "x"}); got != "不是日期，x" {
+	if got := renderEntry("", timelineEntry{Date: "不是日期", Summary: "x"}); got != "不是日期，x" {
 		t.Fatalf("坏日期渲染不符: %q", got)
 	}
 }

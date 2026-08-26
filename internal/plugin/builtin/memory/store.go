@@ -17,12 +17,9 @@ import (
 	"unicode"
 
 	"gopkg.in/yaml.v3"
-)
 
-// Types 是记忆的分类取值（同时决定索引中的分组顺序）。
-// 顺序决定索引里的分组顺序，新类一律排在末尾：索引经 TurnPrompt 每轮重发，
-// 插在中间会让既有分组整体重排，等于每加一类就让提示词前缀作废一次。
-var Types = []string{"偏好", "约定", "事实", "踩坑", "经历", "边界"}
+	"wen/internal/prompt"
+)
 
 const (
 	defaultType = "事实"
@@ -34,8 +31,9 @@ const (
 	slugMaxRunes = 60
 	// forgottenDir 存放被自动遗忘的记忆，位于记忆库目录之下，不进索引。
 	forgottenDir = "forgotten"
-	// blurNote 附在塌缩后的正文末尾，让读到它的一方知道这里本来还有细节。
-	blurNote = "（更早的细节已经记不清了。）"
+	// blurNoteZH 附在塌缩后的正文末尾，让读到它的一方知道这里本来还有细节。
+	// 它会写进记忆文件，用的是塌缩发生时的语言——已落盘的内容不随语言改写。
+	blurNoteZH = "（更早的细节已经记不清了。）"
 )
 
 // typeRank 返回分类的展示序，未知分类排在最后。
@@ -73,14 +71,16 @@ type Entry struct {
 // 按目录指纹校验缓存；自身的写入直接置脏，不依赖时间戳精度。
 type Store struct {
 	mu       sync.RWMutex
+	lang     string
 	dir      string
 	cache    []Entry
 	cacheKey uint64
 	dirty    bool
 }
 
-func NewStore(dir string) *Store {
-	return &Store{dir: dir, dirty: true}
+// NewStore 建一个指向 dir 的记忆库。lang 决定报错与塌缩注记的语言。
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, dir: dir, dirty: true}
 }
 
 func (s *Store) Dir() string { return s.dir }
@@ -89,7 +89,7 @@ func (s *Store) Dir() string { return s.dir }
 func (s *Store) path(slug string) (string, error) {
 	p := filepath.Join(s.dir, slug+".md")
 	if filepath.Dir(filepath.Clean(p)) != filepath.Clean(s.dir) {
-		return "", fmt.Errorf("非法的记忆名称 %q", slug)
+		return "", fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.bad_slug", "非法的记忆名称 %q"), slug)
 	}
 	return p, nil
 }
@@ -162,14 +162,21 @@ func (s *Store) Get(name string) (Entry, error) {
 	if e, ok := findEntry(entries, name); ok {
 		return e, nil
 	}
-	return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+	return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
+}
+
+// isTypeName 判断一段文字是不是某种语言下的分类名。
+func isTypeName(s string) bool {
+	_, ok := memTypes.Canonical(strings.TrimSpace(s))
+	return ok
 }
 
 // findEntry 依次尝试标题精确匹配与 slug 匹配，均不区分大小写。
 // 索引里一条记忆显示为「分类/标题」，模型很自然会把整串当成标题传进来，故先剥掉分类前缀。
 func findEntry(entries []Entry, name string) (Entry, bool) {
 	name = strings.TrimSpace(name)
-	if typ, rest, ok := strings.Cut(name, "/"); ok && slices.Contains(Types, strings.TrimSpace(typ)) {
+	// 前缀认任意语言的分类名：索引按界面语言渲染，模型照着它回传。
+	if typ, rest, ok := strings.Cut(name, "/"); ok && isTypeName(typ) {
 		name = strings.TrimSpace(rest)
 	}
 	want := strings.ToLower(name)
@@ -181,7 +188,8 @@ func findEntry(entries []Entry, name string) (Entry, bool) {
 			return e, true
 		}
 	}
-	slug, err := slugify(name)
+	// 这里的报错被丢弃，语言无关紧要。
+	slug, err := slugify("", name)
 	if err != nil {
 		return Entry{}, false
 	}
@@ -201,9 +209,9 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 
 	e.Name = strings.TrimSpace(e.Name)
 	if e.Name == "" {
-		return Entry{}, fmt.Errorf("记忆标题不能为空")
+		return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.empty_title", "记忆标题不能为空"))
 	}
-	slug, err := slugify(e.Name)
+	slug, err := slugify(s.lang, e.Name)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -213,9 +221,13 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 	if e.Type == "" {
 		e.Type = defaultType
 	}
-	if !slices.Contains(Types, e.Type) {
-		return Entry{}, fmt.Errorf("未知的记忆分类 %q（可选：%s）", e.Type, strings.Join(Types, " / "))
+	// 模型可能报回本语言的分类名，先换回中文规范值再落盘——磁盘上只有一种写法。
+	zhType, ok := memTypes.Canonical(e.Type)
+	if !ok {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.unknown_type",
+			"未知的记忆分类 %q（可选：%s）"), e.Type, strings.Join(memTypes.Values(s.lang), " / "))
 	}
+	e.Type = zhType
 
 	entries, err := s.listLocked()
 	if err != nil {
@@ -223,7 +235,7 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 	}
 	old, exists := findEntry(entries, e.Name)
 	if exists && !replace {
-		return Entry{}, fmt.Errorf("已存在同名记忆 %q，如需覆盖请把 mode 设为 replace", old.Name)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.exists", "已存在同名记忆 %q，如需覆盖请把 mode 设为 replace"), old.Name)
 	}
 
 	now := time.Now()
@@ -249,14 +261,14 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 		return Entry{}, err
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
-		return Entry{}, fmt.Errorf("创建记忆目录失败: %w", err)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.mkdir", "创建记忆目录失败: %w"), err)
 	}
 	if exists {
 		if raw, err := os.ReadFile(p); err == nil {
 			_ = os.WriteFile(p+".bak", raw, 0o644)
 		}
 	}
-	if err := writeFileAtomic(p, render(e)); err != nil {
+	if err := writeFileAtomic(s.lang, p, render(e)); err != nil {
 		return Entry{}, err
 	}
 	s.dirty = true
@@ -274,14 +286,14 @@ func (s *Store) Delete(name string) (Entry, error) {
 	}
 	e, ok := findEntry(entries, name)
 	if !ok {
-		return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
 	p, err := s.path(e.Slug)
 	if err != nil {
 		return Entry{}, err
 	}
 	if err := os.Remove(p); err != nil {
-		return Entry{}, fmt.Errorf("删除记忆失败: %w", err)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.delete", "删除记忆失败: %w"), err)
 	}
 	s.dirty = true
 	return e, nil
@@ -300,7 +312,7 @@ func (s *Store) Touch(name string, now time.Time) (bool, error) {
 	}
 	e, ok := findEntry(entries, name)
 	if !ok {
-		return false, fmt.Errorf("没有名为 %q 的记忆", name)
+		return false, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
 	if sameDay(e.LastUsed, now) {
 		return false, nil
@@ -327,7 +339,7 @@ func (s *Store) Blur(name string) (Entry, error) {
 	}
 	e, ok := findEntry(entries, name)
 	if !ok {
-		return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
 	if e.Blurred {
 		return e, nil
@@ -336,7 +348,7 @@ func (s *Store) Blur(name string) (Entry, error) {
 	if gist == "" {
 		gist = truncateRunes(firstLine(e.Content), descMaxRunes)
 	}
-	e.Content = strings.TrimSpace(gist + "\n\n" + blurNote)
+	e.Content = strings.TrimSpace(gist + "\n\n" + blurNoteZH)
 	e.Blurred = true
 	if err := s.writeLocked(e); err != nil {
 		return Entry{}, err
@@ -358,7 +370,7 @@ func (s *Store) Archive(name string, now time.Time) (Entry, error) {
 	}
 	e, ok := findEntry(entries, name)
 	if !ok {
-		return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
 	src, err := s.path(e.Slug)
 	if err != nil {
@@ -366,7 +378,7 @@ func (s *Store) Archive(name string, now time.Time) (Entry, error) {
 	}
 	dir := filepath.Join(s.dir, forgottenDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Entry{}, fmt.Errorf("创建遗忘目录失败: %w", err)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.mkdir_forgotten", "创建遗忘目录失败: %w"), err)
 	}
 	// 文件名带归档日期：同一条记忆被遗忘后又重新记起、再被遗忘是正常路径，
 	// 只用 slug 的话第二次归档会覆盖掉第一次。
@@ -378,7 +390,7 @@ func (s *Store) Archive(name string, now time.Time) (Entry, error) {
 		dst = filepath.Join(dir, fmt.Sprintf("%s.%s-%d.md", e.Slug, now.Format("20060102"), i))
 	}
 	if err := os.Rename(src, dst); err != nil {
-		return Entry{}, fmt.Errorf("归档记忆失败: %w", err)
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.archive", "归档记忆失败: %w"), err)
 	}
 	s.dirty = true
 	return e, nil
@@ -390,7 +402,7 @@ func (s *Store) writeLocked(e Entry) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(p, render(e)); err != nil {
+	if err := writeFileAtomic(s.lang, p, render(e)); err != nil {
 		return err
 	}
 	s.dirty = true
@@ -528,14 +540,14 @@ func render(e Entry) []byte {
 }
 
 // writeFileAtomic 先写临时文件再改名，避免进程中断留下半截内容。
-func writeFileAtomic(path string, data []byte) error {
+func writeFileAtomic(lang, path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("保存记忆失败: %w", err)
+		return fmt.Errorf(prompt.T(lang, "prompt.memory.err.save", "保存记忆失败: %w"), err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存记忆失败: %w", err)
+		return fmt.Errorf(prompt.T(lang, "prompt.memory.err.save", "保存记忆失败: %w"), err)
 	}
 	return nil
 }
@@ -553,7 +565,7 @@ var winReserved = map[string]bool{
 
 // slugify 把标题折成可跨平台安全落盘的文件名：保留字母数字（含中文）与 - _，
 // 其余一律折成连字符，再处理 Windows 的保留名与结尾字符限制。
-func slugify(name string) (string, error) {
+func slugify(lang, name string) (string, error) {
 	var b strings.Builder
 	for _, r := range strings.TrimSpace(name) {
 		switch {
@@ -575,7 +587,7 @@ func slugify(name string) (string, error) {
 	slug = strings.Trim(slug, "-_. ")
 
 	if slug == "" {
-		return "", fmt.Errorf("记忆标题 %q 不含任何可用字符", name)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.memory.err.no_usable_chars", "记忆标题 %q 不含任何可用字符"), name)
 	}
 	// 落盘时会补上 .md，而 Windows 把 CON.md 一样当成设备名
 	if winReserved[strings.ToLower(slug)] {

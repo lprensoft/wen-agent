@@ -158,10 +158,10 @@ func TestIndexDegradesToTitlesOnly(t *testing.T) {
 	seed(t, p, 40)
 
 	entries, _ := p.snapshot().store.List()
-	full := renderIndex(entries, 200, 0) // 0 = 不限字节
+	full := renderIndex("", entries, 200, 0) // 0 = 不限字节
 
 	// 预算刚好装不下带摘要的版本：应先砍摘要，而不是砍条目
-	idx := renderIndex(entries, 200, len(full)-1)
+	idx := renderIndex("", entries, 200, len(full)-1)
 	if strings.Contains(idx, "摘要说明文字") {
 		t.Error("超预算时应先省略摘要")
 	}
@@ -181,7 +181,7 @@ func TestIndexTruncatesAndReportsRemainder(t *testing.T) {
 	entries, _ := p.snapshot().store.List()
 
 	// 条数上限：多出来的应被折成一行提示，而不是静默消失
-	idx := renderIndex(entries, 10, 0)
+	idx := renderIndex("", entries, 10, 0)
 	if !strings.Contains(idx, "另有 50 条未列出") {
 		t.Errorf("应注明被略去的条数:\n%s", idx)
 	}
@@ -190,7 +190,7 @@ func TestIndexTruncatesAndReportsRemainder(t *testing.T) {
 	}
 
 	// 字节上限极小：仍要给出可继续查询的出口，不能返回空
-	tiny := renderIndex(entries, 200, 120)
+	tiny := renderIndex("", entries, 200, 120)
 	if len(tiny) > 120 && !strings.Contains(tiny, "list_memories") {
 		t.Errorf("预算极小时应退回一行说明:\n%s", tiny)
 	}

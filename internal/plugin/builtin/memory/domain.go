@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 本文件把「单个记忆库」变成「按可见域分开的多个库」。
@@ -18,7 +19,7 @@ import (
 // storeFor 返回某个可见域的记忆库（惰性创建）。未初始化时返回 nil。
 func (p *Plugin) storeFor(tag string) *Store {
 	p.mu.RLock()
-	base := p.libBase
+	base, lang := p.libBase, p.lang
 	baseStore := p.store
 	p.mu.RUnlock()
 	if base == "" || baseStore == nil {
@@ -36,7 +37,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(lang, plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -84,7 +85,8 @@ func (p *Plugin) visibleEntries(ctx context.Context) ([]Entry, error) {
 		}
 	}
 	if out == nil && len(errs) > 0 {
-		return nil, fmt.Errorf("读取记忆失败: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf(prompt.T(p.langOf(), "prompt.memory.err.read_domains",
+			"读取记忆失败: %s"), strings.Join(errs, "; "))
 	}
 	sortEntries(out)
 	return out, nil
@@ -98,7 +100,8 @@ func (p *Plugin) findVisible(ctx context.Context, name string) (Entry, *Store, e
 	}
 	e, ok := findEntry(entries, name)
 	if !ok {
-		return Entry{}, nil, fmt.Errorf("没有名为 %q 的记忆", name)
+		return Entry{}, nil, fmt.Errorf(prompt.T(p.langOf(), "prompt.memory.err.not_found",
+			"没有名为 %q 的记忆"), name)
 	}
 	return e, p.storeFor(e.Domain), nil
 }

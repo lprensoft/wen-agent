@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // OnCompact 在会话历史被摘要替换之前，用一次独立的模型调用把其中值得长期保留的
@@ -26,10 +27,11 @@ func (p *Plugin) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string,
 	}
 	complete := p.completeFunc()
 	if complete == nil {
-		return "", fmt.Errorf("当前没有可用的模型，跳过记忆提炼")
+		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.no_model",
+			"当前没有可用的模型，跳过记忆提炼"))
 	}
 
-	res, err := p.extractMemories(ctx, s, complete, serializeHistory(ev.History, s.maxExtractBytes))
+	res, err := p.extractMemories(ctx, s, complete, serializeHistory(s.lang, ev.History, s.maxExtractBytes))
 	if err != nil {
 		return "", err
 	}
@@ -38,11 +40,12 @@ func (p *Plugin) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string,
 		return "", nil
 	}
 
-	names := res.names()
+	names := res.names(s.lang)
 	log.Printf("记忆提炼：压缩前新增/修订 %d 条（%s）", len(names), strings.Join(names, "、"))
 	if len(names) == 0 {
 		return "", nil // 只刷新了提及时间，没有可交代的内容
 	}
-	return fmt.Sprintf("（压缩前已从上文提炼并保存 %d 条长期记忆：%s）",
-		len(names), strings.Join(names, "、")), nil
+	return prompt.Tf(s.lang, "prompt.memory.compact.note",
+		"（压缩前已从上文提炼并保存 %d 条长期记忆：%s）",
+		len(names), strings.Join(names, prompt.T(s.lang, "prompt.memory.name_sep", "、"))), nil
 }

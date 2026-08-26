@@ -52,7 +52,7 @@ func backdate(t *testing.T, s *Store, name string, days int) {
 }
 
 func TestLastUsedRoundTrip(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	saveDecaying(t, s, "带时间的记忆", true)
 	backdate(t, s, "带时间的记忆", 40)
 
@@ -76,7 +76,7 @@ func TestLastUsedDefaultsToUpdated(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "老记忆.md"), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e, err := NewStore(dir).Get("老记忆")
+	e, err := NewStore("", dir).Get("老记忆")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestLastUsedDefaultsToUpdated(t *testing.T) {
 }
 
 func TestTouchThrottlesByDay(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	saveDecaying(t, s, "被提及的事", true)
 
 	now := time.Now()
@@ -105,7 +105,7 @@ func TestTouchThrottlesByDay(t *testing.T) {
 }
 
 func TestBlurCollapsesToGist(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	saveDecaying(t, s, "会淡忘的事", true)
 	orig, _ := s.Get("会淡忘的事")
 
@@ -116,7 +116,7 @@ func TestBlurCollapsesToGist(t *testing.T) {
 	if strings.Contains(e.Content, "第二行细节") {
 		t.Errorf("塌缩后不该还留着细节：%q", e.Content)
 	}
-	if !strings.Contains(e.Content, "会淡忘的事的要点") || !strings.Contains(e.Content, blurNote) {
+	if !strings.Contains(e.Content, "会淡忘的事的要点") || !strings.Contains(e.Content, blurNoteZH) {
 		t.Errorf("塌缩后应只剩要点并注明细节已失：%q", e.Content)
 	}
 	// 淡忘是时间流逝的结果而不是一次使用：改了这两个时间，这条记忆就永远等不到归档
@@ -130,14 +130,14 @@ func TestBlurCollapsesToGist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(again.Content, blurNote) != 1 {
+	if strings.Count(again.Content, blurNoteZH) != 1 {
 		t.Errorf("重复塌缩应为幂等：%q", again.Content)
 	}
 }
 
 func TestArchiveMovesOutOfIndex(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	saveDecaying(t, s, "该忘的事", true)
 	saveDecaying(t, s, "还记着的事", true)
 
@@ -167,7 +167,7 @@ func TestArchiveMovesOutOfIndex(t *testing.T) {
 }
 
 func TestSaveKeepsDecayAndClearsBlurred(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	saveDecaying(t, s, "会淡忘的事", true)
 	if _, err := s.Blur("会淡忘的事"); err != nil {
 		t.Fatal(err)

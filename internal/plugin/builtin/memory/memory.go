@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -52,12 +53,14 @@ const (
 func memoriesDir(ictx plugin.InitContext, library string) (string, error) {
 	if library == libraryProject {
 		if ictx.Workdir == "" {
-			return "", fmt.Errorf("按项目分库需要工作目录，当前未设置（可改用全局记忆库）")
+			return "", fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.memory.no_workdir",
+				"按项目分库需要工作目录，当前未设置（可改用全局记忆库）"))
 		}
 		return filepath.Join(ictx.Workdir, ".wen", "memories"), nil
 	}
 	if ictx.StateDir == "" {
-		return "", fmt.Errorf("没有可用的持久化目录，无法保存记忆")
+		return "", fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.memory.no_state_dir",
+			"没有可用的持久化目录，无法保存记忆"))
 	}
 	return filepath.Join(ictx.StateDir, "memories"), nil
 }
@@ -66,6 +69,7 @@ func memoriesDir(ictx plugin.InitContext, library string) (string, error) {
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang            string // 进程语言，注入片段与工具文本据此取用
 	libBase         string // 基准记忆库目录（= 共享域）
 	store           *Store // 基准库，等价于 storeFor("")
 	library         string
@@ -333,7 +337,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 跨字段的约束 NormalizeConfig 表达不了（它只认单字段的 Min/Max），在这里挡一次。
 	// 先于任何副作用检查：Init 失败等于拒绝这次配置。
 	if forgetDays <= blurDays {
-		return fmt.Errorf("「移出记忆库天数」（%d）需大于「细节淡忘天数」（%d）", forgetDays, blurDays)
+		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.memory.err.forget_le_blur",
+			"「移出记忆库天数」（%d）需大于「细节淡忘天数」（%d）"), forgetDays, blurDays)
 	}
 
 	// 先停掉上一份配置起的后台活动：Init 会被 SetConfig 反复调用
@@ -346,9 +351,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.lang = ictx.Lang
 	p.library = library
 	p.libBase = dir
-	p.store = NewStore(dir)
+	p.store = NewStore(ictx.Lang, dir)
 	p.complete = ictx.Complete
 	p.dayFacts = ictx.DayFacts
 	p.notice = ictx.Notice
@@ -426,6 +432,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang             string
 	store            *Store
 	libBase          string
 	maxIndexEntries  int
@@ -453,6 +460,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:             p.lang,
 		store:            p.store,
 		libBase:          p.libBase,
 		maxIndexEntries:  p.maxIndexEntries,
@@ -474,6 +482,13 @@ func (p *Plugin) snapshot() settings {
 		recallMinScore:   p.recallMinScore,
 		ctx:              p.ctx,
 	}
+}
+
+// langOf 取进程语言。未初始化时是空串，prompt.T 据此回中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 // noticeFunc 返回当前的会话注记入口（可能为 nil，此时降级为只记日志）。
@@ -504,13 +519,13 @@ func sortByUpdatedDesc(entries []Entry) {
 	})
 }
 
-// promptHeader 领起本轮注入的记忆索引。它与 promptGuide 各占一个带标题的块：
+// promptHeaderZH 领起本轮注入的记忆索引。它与 promptGuideZH 各占一个带标题的块：
 // 一个是「已经记住了什么」，一个是「什么该记下来」，混在一个标题下模型分不清
 // 哪句是清单、哪句是判据。
-const promptHeader = `[已保存的记忆]
+const promptHeaderZH = `[已保存的记忆]
 以下是已保存的记忆条目，跨会话长期有效。需要某条的细节时用 recall_memory 按标题读取全文。`
 
-// promptGuide 是保存判据。
+// promptGuideZH 是保存判据。
 //
 // 标题不能省。其余插件注入的都是 [场景感知] [心情] 这样的带标题块，这一段早先是
 // 全篇唯一一段无标题的散文，又排在 [角色设定 · 最高优先级] 之前，那句「以下设定优先
@@ -525,7 +540,7 @@ const promptHeader = `[已保存的记忆]
 // 「边界」是第六类：明确表达过的不愿意与坚持，此前无处可归，而它恰恰要求长期精确
 // ——被归进「经历」的话会随生活片段一起淡忘，立场就在无声中变了。它与「经历」的
 // 分界必须写出来，否则一次拒绝完全符合「自己遇到过的事」的定义，会被前一类吸走。
-const promptGuide = `[长期记忆]
+const promptGuideZH = `[长期记忆]
 对话中出现下列内容时，用 save_memory 保存，使其在之后的会话中依然可用：
 - 偏好：对方明确表达的、长期有效的喜好与要求——喜欢什么、不喜欢什么、希望怎么
   相处、希望怎么表达
@@ -547,8 +562,8 @@ const promptGuide = `[长期记忆]
 对话历史被压缩后，摘要中若含上述内容，需要检查是否已经保存。
 [想起来的事] 是随对话自然浮现的记忆正文，直接用，不必再 recall_memory；没列出的仍可查。`
 
-// decayPrompt 只在开启淡忘时追加。
-const decayPrompt = `
+// decayPromptZH 只在开启淡忘时追加。
+const decayPromptZH = `
 保存时还要判断这条记忆会不会随时间失去意义：近况、心情、当下的处境与安排属于会失去
 意义的，把 decay 设为 true，它们久未提及会逐步淡忘直至移出记忆库；稳定的偏好、定下的
 约定、不易重新得知的事实、验证过的踩坑、表达过的边界不要设。
@@ -560,10 +575,11 @@ const decayPrompt = `
 // 可见域，一律全列会把不可读域的记忆标题漏出去。顺带的好处是本方法不再有任何磁盘
 // 访问——列表接口会对禁用的插件也调用它。
 func (p *Plugin) SystemPrompt() string {
-	if p.snapshot().decay {
-		return promptGuide + "\n" + decayPrompt
+	s := p.snapshot()
+	if s.decay {
+		return guideFor(s.lang) + "\n" + decayFor(s.lang)
 	}
-	return promptGuide
+	return guideFor(s.lang)
 }
 
 // TurnPrompt 注入本轮自动想起的记忆正文、可读的记忆索引与时间线。
@@ -584,7 +600,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 		parts = append(parts, block)
 	}
 	if len(entries) > 0 {
-		parts = append(parts, promptHeader+"\n"+renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes))
+		parts = append(parts, headerFor(s.lang)+"\n"+renderIndex(s.lang, entries, s.maxIndexEntries, s.maxIndexBytes))
 	}
 	if block := p.timelineBlock(ctx, s); block != "" {
 		parts = append(parts, block)
@@ -602,7 +618,7 @@ func (p *Plugin) recallBlock(ctx context.Context, s settings, input string, entr
 		return ""
 	}
 	hits := pickRecalls(input, entries, s.recallMax, s.recallMinScore)
-	block, n := renderRecalls(hits, s.recallEntryRunes, s.recallMaxBytes)
+	block, n := renderRecalls(s.lang, hits, s.recallEntryRunes, s.recallMaxBytes)
 	if n == 0 {
 		return ""
 	}
@@ -622,23 +638,24 @@ func (p *Plugin) recallBlock(ctx context.Context, s settings, input string, entr
 // renderIndex 按预算渲染索引，分三级降级：
 // 全列（日期 + 分类/标题 + 摘要）→ 省略摘要只留标题 → 按最近更新截断并注明剩余条数。
 // 降级优先砍摘要而不是砍条目：标题在，模型才知道这条记忆存在，还能按名读取。
-func renderIndex(entries []Entry, maxEntries, maxBytes int) string {
+func renderIndex(lang string, entries []Entry, maxEntries, maxBytes int) string {
 	kept, dropped := limitEntries(entries, maxEntries)
 
-	if out, ok := renderLines(kept, dropped, maxBytes, true); ok {
+	if out, ok := renderLines(lang, kept, dropped, maxBytes, true); ok {
 		return out
 	}
-	if out, ok := renderLines(kept, dropped, maxBytes, false); ok {
+	if out, ok := renderLines(lang, kept, dropped, maxBytes, false); ok {
 		return out
 	}
 	// 仍然超预算：按最近更新丢弃更多条目，直到装得下
 	for n := len(kept) - 1; n > 0; n-- {
 		trimmed, more := limitEntries(entries, n)
-		if out, ok := renderLines(trimmed, more, maxBytes, false); ok {
+		if out, ok := renderLines(lang, trimmed, more, maxBytes, false); ok {
 			return out
 		}
 	}
-	return fmt.Sprintf("（共 %d 条记忆，索引预算不足以列出，可用 list_memories 查看）", len(entries))
+	return prompt.Tf(lang, "prompt.memory.index.over_budget",
+		"（共 %d 条记忆，索引预算不足以列出，可用 list_memories 查看）", len(entries))
 }
 
 // limitEntries 在超出条数上限时按最近更新保留，返回保留的条目（仍是原顺序）与被略去的条数。
@@ -664,7 +681,7 @@ func limitEntries(entries []Entry, max int) ([]Entry, int) {
 	return out, len(entries) - len(out)
 }
 
-func renderLines(entries []Entry, dropped, maxBytes int, withDesc bool) (string, bool) {
+func renderLines(lang string, entries []Entry, dropped, maxBytes int, withDesc bool) (string, bool) {
 	var b strings.Builder
 	for _, e := range entries {
 		b.WriteString("- ")
@@ -672,7 +689,7 @@ func renderLines(entries []Entry, dropped, maxBytes int, withDesc bool) (string,
 		// 这个结论最后一次被确认是什么时候，而不是这件事第一次被提起是什么时候。
 		b.WriteString(e.Updated.Format("2006-01-02"))
 		b.WriteString(" ")
-		b.WriteString(e.Type)
+		b.WriteString(memTypes.For(lang, e.Type))
 		b.WriteString("/")
 		b.WriteString(e.Name)
 		if withDesc && e.Description != "" {
@@ -682,7 +699,8 @@ func renderLines(entries []Entry, dropped, maxBytes int, withDesc bool) (string,
 		b.WriteString("\n")
 	}
 	if dropped > 0 {
-		fmt.Fprintf(&b, "（另有 %d 条未列出，可用 list_memories 查看）\n", dropped)
+		b.WriteString(prompt.Tf(lang, "prompt.memory.index.more",
+			"（另有 %d 条未列出，可用 list_memories 查看）", dropped) + "\n")
 	}
 	out := strings.TrimRight(b.String(), "\n")
 	if maxBytes > 0 && len(out) > maxBytes {
