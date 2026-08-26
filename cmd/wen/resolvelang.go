@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"wen/internal/config"
 	"wen/internal/i18n"
 	"wen/internal/oslocale"
@@ -38,11 +40,30 @@ func adoptLang(cfg *config.Config) string {
 	return uiLang
 }
 
-// adoptLangFromEnv 在还读不到配置时定下语言：帮助文本与未知命令的提示在参数分发
-// 之前就要打出来，而那时连 -c 指向哪个配置文件都还不知道。系统区域是此刻唯一的
-// 线索；随后每个子命令读到配置会用 adoptLang 覆盖掉它。
-func adoptLangFromEnv() {
-	uiLang = resolveLang(nil)
+// adoptLangEarly 在参数分发之前定下语言：帮助文本与未知命令的提示要在这一步就打
+// 出来，而它们同样该跟着 lang: 走——配置里明写了英文，却只有 wen help 一处是中文，
+// 那是说不通的。
+//
+// 因此这里自己去认一次 -c，再只把 lang: 那一个键读出来（config.PeekLang，不校验、
+// 不产生副作用）。认不出、读不到、值不合法，都退回系统区域。随后每个子命令读到完整
+// 配置会用 adoptLang 再定一次，那一次才是权威的。
+func adoptLangEarly(args []string) {
+	uiLang = resolveLang(&config.Config{Lang: config.PeekLang(config.ResolvePath(configArg(args)))})
+}
+
+// configArg 从原始参数里挑出 -c 的值，支持 -c path、-c=path 与 --c 那几种写法。
+// 挑不出来返回空串，交给 config.ResolvePath 去找默认位置。
+func configArg(args []string) string {
+	for i, a := range args {
+		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+		if v, ok := strings.CutPrefix(a, "c="); ok {
+			return v
+		}
+		if a == "c" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // langSummary 把语言的判定结果写成一行，供启动日志与 wen status 使用。

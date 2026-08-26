@@ -113,7 +113,7 @@ func main() {
 
 	// 帮助与未知命令的提示在读到配置之前就要打出来，先按系统区域定一门语言；
 	// 子命令读到配置后会用 adoptLang 覆盖掉它。
-	adoptLangFromEnv()
+	adoptLangEarly(args)
 
 	// 分发规则：第一个参数不以 - 开头且命中命令表时走子命令，否则一律当作 serve
 	// 的参数。这样 wen、wen -p 8080 的行为与加子命令之前完全一致。

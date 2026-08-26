@@ -141,6 +141,26 @@ func ResolvePath(flagPath string) string {
 
 // Load 加载配置：读取 path 指向的 YAML（不存在则用默认值）。
 // 值中的 ${VAR} 占位符会替换为进程环境变量（api_key 推荐直接写在配置里）。
+// PeekLang 只把配置文件里的 lang: 读出来，不做任何校验，出任何差错都答空串。
+//
+// 给参数分发之前的那一步用：帮助文本与未知命令的提示要在 Load 之前打出来，而 Load
+// 会校验模型配置（缺 api_key 直接报错）、还会为遗留的 plugins: 段打一行警告——为了
+// 认一个语言名把这些副作用提前触发一遍是不划算的，况且 wen help 本来就该在配置还
+// 不完整时也能用。
+func PeekLang(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var probe struct {
+		Lang string `yaml:"lang"`
+	}
+	if err := yaml.Unmarshal(expandEnv(raw), &probe); err != nil {
+		return ""
+	}
+	return probe.Lang
+}
+
 func Load(path string) (*Config, error) {
 	cfg := Default()
 
