@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -29,6 +31,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang          string // 进程语言，注入片段、工具文本与状态行据此取用
 	base          string // 基准目录（= 共享域）
 	cooldown      time.Duration
 	maxConditions int
@@ -90,9 +93,9 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "最重能到哪一档。模型报得更重时按这一档收，并告知模型。",
 			Default:     capModerate,
 			Options: []plugin.ConfigOption{
-				{Value: capMild, Label: sevMild},
-				{Value: capModerate, Label: sevModerate},
-				{Value: capSevere, Label: sevSevere},
+				{Value: capMild, Label: sevMild.ZH()},
+				{Value: capModerate, Label: sevModerate.ZH()},
+				{Value: capSevere, Label: sevSevere.ZH()},
 			},
 		},
 	}
@@ -102,7 +105,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // 可重入：先停上一轮检查循环再起新的。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存身体状况")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.health.no_state_dir",
+			"没有可用的持久化目录，无法保存身体状况"))
 	}
 
 	p.Stop()
@@ -113,6 +117,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "health")
 	p.cooldown = time.Duration(plugin.CfgInt(cfg, "cooldown_days", defaultCooldownDays)) * 24 * time.Hour
 	p.maxConditions = plugin.CfgInt(cfg, "max_conditions", defaultMaxConditions)
@@ -145,6 +150,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang          string
 	base          string
 	cooldown      time.Duration
 	maxConditions int
@@ -159,13 +165,21 @@ func (s settings) limits() Limits {
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{base: p.base, cooldown: p.cooldown, maxConditions: p.maxConditions, maxPeak: p.maxPeak}
+	return settings{lang: p.lang, base: p.base, cooldown: p.cooldown, maxConditions: p.maxConditions, maxPeak: p.maxPeak}
 }
 
 // SystemPrompt 注入登记判据，全部为静态内容。
 // 当前状况改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘，
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
+
+// langOf 取进程语言。SystemPrompt 与 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // TurnPrompt 注入本轮的身体状况。没有状况、也不在刚痊愈的窗口里时不注入：
 // 提示词里已经写了「没给出就是一切如常」。
@@ -180,11 +194,11 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil {
 		return "", err
 	}
-	body := renderSnapshot(snap, now, s.cooldown)
+	body := renderSnapshot(s.lang, snap, now, s.cooldown)
 	if body == "" {
 		return "", nil
 	}
-	return stateHeader + "\n" + body, nil
+	return stateHeaderFor(s.lang) + "\n" + body, nil
 }
 
 // ---------- 按可见域分库 ----------
@@ -206,7 +220,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -232,7 +246,7 @@ func (p *Plugin) allDomains() (string, []string) {
 // renderSnapshot 把一个域的全貌翻成话。三段：各状况一行；没有状况时看刚痊愈的两个
 // 窗口（冷却期内「还虚着」，冷却期后同样长的一段「容易再着凉」）；有发作中的状况时
 // 末尾附一句表现指引。全部是话，没有数值。
-func renderSnapshot(snap Snapshot, now time.Time, cooldown time.Duration) string {
+func renderSnapshot(lang string, snap Snapshot, now time.Time, cooldown time.Duration) string {
 	var lines []string
 	sick := false
 	for _, v := range snap.Active {
@@ -242,21 +256,23 @@ func renderSnapshot(snap Snapshot, now time.Time, cooldown time.Duration) string
 		if v.Phase != phasePending {
 			sick = true
 		}
-		lines = append(lines, renderView(v, now))
+		lines = append(lines, renderView(lang, v, now))
 	}
 	if len(lines) == 0 && !snap.LastRecovered.IsZero() {
 		since := now.Sub(snap.LastRecovered)
 		switch {
 		case since < 0:
 		case since < cooldown:
-			lines = append(lines, fmt.Sprintf("刚病好没几天（%s，%s痊愈），还有点虚，精神没全回来；这阵子不会再添新状况。",
-				snap.LastName, agoText(since)))
+			lines = append(lines, prompt.Tf(lang, "prompt.health.recent.cooling",
+				"刚病好没几天（%s，%s痊愈），还有点虚，精神没全回来；这阵子不会再添新状况。",
+				snap.LastName, agoText(lang, since)))
 		case since < 2*cooldown:
-			lines = append(lines, fmt.Sprintf("前阵子刚病过一场（%s），抵抗力还弱，最近容易着凉。", snap.LastName))
+			lines = append(lines, prompt.Tf(lang, "prompt.health.recent.weakened",
+				"前阵子刚病过一场（%s），抵抗力还弱，最近容易着凉。", snap.LastName))
 		}
 	}
 	if sick {
-		lines = append(lines, guideLine)
+		lines = append(lines, guideLineFor(lang))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -286,9 +302,9 @@ func (p *Plugin) StatusLines(lang string) []string {
 			if v.Phase == phaseRecovered {
 				continue
 			}
-			text := statusText(v, now)
+			text := statusText(lang, v, now)
 			if tag != "" {
-				text = tag + "：" + text
+				text = i18n.Tf(lang, "plugin.health.status.domain", "%s：%s", tag, text)
 			}
 			parts = append(parts, text)
 		}
@@ -296,7 +312,8 @@ func (p *Plugin) StatusLines(lang string) []string {
 	if len(parts) == 0 {
 		return nil
 	}
-	return []string{"🤒 身体：" + strings.Join(parts, "；")}
+	return []string{i18n.Tf(lang, "plugin.health.status.line", "🤒 身体：%s",
+		strings.Join(parts, i18n.T(lang, "plugin.health.status.sep", "；")))}
 }
 
 var (

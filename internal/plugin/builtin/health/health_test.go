@@ -115,7 +115,7 @@ func TestToolsRoundTrip(t *testing.T) {
 		t.Fatalf("登记: %q, %v", out, err)
 	}
 	tp, _ := p.TurnPrompt(ctx, plugin.TurnEvent{})
-	if !strings.HasPrefix(tp, stateHeader+"\n着凉第 1 天，有点不舒服，还在往重里走（硬扛着），预计再四五天好。") || !strings.HasSuffix(tp, guideLine) {
+	if !strings.HasPrefix(tp, stateHeaderFor("")+"\n着凉第 1 天，有点不舒服，还在往重里走（硬扛着），预计再四五天好。") || !strings.HasSuffix(tp, guideLineFor("")) {
 		t.Errorf("注入块不对: %q", tp)
 	}
 	if lines := p.StatusLines(""); len(lines) != 1 || lines[0] != "🤒 身体：着凉第 1 天（硬扛中）" {
@@ -147,7 +147,7 @@ func TestToolsRoundTrip(t *testing.T) {
 	}
 	call(t, p, ctx, "update_condition", `{"name":"着凉","recovered":true}`)
 	tp, _ = p.TurnPrompt(ctx, plugin.TurnEvent{})
-	if !strings.HasPrefix(tp, stateHeader+"\n刚病好没几天（着凉，刚刚痊愈），还有点虚") {
+	if !strings.HasPrefix(tp, stateHeaderFor("")+"\n刚病好没几天（着凉，刚刚痊愈），还有点虚") {
 		t.Errorf("刚痊愈应注入余波: %q", tp)
 	}
 	// 冷却：拒绝并说明规则
@@ -190,7 +190,7 @@ func TestDelayedOnsetPostsCueOnce(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	store := p.storeFor("")
 	now := time.Now()
-	c, err := store.Add("着凉", sevModerate, now.Add(3*time.Hour), 4, careTough, now, Limits{})
+	c, err := store.Add("着凉", sevModerate.ZH(), now.Add(3*time.Hour), 4, careTough, now, Limits{})
 	if err != nil || c.Cued {
 		t.Fatalf("延迟发作的登记不该预先标记已投递: %+v, %v", c, err)
 	}
@@ -221,7 +221,7 @@ func TestDelayedOnsetPostsCueOnce(t *testing.T) {
 	}
 
 	// 错过有效期（宕机横跨）：不投，但同样标记，不会在日后补一句「刚开始不舒服」
-	c2, _ := store.Add("头疼", sevMild, now.Add(5*time.Hour), 1, careTough, now, Limits{})
+	c2, _ := store.Add("头疼", sevMild.ZH(), now.Add(5*time.Hour), 1, careTough, now, Limits{})
 	p.postDueCues(now.Add(8 * time.Hour))
 	if cue.Pending(now) {
 		t.Error("过了有效期不该投")
@@ -242,7 +242,7 @@ func TestRecoveredAndClearDropCue(t *testing.T) {
 	store := p.storeFor("")
 	now := time.Now()
 	// 发作时刻在一小时前：postDueCues 此刻会投递
-	store.Add("着凉", sevModerate, now.Add(-time.Hour), 4, careTough, now.Add(-4*time.Hour), Limits{})
+	store.Add("着凉", sevModerate.ZH(), now.Add(-time.Hour), 4, careTough, now.Add(-4*time.Hour), Limits{})
 	p.postDueCues(now)
 	if !cue.Pending(now) {
 		t.Fatal("应先投递")
@@ -255,7 +255,7 @@ func TestRecoveredAndClearDropCue(t *testing.T) {
 	}
 
 	// 清除操作同样撤回
-	store.Add("头疼", sevMild, now.Add(-time.Hour), 1, careTough, now.Add(-30*24*time.Hour), Limits{})
+	store.Add("头疼", sevMild.ZH(), now.Add(-time.Hour), 1, careTough, now.Add(-30*24*time.Hour), Limits{})
 	p.postDueCues(now)
 	if !cue.Pending(now) {
 		t.Fatal("应先投递")
