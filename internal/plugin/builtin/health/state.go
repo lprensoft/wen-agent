@@ -187,9 +187,14 @@ func (c Condition) recoveryAt() time.Time {
 }
 
 // severityAt 把进度换成严重度：加重段从峰值的一部分线性升到峰值，好转段线性落到 0。
+//
+// 进度恰好为 0 走加重段而不是返回 0：view 已经把「还没发作」挡在前面，到得了这里
+// 就说明发作时刻已到，此刻的严重度是峰值的 onsetRatio 那一档。返回 0 的话 band 会
+// 给出空串，注入里就成了「着凉第 1 天，，还在往重里走」——登记完当轮就注入、时钟
+// 还没走动一格时必然撞上。
 func severityAt(peak int, p float64) int {
 	switch {
-	case p <= 0:
+	case p < 0:
 		return 0
 	case p >= 1:
 		return 0

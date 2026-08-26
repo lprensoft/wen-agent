@@ -305,3 +305,17 @@ func TestLoadTolerates(t *testing.T) {
 }
 
 func strp(s string) *string { return &s }
+
+// 登记完当轮就注入，而时钟未必走动过一格：那时进度恰好是 0，而它必须已经算作
+// 「发作了」。曾经返回 0，band 给出空串，注入里就成了「着凉第 1 天，，还在往重里走」。
+func TestSeverityAtZeroProgressIsOnset(t *testing.T) {
+	if got := severityAt(55, 0); got <= 0 {
+		t.Errorf("进度为 0 的严重度 = %d，期望已经是发作那一档", got)
+	}
+	if band("", severityAt(55, 0)) == "" {
+		t.Error("刚发作的状况不该给出空的严重度词")
+	}
+	if got := severityAt(55, -0.1); got != 0 {
+		t.Errorf("进度为负（还没发作）的严重度 = %d，期望 0", got)
+	}
+}
