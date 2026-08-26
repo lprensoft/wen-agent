@@ -33,9 +33,9 @@ const scheduleSchemaZH = `{
   "properties": {
     "content": {"type": "string", "description": "到点后要执行的指令内容，需自包含、不依赖当前对话上下文"},
     "schedule_type": {"type": "string", "enum": ["once", "interval", "daily"], "description": "任务类型：once 一次性；interval 周期；daily 每天定点"},
-    "at": {"type": "string", "description": "once 必填：执行时刻，格式 2006-01-02 15:04（本地时区）"},
+    "at": {"type": "string", "description": "once 必填：执行时刻，格式 \"2006-01-02 15:04\"（本地时区）"},
     "interval_minutes": {"type": "integer", "minimum": 1, "description": "interval 必填：周期分钟数"},
-    "daily_time": {"type": "string", "description": "daily 必填：每天的执行时间，格式 HH:MM（本地时区）"}
+    "daily_time": {"type": "string", "description": "daily 必填：每天的执行时间，格式 \"HH:MM\"（本地时区）"}
   },
   "required": ["content", "schedule_type"]
 }`

@@ -57,7 +57,7 @@ type entry struct {
 	source  string
 	baseCfg map[string]any // 配置文件 plugins.<name>.config
 	userCfg map[string]any // 界面上保存过的配置（持久化到状态文件，覆盖 baseCfg）
-	cfg     map[string]any // 生效配置 = baseCfg 叠加 userCfg
+	cfg     map[string]any // 交给 Init 的那份：baseCfg 叠加 userCfg，再补齐缺省项
 	enabled bool
 	inited  bool
 	// forcedOff 表示「用户想开，但依赖没满足所以被强制关掉」。持久化时按想开来写，
@@ -65,15 +65,36 @@ type entry struct {
 	forcedOff bool
 }
 
-// applyCfg 重算生效配置。
-func (e *entry) applyCfg() {
+// applyCfg 重算交给 Init 的那份配置：配置文件的初值叠上界面存过的值，再按字段
+// 声明补齐缺省项。
+//
+// 补齐那一步不能省，也不能留给插件自己在 Init 里取常量兜底：默认值现在是按语言
+// 解析出来的（见 Manager.fieldsFor），而插件代码里的常量永远是中文。少了它，英文用户
+// 只要没在设置页存过一次，模型收到的就是中文——而界面上显示的是英文，两份东西。
+// 它在加语言维度之前一直看不出来：那时字段默认值与插件里的常量是同一个字符串。
+func (e *entry) applyCfg(fields []ConfigField) {
 	if len(e.userCfg) == 0 {
 		e.cfg = e.baseCfg
+	} else {
+		merged := make(map[string]any, len(e.baseCfg)+len(e.userCfg))
+		maps.Copy(merged, e.baseCfg)
+		maps.Copy(merged, e.userCfg)
+		e.cfg = merged
+	}
+	if len(fields) == 0 {
 		return
 	}
-	merged := make(map[string]any, len(e.baseCfg)+len(e.userCfg))
-	maps.Copy(merged, e.baseCfg)
-	maps.Copy(merged, e.userCfg)
+	// 配置非法时（如手改了配置文件）退回全默认值，与 List 的处理一致——拒绝启动
+	// 整个插件是更差的选择，那会让一个手滑的字段拖垮一项功能。
+	values, err := NormalizeConfig(fields, e.cfg)
+	if err != nil {
+		values, _ = NormalizeConfig(fields, nil)
+	}
+	// 补齐而不是换掉：NormalizeConfig 是按声明过滤的，直接拿它的结果会抹掉配置文件里
+	// 那些插件自己读、却没在设置页暴露的键。
+	merged := make(map[string]any, len(e.cfg)+len(values))
+	maps.Copy(merged, e.cfg)
+	maps.Copy(merged, values)
 	e.cfg = merged
 }
 
@@ -216,16 +237,17 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 		}
 	}
 
-	e := &entry{plugin: p, source: source, baseCfg: cfg.Config, cfg: cfg.Config, enabled: cfg.Enabled}
+	e := &entry{plugin: p, source: source, baseCfg: cfg.Config, enabled: cfg.Enabled}
 	m.entries[name] = e
 	m.order = append(m.order, name)
+	fields := m.fieldsFor(p, source)
 
 	// 持久化状态覆盖配置文件的初始值（界面上的改动优先）
 	if saved, ok := m.loadState()[name]; ok {
 		e.enabled = saved.Enabled
 		e.userCfg = saved.Config
 		// JSON 会把整数读成 float64，按字段声明还原类型；非法值退回配置文件
-		if fields := m.fieldsFor(p, source); len(fields) > 0 && len(e.userCfg) > 0 {
+		if len(fields) > 0 && len(e.userCfg) > 0 {
 			values, err := NormalizeConfig(fields, e.userCfg)
 			if err != nil {
 				log.Printf("插件 %q 的持久化配置无效，改用配置文件的值: %v", name, err)
@@ -233,8 +255,8 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 			}
 			e.userCfg = values
 		}
-		e.applyCfg()
 	}
+	e.applyCfg(fields)
 	if e.enabled && m.suppressed != nil && m.suppressed(p) {
 		e.enabled, e.forcedOff = false, true
 	}
@@ -329,7 +351,7 @@ func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 
 	oldUser, oldCfg := e.userCfg, e.cfg
 	e.userCfg = next
-	e.applyCfg()
+	e.applyCfg(fields)
 	if e.inited {
 		if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.userCfg, e.cfg = oldUser, oldCfg

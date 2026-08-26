@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"encoding/json"
+	"strings"
 
 	"wen/internal/i18n"
 )
@@ -42,12 +43,20 @@ func (e Enum) ZHValues() []string {
 }
 
 // JSON 给出可直接拼进 Schema 的 JSON 数组。手拼字符串迟早会拼出一个带引号的值。
+//
+// 逗号后补一个空格，与这些数组从前手写在 Schema 里的样子一致——JSON 不在乎，但发给
+// 模型的字节因此没变，中文那条路上的提示词缓存不会因为一次重构整段作废。
 func (e Enum) JSON(lang string) string {
-	b, err := json.Marshal(e.Values(lang))
-	if err != nil || len(b) == 0 {
-		return "[]"
+	vals := e.Values(lang)
+	parts := make([]string, 0, len(vals))
+	for _, v := range vals {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "[]"
+		}
+		parts = append(parts, string(b))
 	}
-	return string(b)
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // Canonical 把任意语言的字面量换回中文规范值。

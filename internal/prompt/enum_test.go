@@ -48,7 +48,9 @@ func TestEnumValuesDifferPerLanguage(t *testing.T) {
 
 // JSON 拼出来的要能直接进 Schema。
 func TestEnumJSON(t *testing.T) {
-	if got := testCare.JSON("zh"); got != `["硬扛","吃药","就医"]` {
+	// 逗号后那个空格是有意的：这些数组从前是手写在 Schema 里的，保住它，
+	// 中文那条路上发给模型的字节就一个都没变
+	if got := testCare.JSON("zh"); got != `["硬扛", "吃药", "就医"]` {
 		t.Errorf("JSON(zh) = %s", got)
 	}
 	if got := NewEnum().JSON("en"); got != "[]" {
