@@ -181,7 +181,7 @@ func (h *harness) setPlan(t *testing.T, items ...Item) {
 			items[i].Busy = defaultBusy
 		}
 	}
-	if err := h.p.storeFor("").SavePlan(Plan{Date: day.Format(dateLayout), Weekday: weekdayCN(day), PlannedAt: h.clk.now(), Items: items}); err != nil {
+	if err := h.p.storeFor("").SavePlan(Plan{Date: day.Format(dateLayout), Weekday: weekdayName("", day), PlannedAt: h.clk.now(), Items: items}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -573,25 +573,25 @@ func TestRenderBudgetDegrades(t *testing.T) {
 		cs = append(cs, Commitment{ID: "c", Date: "2026-08-2" + string(rune('2'+i%8)), Start: "10:00", Title: strings.Repeat("约", 25), Flex: flexTry})
 	}
 	s := settings{dayStartHour: 5, maxCommitInject: 8, maxInjectBytes: 0}
-	full := renderPrompt(pl, cs, nil, now, s)
+	full := renderPrompt("", pl, cs, nil, now, s)
 	if !strings.Contains(full, long) {
 		t.Fatal("不设预算时应全列")
 	}
 	// 第一级：去掉经历
 	s.maxInjectBytes = len(full) - 1
-	l1 := renderPrompt(pl, cs, nil, now, s)
+	l1 := renderPrompt("", pl, cs, nil, now, s)
 	if strings.Contains(l1, long) || !strings.Contains(l1, "今天已做：晨跑；查资料。") {
 		t.Fatalf("第一级应去掉经历只留标题：\n%s", l1)
 	}
 	// 第二级：已做压成条数
 	s.maxInjectBytes = len(l1) - 1
-	l2 := renderPrompt(pl, cs, nil, now, s)
+	l2 := renderPrompt("", pl, cs, nil, now, s)
 	if !strings.Contains(l2, "今天已做 2 项。") || !strings.Contains(l2, "08-2") {
 		t.Fatalf("第二级应把已做项压成条数、约定仍列出：\n%s", l2)
 	}
 	// 第三级：约定只剩条数
 	s.maxInjectBytes = len(l2) - 1
-	l3 := renderPrompt(pl, cs, nil, now, s)
+	l3 := renderPrompt("", pl, cs, nil, now, s)
 	if !strings.Contains(l3, "共 8 条，可用 list_commitments 查看。") || strings.Contains(l3, "08-2") {
 		t.Fatalf("第三级约定只剩条数：\n%s", l3)
 	}
@@ -1112,7 +1112,7 @@ func TestPromiseRecordedAndInjected(t *testing.T) {
 		t.Fatalf("落盘不符: %+v", ps)
 	}
 	inj := h.turnPrompt(t)
-	if !strings.Contains(inj, promiseHeader) || !strings.Contains(inj, "你答应：给对方带两个菜") {
+	if !strings.Contains(inj, promiseHeaderFor("")) || !strings.Contains(inj, "你答应：给对方带两个菜") {
 		t.Fatalf("注入里应有这条: %s", inj)
 	}
 	if !strings.Contains(inj, "红烧肉和汤") {
@@ -1132,7 +1132,7 @@ func TestSettledPromiseLeavesInjection(t *testing.T) {
 	if !strings.Contains(out, "做到了") {
 		t.Fatalf("回执不符: %s", out)
 	}
-	if inj := h.turnPrompt(t); strings.Contains(inj, "带两个菜") || strings.Contains(inj, promiseHeader) {
+	if inj := h.turnPrompt(t); strings.Contains(inj, "带两个菜") || strings.Contains(inj, promiseHeaderFor("")) {
 		t.Fatalf("了结后不该再注入: %s", inj)
 	}
 	// 但账还在，回头能查到

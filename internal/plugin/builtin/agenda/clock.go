@@ -3,12 +3,13 @@ package agenda
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // backCueTTL 是「刚回来」这条开口理由的有效期，与天气转变同一口径。
@@ -23,6 +24,7 @@ const (
 	kindCatchUp                     // 离线期间整项都过去了，补记一句
 )
 
+// String 只给日志用，保持中文。给人看的那一处走 name。
 func (k activityKind) String() string {
 	switch k {
 	case kindStart:
@@ -31,6 +33,17 @@ func (k activityKind) String() string {
 		return "补记"
 	}
 	return "结束"
+}
+
+// name 是会话注记里的说法，跟随界面语言。
+func (k activityKind) name(lang string) string {
+	switch k {
+	case kindStart:
+		return i18n.T(lang, "plugin.agenda.kind.start", "开始")
+	case kindCatchUp:
+		return i18n.T(lang, "plugin.agenda.kind.catch_up", "补记")
+	}
+	return i18n.T(lang, "plugin.agenda.kind.end", "结束")
 }
 
 // loop 是时钟：算出最近一个到点时刻定时等待（30 秒兜底），到点派发。派发只改状态与
@@ -140,7 +153,8 @@ func (p *Plugin) tick(ctx context.Context) {
 					it.SoonFired = now
 					changed = true
 					cue.Post(cue.Cue{Source: availabilitySource, Key: "soon|" + it.ID,
-						Text:   fmt.Sprintf("再过 %s是和对方的约定：%s（%s）。", humanMinutes(start.Sub(now)), it.Title, it.Start),
+						Text: prompt.Tf(s.lang, "prompt.agenda.cue.soon", "再过 %s是和对方的约定：%s（%s）。",
+							humanMinutes(s.lang, start.Sub(now)), it.Title, it.Start),
 						Expire: start})
 				}
 				if !dispatch {
@@ -219,8 +233,9 @@ func (p *Plugin) sweepPromises(ctx context.Context, day time.Time) {
 		return
 	}
 	for _, pr := range missed {
-		p.postNotice(ctx, sid, fmt.Sprintf("%s答应的「%s」（%s）到期没有了结，已记为没做成。",
-			promiseByShort(pr.By), pr.Title, fmtDateCN(pr.Date, now.Location())))
+		p.postNotice(ctx, sid, i18n.Tf(s.lang, "plugin.agenda.notice.promise_missed",
+			"%s答应的「%s」（%s）到期没有了结，已记为没做成。",
+			promiseByShort(s.lang, pr.By), pr.Title, fmtDateCN(s.lang, pr.Date, now.Location())))
 	}
 }
 
@@ -247,11 +262,11 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 	switch d.kind {
 	case kindStart:
 		start, _ := d.item.span(day, s.dayStartHour)
-		input = buildStartPrompt(now, d.item, now.Sub(start), s.startGrace)
+		input = buildStartPrompt(s.lang, now, d.item, now.Sub(start), s.startGrace)
 	case kindEnd:
-		input = buildEndPrompt(now, d.item, false)
+		input = buildEndPrompt(s.lang, now, d.item, false)
 	default:
-		input = buildEndPrompt(now, d.item, true)
+		input = buildEndPrompt(s.lang, now, d.item, true)
 	}
 	nctx := plugin.WithScope(ctx, plugin.Scope{Write: d.tag})
 
@@ -269,7 +284,8 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if attempt+1 >= defBusyRetryMax {
 				log.Printf("agenda: 会话 %s 持续繁忙，「%s」的%s轮次放弃", sid, d.item.Title, d.kind)
-				p.postNotice(nctx, sid, fmt.Sprintf("「%s」的%s轮次因会话持续繁忙而放弃。", d.item.Title, d.kind))
+				p.postNotice(nctx, sid, i18n.Tf(s.lang, "plugin.agenda.notice.busy_gave_up",
+					"「%s」的%s轮次因会话持续繁忙而放弃。", d.item.Title, d.kind.name(s.lang)))
 				return
 			}
 			select {
@@ -296,11 +312,12 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 // postBackCue 在结束轮次成功后投一条「刚回来」的开口理由，不依赖模型是否调了工具：
 // 经历以它落盘的版本为准，没写就只说回来了。
 func (p *Plugin) postBackCue(d due) {
-	text := fmt.Sprintf("你刚结束「%s」（%s 回来）", d.item.Title, d.item.End)
+	lang := p.langOf()
+	text := prompt.Tf(lang, "prompt.agenda.cue.back", "你刚结束「%s」（%s 回来）", d.item.Title, d.item.End)
 	if st := p.storeFor(d.tag); st != nil {
 		if pl, err := st.LoadPlan(); err == nil {
 			if it := pl.item(d.item.ID); it != nil && it.Outcome != "" && it.Status == statusDone {
-				text += "：" + it.Outcome
+				text += prompt.Tf(lang, "prompt.agenda.cue.back_outcome", "：%s", it.Outcome)
 			}
 		}
 	}

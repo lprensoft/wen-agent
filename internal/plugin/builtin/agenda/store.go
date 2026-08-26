@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // 字段上限。表与约定随每轮注入，单条必须有确定上界；超长报错让模型压缩后重试，
@@ -67,18 +69,36 @@ const (
 )
 
 // flex 三档：能不能挪。
-var flexLevels = []string{"可挪", "尽量守", "不能动"}
-
+//
+// 这两组值都**会原样落盘**，因此走 prompt.Enum：中文是规范形式，Schema 按语言给出
+// 候选项，模型报回来的值先换回中文再存。表已经排好之后换一门语言，读出来的仍是
+// 同一批值，跳过、排序、可挪判定都不受影响。
 const (
 	flexMovable = "可挪"
 	flexTry     = "尽量守"
 	flexFixed   = "不能动"
 )
 
-// busy 三档：做这件事时能不能回消息，与 availability 的档位同一套词。
-var busyLevels = []string{"轻忙", "重忙", "不回"}
+var flexLevels = prompt.NewEnum(
+	prompt.Text("prompt.agenda.flex.movable", flexMovable),
+	prompt.Text("prompt.agenda.flex.try", flexTry),
+	prompt.Text("prompt.agenda.flex.fixed", flexFixed),
+)
 
-const defaultBusy = "轻忙"
+// busy 三档：做这件事时能不能回消息，与 availability 的档位同一套词。
+const (
+	busyLight = "轻忙"
+	busyHeavy = "重忙"
+	busyNone  = "不回"
+
+	defaultBusy = busyLight
+)
+
+var busyLevels = prompt.NewEnum(
+	prompt.Text("prompt.agenda.busy.light", busyLight),
+	prompt.Text("prompt.agenda.busy.heavy", busyHeavy),
+	prompt.Text("prompt.agenda.busy.none", busyNone),
+)
 
 // Item 是当天表里的一项。
 type Item struct {
@@ -194,12 +214,14 @@ type commitmentsFile struct {
 // （文件可能被用户在进程外修改，体量又小）。写入在锁内同步完成——不起 goroutine 写，
 // 就不存在晚到的旧快照盖掉新进展的问题。
 type Store struct {
-	mu  sync.Mutex
-	dir string
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
+	dir  string
 }
 
 // NewStore 建立指向 dir 的日程库。
-func NewStore(dir string) *Store { return &Store{dir: dir} }
+func NewStore(lang, dir string) *Store { return &Store{lang: lang, dir: dir} }
 
 func (s *Store) planPath() string        { return filepath.Join(s.dir, "plan.json") }
 func (s *Store) commitmentsPath() string { return filepath.Join(s.dir, "commitments.json") }
@@ -219,10 +241,10 @@ func (s *Store) loadPlan() (Plan, error) {
 		if os.IsNotExist(err) {
 			return pl, nil
 		}
-		return pl, fmt.Errorf("读取日程表失败: %w", err)
+		return pl, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.plan_read_failed", "读取日程表失败: %w"), err)
 	}
 	if err := json.Unmarshal(raw, &pl); err != nil {
-		return pl, fmt.Errorf("日程表文件损坏: %w", err)
+		return pl, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.plan_corrupt", "日程表文件损坏: %w"), err)
 	}
 	return pl, nil
 }
@@ -274,10 +296,10 @@ func (s *Store) loadCommitments() (commitmentsFile, error) {
 		if os.IsNotExist(err) {
 			return f, nil
 		}
-		return f, fmt.Errorf("读取约定失败: %w", err)
+		return f, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.commit_read_failed", "读取约定失败: %w"), err)
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return f, fmt.Errorf("约定文件损坏: %w", err)
+		return f, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.commit_corrupt", "约定文件损坏: %w"), err)
 	}
 	return f, nil
 }
@@ -332,10 +354,10 @@ func (s *Store) loadPromises() (promisesFile, error) {
 		if os.IsNotExist(err) {
 			return f, nil
 		}
-		return f, fmt.Errorf("读取答应过的事失败: %w", err)
+		return f, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.promise_read_failed", "读取答应过的事失败: %w"), err)
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return f, fmt.Errorf("答应过的事文件损坏: %w", err)
+		return f, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.promise_corrupt", "答应过的事文件损坏: %w"), err)
 	}
 	return f, nil
 }
@@ -379,18 +401,18 @@ func (s *Store) UpdatePromises(mutate func(ps *[]Promise, next func() string) (b
 func (s *Store) writeJSON(path string, v any) error {
 	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存日程失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.save_failed", "保存日程失败: %w"), err)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return fmt.Errorf("创建日程目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.mkdir_failed", "创建日程目录失败: %w"), err)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存日程失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.save_failed", "保存日程失败: %w"), err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存日程失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.save_failed", "保存日程失败: %w"), err)
 	}
 	return nil
 }
@@ -399,9 +421,20 @@ func (s *Store) writeJSON(path string, v any) error {
 
 const dateLayout = "2006-01-02"
 
-var weekdayNames = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+// weekdaysZH 是七个星期名，一行一个，从周日排起。
+//
+// 整表一个键而不是七个：七个键要靠拼串取用，而拼出来的键静态扫不到，覆盖检查就
+// 看不见它们。核心另有一份（`星期日` 那套措辞）——两处措辞本来就不同，合并会改掉
+// 中文用户看见的字，不合并的代价只是英文那边两个键给出同样的译文。
+const weekdaysZH = "周日\n周一\n周二\n周三\n周四\n周五\n周六"
 
-func weekdayCN(t time.Time) string { return weekdayNames[t.Weekday()] }
+func weekdayName(lang string, t time.Time) string {
+	names := strings.Split(prompt.T(lang, "prompt.agenda.weekdays", weekdaysZH), "\n")
+	if i := int(t.Weekday()); i < len(names) {
+		return names[i]
+	}
+	return t.Weekday().String()
+}
 
 // logicalDay 返回 now 所属的逻辑日期（零点时刻）：day_start_hour 之前算前一天——
 // 凌晨一点还在聊天不算新的一天。
@@ -415,21 +448,22 @@ func logicalDay(now time.Time, dayStartHour int) time.Time {
 }
 
 // parseHHMM 解析 "HH:MM"，返回当天的分钟数。
-func parseHHMM(s string) (int, error) {
+func parseHHMM(lang, s string) (int, error) {
 	s = strings.TrimSpace(s)
 	var hh, mm int
 	if _, err := fmt.Sscanf(s, "%d:%d", &hh, &mm); err != nil || len(s) < 4 || len(s) > 5 {
-		return 0, fmt.Errorf("时间 %q 格式应为 HH:MM，例如 14:30", s)
+		return 0, fmt.Errorf(prompt.T(lang, "prompt.agenda.result.bad_time",
+			"时间 %q 格式应为 HH:MM，例如 14:30"), s)
 	}
 	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return 0, fmt.Errorf("时间 %q 不合法", s)
+		return 0, fmt.Errorf(prompt.T(lang, "prompt.agenda.result.bad_time_value", "时间 %q 不合法"), s)
 	}
 	return hh*60 + mm, nil
 }
 
 // normHHMM 把时间规整成两位数的 "HH:MM"。
-func normHHMM(s string) (string, error) {
-	m, err := parseHHMM(s)
+func normHHMM(lang, s string) (string, error) {
+	m, err := parseHHMM(lang, s)
 	if err != nil {
 		return "", err
 	}
@@ -437,10 +471,11 @@ func normHHMM(s string) (string, error) {
 }
 
 // parseDate 解析 "YYYY-MM-DD" 为本地零点。
-func parseDate(s string, loc *time.Location) (time.Time, error) {
+func parseDate(lang, s string, loc *time.Location) (time.Time, error) {
 	t, err := time.ParseInLocation(dateLayout, strings.TrimSpace(s), loc)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("日期 %q 格式应为 YYYY-MM-DD", s)
+		return time.Time{}, fmt.Errorf(prompt.T(lang, "prompt.agenda.result.bad_date",
+			"日期 %q 格式应为 YYYY-MM-DD"), s)
 	}
 	return t, nil
 }
@@ -449,7 +484,9 @@ func parseDate(s string, loc *time.Location) (time.Time, error) {
 // 的时刻属于次日凌晨（表上写 01:00 的项是这一天将尽的凌晨一点，不是排表之前的那个
 // 凌晨）；end 不晚于 start 时视为跨到次日。
 func absTime(day time.Time, hhmm string, dayStartHour int) time.Time {
-	m, err := parseHHMM(hhmm)
+	// 这里的入参是自己刚落盘的规整值，解不开只可能是文件被手改坏了；语言传空
+	// ——错误当场丢弃，不会到模型跟前。
+	m, err := parseHHMM("", hhmm)
 	if err != nil {
 		return time.Time{}
 	}
@@ -472,32 +509,20 @@ func (it *Item) span(day time.Time, dayStartHour int) (start, end time.Time) {
 
 // ---------- 校验 ----------
 
-func checkRunes(v, what string, max int) error {
+func checkRunes(lang, v, what string, max int) error {
 	if n := len([]rune(v)); n > max {
-		return fmt.Errorf("%s过长（%d 字，上限 %d 字），请压缩后重试", what, n, max)
+		return fmt.Errorf(prompt.T(lang, "prompt.agenda.result.field_long",
+			"%s过长（%d 字，上限 %d 字），请压缩后重试"), what, n, max)
 	}
 	return nil
 }
 
 func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func validFlex(f string) bool {
-	for _, l := range flexLevels {
-		if l == f {
-			return true
-		}
-	}
-	return false
-}
-
-func validBusy(b string) bool {
-	for _, l := range busyLevels {
-		if l == b {
-			return true
-		}
-	}
-	return false
-}
+// canonFlex / canonBusy 把模型报来的任意语言的字面量换回中文规范值。
+// 第二个返回值为 false 表示不在表里，按参数非法处理——不猜一个最接近的。
+func canonFlex(f string) (string, bool) { return flexLevels.Canonical(f) }
+func canonBusy(b string) (string, bool) { return busyLevels.Canonical(b) }
 
 // sortCommitments 按日期与开始时刻排序（稳定）。
 func sortCommitments(cs []Commitment) {
@@ -528,64 +553,69 @@ func countPending(ps []Promise) int {
 
 // promiseByCN 把方向写成人话。两个方向必须在字面上分得开——
 // 混在一起模型会去催对方做它自己答应的事。
-func promiseByCN(by string) string {
+func promiseByCN(lang, by string) string {
 	if by == promiseByUser {
-		return "对方答应："
+		return prompt.T(lang, "prompt.agenda.promise.by_user", "对方答应：")
 	}
-	return "你答应："
+	return prompt.T(lang, "prompt.agenda.promise.by_self", "你答应：")
 }
 
 // promiseByShort 只给称呼，用在句子里。
-func promiseByShort(by string) string {
+func promiseByShort(lang, by string) string {
 	if by == promiseByUser {
-		return "对方"
+		return prompt.T(lang, "prompt.agenda.promise.who_user", "对方")
 	}
-	return "你"
+	return prompt.T(lang, "prompt.agenda.promise.who_self", "你")
 }
 
 // promiseResultCN 把了结方式写成人话。
-func promiseResultCN(result string) string {
+func promiseResultCN(lang, result string) string {
 	switch result {
 	case promiseDone:
-		return "做到了"
+		return prompt.T(lang, "prompt.agenda.promise.result_done", "做到了")
 	case promiseMissed:
-		return "没做成"
+		return prompt.T(lang, "prompt.agenda.promise.result_missed", "没做成")
 	case promiseDropped:
-		return "不作数了"
+		return prompt.T(lang, "prompt.agenda.promise.result_dropped", "不作数了")
 	}
 	return result
 }
 
 // fmtDateCN 把 YYYY-MM-DD 写成「8 月 23 日（周日）」。
-func fmtDateCN(date string, loc *time.Location) string {
-	t, err := parseDate(date, loc)
+func fmtDateCN(lang, date string, loc *time.Location) string {
+	t, err := parseDate(lang, date, loc)
 	if err != nil {
 		return date
 	}
-	return fmt.Sprintf("%d 月 %d 日（%s）", int(t.Month()), t.Day(), weekdayCN(t))
+	return prompt.Tf(lang, "prompt.agenda.date.long", "%d 月 %d 日（%s）",
+		int(t.Month()), t.Day(), weekdayName(lang, t))
 }
 
 // fmtDateShort 把 YYYY-MM-DD 写成「08-23（周日）」。
-func fmtDateShort(date string, loc *time.Location) string {
-	t, err := parseDate(date, loc)
+func fmtDateShort(lang, date string, loc *time.Location) string {
+	t, err := parseDate(lang, date, loc)
 	if err != nil {
 		return date
 	}
-	return fmt.Sprintf("%s（%s）", t.Format("01-02"), weekdayCN(t))
+	return prompt.Tf(lang, "prompt.agenda.date.short", "%s（%s）",
+		t.Format("01-02"), weekdayName(lang, t))
 }
 
 // humanMinutes 把时长写成「N 分钟 / N 小时 / N 小时 N 分钟」。
-func humanMinutes(d time.Duration) string {
+//
+// 不走 prompt.Duration：那一份只给一个单位的精度（一小时半说成「1 小时」），
+// 而日程要报的正是「已进行 1 小时 20 分钟」这种分钟级的量。
+func humanMinutes(lang string, d time.Duration) string {
 	mins := int(d.Round(time.Minute) / time.Minute)
 	if mins < 0 {
 		mins = 0
 	}
 	if mins < 60 {
-		return fmt.Sprintf("%d 分钟", mins)
+		return prompt.Tf(lang, "prompt.agenda.dur.minutes", "%d 分钟", mins)
 	}
 	h, m := mins/60, mins%60
 	if m == 0 {
-		return fmt.Sprintf("%d 小时", h)
+		return prompt.Tf(lang, "prompt.agenda.dur.hours", "%d 小时", h)
 	}
-	return fmt.Sprintf("%d 小时 %d 分钟", h, m)
+	return prompt.Tf(lang, "prompt.agenda.dur.hours_minutes", "%d 小时 %d 分钟", h, m)
 }

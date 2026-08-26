@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -92,7 +93,7 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 		}
 	}
 	sortCommitments(todayCs)
-	input := buildPlanPrompt(p.now(), todayCs)
+	input := buildPlanPrompt(s.lang, p.now(), todayCs)
 
 	for attempt := 0; ; attempt++ {
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -170,7 +171,8 @@ func (p *Plugin) pruneCommitments(ctx context.Context, st *Store, sid, today str
 		return
 	}
 	for _, c := range dropped {
-		p.postNotice(ctx, sid, fmt.Sprintf("%s的约定「%s」没有排进当天，已丢弃。", fmtDateCN(c.Date, p.now().Location()), c.Title))
+		p.postNotice(ctx, sid, i18n.Tf(p.langOf(), "plugin.agenda.notice.commit_dropped",
+			"%s的约定「%s」没有排进当天，已丢弃。", fmtDateCN(p.langOf(), c.Date, p.now().Location()), c.Title))
 	}
 }
 
