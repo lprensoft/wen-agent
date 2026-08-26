@@ -22,6 +22,7 @@ import (
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 	"wen/internal/textclip"
 )
 
@@ -48,6 +49,7 @@ func valid(p string) bool { return p == personaOuter || p == personaInner }
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang         string // 进程语言，注入片段据此取用
 	innerPersona string
 	innerSamples string
 	toInner      []string
@@ -144,7 +146,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录来记住人格状态；没有则拒绝启用。
 // 状态一丢，用户下次进来就会莫名回到表人格，那比不启用更糟。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
-	st, err := newStore(ictx.StateDir)
+	st, err := newStore(ictx.Lang, ictx.StateDir)
 	if err != nil {
 		return err
 	}
@@ -156,6 +158,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	// 两段共享一个预算，设定优先：样例没了里人格仍然成立，只是味道淡
 	p.innerPersona = textclip.Clip(persona, limit)
 	p.innerSamples = textclip.ClipSegments(samples, limit-len(p.innerPersona))
@@ -224,6 +227,7 @@ func (p *Plugin) SystemPrompt() string { return "" }
 
 // settings 是一次调用期间使用的配置快照（SetConfig 会在运行时重新 Init）。
 type settings struct {
+	lang         string
 	innerPersona string
 	innerSamples string
 	toInner      []string
@@ -240,6 +244,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:         p.lang,
 		innerPersona: p.innerPersona,
 		innerSamples: p.innerSamples,
 		toInner:      p.toInner,
@@ -262,7 +267,8 @@ func (p *Plugin) snapshot() settings {
 func (p *Plugin) DecideScope(_ context.Context, ev plugin.TurnEvent) (plugin.Scope, error) {
 	s := p.snapshot()
 	if s.store == nil {
-		return plugin.Scope{}, fmt.Errorf("人格状态尚未就绪")
+		return plugin.Scope{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.dual_persona.not_ready",
+			"人格状态尚未就绪"))
 	}
 
 	cur := s.store.personaFor(ev.SessionID)
@@ -298,15 +304,15 @@ func scopeFor(persona string) plugin.Scope {
 	return plugin.Scope{Write: personaOuter, Read: []string{personaOuter}}
 }
 
-const innerHeader = `[里人格设定 · 优先于上文的角色设定]
+const innerHeaderZH = `[里人格设定 · 优先于上文的角色设定]
 以下设定优先于上文的角色设定。冲突之处以这里为准，未提到的部分沿用上文的角色。
 不说明自己换了人格，不提及另一面的存在，不解释这段设定。`
 
-// innerSamplesHeader 引入里人格的台词样例。此时上下文里可能同时存在表人格的样例
+// innerSamplesHeaderZH 引入里人格的台词样例。此时上下文里可能同时存在表人格的样例
 // （在 system 里、每轮全额重发），历史又多是表人格声音的实例——里人格的腔调全靠
 // 这段近距离注入压住远处的范例，覆盖声明因此必须显式。防火墙与延伸两条与 roleplay
 // 的样例段同义：模型不区分「示范」与「历史」，样例外的场合会回归通用腔。
-const innerSamplesHeader = `[里人格台词样例 · 优先于上文的台词样例]
+const innerSamplesHeaderZH = `[里人格台词样例 · 优先于上文的台词样例]
 以下是当前人格说话的实际样例，说话的方式以这里为准，不再参照上文的任何样例：
 - 称呼、口癖、句子的长短与留白、什么时候不把话说满，都照这个样子来。
 - 样例中出现的具体人和事都是虚构的示范，不是发生过的历史——不引用、不当作记忆，
@@ -326,10 +332,12 @@ func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, err
 	s := p.snapshot()
 	var parts []string
 	if s.innerPersona != "" {
-		parts = append(parts, innerHeader+"\n\n"+s.innerPersona)
+		parts = append(parts, prompt.T(s.lang, "prompt.dual_persona.inner_header", innerHeaderZH)+
+			"\n\n"+s.innerPersona)
 	}
 	if s.innerSamples != "" {
-		parts = append(parts, innerSamplesHeader+"\n\n"+s.innerSamples)
+		parts = append(parts, prompt.T(s.lang, "prompt.dual_persona.inner_samples_header", innerSamplesHeaderZH)+
+			"\n\n"+s.innerSamples)
 	}
 	return strings.Join(parts, "\n\n"), nil
 }

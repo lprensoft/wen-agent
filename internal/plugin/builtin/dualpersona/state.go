@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"wen/internal/prompt"
 )
 
 // maxTrackedSessions 限制状态文件里记录的会话数，超出后丢弃最早写入的。
@@ -32,12 +34,14 @@ type store struct {
 	st   state
 }
 
-func newStore(dir string) (*store, error) {
+func newStore(lang, dir string) (*store, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("没有可用的持久化目录，无法记住人格状态")
+		return nil, fmt.Errorf("%s", prompt.T(lang, "prompt.dual_persona.no_state_dir",
+			"没有可用的持久化目录，无法记住人格状态"))
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("创建状态目录失败: %w", err)
+		return nil, fmt.Errorf(prompt.T(lang, "prompt.dual_persona.err.mkdir",
+			"创建状态目录失败: %w"), err)
 	}
 	s := &store{path: filepath.Join(dir, "state.json")}
 	s.st = s.load()

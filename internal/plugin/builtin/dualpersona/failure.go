@@ -8,6 +8,7 @@ import (
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 失败转译的里人格侧：里人格轮次的走神台词按里人格设定生成，口吻才对得上。
@@ -22,7 +23,7 @@ const (
 	failureLineMaxRunes    = 120
 )
 
-const failurePrompt = `下面是一段角色设定：
+const failurePromptZH = `下面是一段角色设定：
 
 %s
 
@@ -47,7 +48,8 @@ func (p *Plugin) TranslateFailure(ctx context.Context, ev plugin.TurnFailure) (s
 	}
 	cctx, cancel := context.WithTimeout(ctx, failureCompleteTimeout)
 	defer cancel()
-	out, err := s.complete(cctx, fmt.Sprintf(failurePrompt, s.innerPersona))
+	out, err := s.complete(cctx, fmt.Sprintf(
+		prompt.T(s.lang, "prompt.dual_persona.failure_prompt", failurePromptZH), s.innerPersona))
 	if err != nil {
 		return "", false
 	}
