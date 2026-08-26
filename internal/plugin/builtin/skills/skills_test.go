@@ -48,7 +48,7 @@ func TestScanLoadsSkills(t *testing.T) {
 	writeSkill(t, dir, "pdf", "name: pdf\ndescription: 处理 PDF 的提取与合并", "第一步：先看页数。")
 	writeSkill(t, dir, "xlsx", "description: 读写表格", "用脚本改单元格。")
 
-	res := scan(dir, maxDescRunes)
+	res := scan("", dir, maxDescRunes)
 	if len(res.problems) != 0 {
 		t.Fatalf("不该有问题: %v", res.problems)
 	}
@@ -77,7 +77,7 @@ func TestScanProblemsDoNotStopTheRest(t *testing.T) {
 	// 名称与目录名不一致：仍按目录名加载，只提醒一句
 	writeSkill(t, dir, "renamed", "name: 别的名字\ndescription: 改过名的", "正文")
 
-	res := scan(dir, maxDescRunes)
+	res := scan("", dir, maxDescRunes)
 	got := map[string]bool{}
 	for _, s := range res.skills {
 		got[s.Name] = true
@@ -100,7 +100,7 @@ func TestScanProblemsDoNotStopTheRest(t *testing.T) {
 }
 
 func TestScanMissingDir(t *testing.T) {
-	res := scan(filepath.Join(t.TempDir(), "nope"), maxDescRunes)
+	res := scan("", filepath.Join(t.TempDir(), "nope"), maxDescRunes)
 	if !res.missing {
 		t.Fatal("目录不存在应被标出")
 	}

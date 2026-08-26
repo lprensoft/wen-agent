@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/skillroots"
 )
@@ -36,10 +37,10 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // StartAction 立即返回，扫描在后台进行。
 func (p *Plugin) StartAction(ctx context.Context, key string) error {
 	if key != actionRescan {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	p.mu.RLock()
-	saved, maxList, maxDesc := p.dir, p.maxList, maxDescRunes
+	lang, saved, maxList, maxDesc := p.lang, p.dir, p.maxList, maxDescRunes
 	p.mu.RUnlock()
 
 	// 草稿值必须在这里同步取出：ctx 属于那个 HTTP 请求，响应发出后就失效了，
@@ -50,23 +51,24 @@ func (p *Plugin) StartAction(ctx context.Context, key string) error {
 		target, live = draft, false
 	}
 	if target == "" {
-		err := fmt.Errorf("技能目录尚未确定，请先保存一次配置")
+		err := fmt.Errorf("%s", i18n.T(lang, "plugin.skills.action.no_dir",
+			"技能目录尚未确定，请先保存一次配置"))
 		p.setActionState(plugin.ActionState{Status: plugin.ActionError, Message: err.Error() + "。"})
 		return err
 	}
 
 	seq := p.beginAction(plugin.ActionState{
 		Status:  plugin.ActionPending,
-		Message: "正在扫描 " + target + " …",
+		Message: i18n.Tf(lang, "plugin.skills.action.scanning", "正在扫描 %s …", target),
 	})
-	go p.runRescan(seq, target, live, maxList, maxDesc)
+	go p.runRescan(seq, lang, target, live, maxList, maxDesc)
 	return nil
 }
 
 // runRescan 扫一遍目录并报告结果。live 为真时把结果写回生效状态——
 // 扫的是尚未保存的草稿目录时不写：那还不是用户的决定，先看结果再决定要不要保存。
-func (p *Plugin) runRescan(seq uint64, dir string, live bool, maxList, maxDesc int) {
-	res := scan(dir, maxDesc)
+func (p *Plugin) runRescan(seq uint64, lang, dir string, live bool, maxList, maxDesc int) {
+	res := scan(lang, dir, maxDesc)
 	if live {
 		// 走完整的 rescan 而不是把这一趟的结果直接写回：生效清单是「用户自己的
 		// 目录 + 各插件包登记的目录」合起来的，只写这一趟等于把插件包里的技能
@@ -75,37 +77,40 @@ func (p *Plugin) runRescan(seq uint64, dir string, live bool, maxList, maxDesc i
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "技能目录：%s\n\n", dir)
+	b.WriteString(i18n.Tf(lang, "plugin.skills.report.dir", "技能目录：%s\n\n", dir))
 	// 每一段都以换行结尾，后面的段落才能靠开头的空行与它隔开
 	switch {
 	case res.missing:
-		b.WriteString("这个目录不存在。请先建好它，再把技能放进去。\n")
+		b.WriteString(i18n.T(lang, "plugin.skills.report.missing",
+			"这个目录不存在。请先建好它，再把技能放进去。\n"))
 	case len(res.skills) == 0:
-		b.WriteString("没有找到可用的技能。\n")
+		b.WriteString(i18n.T(lang, "plugin.skills.report.none", "没有找到可用的技能。\n"))
 	default:
-		fmt.Fprintf(&b, "加载了 %d 个技能：\n", len(res.skills))
+		b.WriteString(i18n.Tf(lang, "plugin.skills.report.loaded", "加载了 %d 个技能：\n", len(res.skills)))
 		for _, s := range res.skills {
 			fmt.Fprintf(&b, "· %s：%s\n", s.Name, s.Desc)
 		}
 		if maxList > 0 && len(res.skills) > maxList {
-			fmt.Fprintf(&b, "\n常驻清单只列前 %d 个，其余的模型可用 list_skills 查到。\n", maxList)
+			b.WriteString(i18n.Tf(lang, "plugin.skills.report.capped",
+				"\n常驻清单只列前 %d 个，其余的模型可用 list_skills 查到。\n", maxList))
 		}
 	}
 	// 问题单独列出：一处坏掉不影响其余，但得让人知道坏在哪儿
 	if len(res.problems) > 0 && !res.missing {
-		fmt.Fprintf(&b, "\n有 %d 处没能加载：\n", len(res.problems))
+		b.WriteString(i18n.Tf(lang, "plugin.skills.report.problems", "\n有 %d 处没能加载：\n", len(res.problems)))
 		for _, m := range res.problems {
 			fmt.Fprintf(&b, "· %s\n", m)
 		}
 	}
 	if !live {
-		b.WriteString("\n以上是对尚未保存的目录的试扫，当前生效的技能没有变动。保存配置后才会切过去。")
+		b.WriteString(i18n.T(lang, "plugin.skills.report.draft",
+			"\n以上是对尚未保存的目录的试扫，当前生效的技能没有变动。保存配置后才会切过去。"))
 	}
 	// 插件包带进来的技能不在这一趟的结果里（这里扫的是技能目录本身），
 	// 但它们确实在生效清单中——不说一句的话，界面上的条数会对不上。
 	if n := len(skillroots.List()); n > 0 {
-		fmt.Fprintf(&b, `
-另有 %d 个插件包各自带着技能，它们与上面这些合成同一份清单。`, n)
+		b.WriteString(i18n.Tf(lang, "plugin.skills.report.bundles",
+			"\n另有 %d 个插件包各自带着技能，它们与上面这些合成同一份清单。", n))
 	}
 
 	st := plugin.ActionState{Status: plugin.ActionDone, Message: strings.TrimRight(b.String(), "\n")}
@@ -117,7 +122,7 @@ func (p *Plugin) runRescan(seq uint64, dir string, live bool, maxList, maxDesc i
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionRescan {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()
