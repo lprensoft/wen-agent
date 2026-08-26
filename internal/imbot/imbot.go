@@ -12,11 +12,11 @@ package imbot
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -54,6 +54,12 @@ type Config struct {
 	PluginName string // 插件名，用于日志前缀
 	Sender     Sender
 	StateDir   string // 会话绑定落在 <StateDir>/sessions.json
+	// Lang 是这条通道对外说话用的语言（命令回执、错误提示、注入模型的引导）。
+	// 由插件从 InitContext.Lang 原样带下来；空串按中文处理。
+	//
+	// 不按入站消息猜：同一个用户可能中英文混着发，而这条通道的回执与它所在服务
+	// 的其它出口（Web UI 的状态行、日志）说的应该是同一门语言。
+	Lang string
 
 	ConfirmTimeout time.Duration
 	TurnTimeout    time.Duration // 0 表示用 DefaultTurnTimeout
@@ -122,14 +128,17 @@ func New(cfg Config) (*Core, error) {
 		return nil, fmt.Errorf("imbot: 需要持久化目录")
 	}
 	if cfg.RunTurn == nil || cfg.NewSession == nil {
-		return nil, fmt.Errorf("当前环境不支持插件发起对话轮次")
+		return nil, fmt.Errorf("%s", i18n.T(cfg.Lang, "imbot.err.no_run_turn",
+			"当前环境不支持插件发起对话轮次"))
 	}
 	if cfg.Sessions == nil {
-		return nil, fmt.Errorf("当前环境不支持会话查询")
+		return nil, fmt.Errorf("%s", i18n.T(cfg.Lang, "imbot.err.no_sessions",
+			"当前环境不支持会话查询"))
 	}
 	binding, err := loadBinding(cfg.StateDir)
 	if err != nil {
-		return nil, fmt.Errorf("加载会话映射失败: %w", err)
+		return nil, fmt.Errorf(i18n.T(cfg.Lang, "imbot.err.load_bindings",
+			"加载会话映射失败: %w"), err)
 	}
 	if cfg.TurnTimeout <= 0 {
 		cfg.TurnTimeout = DefaultTurnTimeout
@@ -197,7 +206,7 @@ func (c *Core) SessionFor(userID string) (string, error) {
 			if err := c.binding.Set(userID, sid); err != nil {
 				return "", err
 			}
-			log.Printf("%s: 用户 %s 加入分通道的当前会话 %s", c.cfg.PluginName, userID, sid)
+			i18n.Logf(c.cfg.Lang, "log.imbot.joined_anchor", "%s: 用户 %s 加入分通道的当前会话 %s", c.cfg.PluginName, userID, sid)
 		}
 		return sid, nil
 	}
@@ -230,7 +239,7 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		return
 	}
 	if !c.allowed(msg.UserID) {
-		log.Printf("%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", c.cfg.PluginName, msg.UserID)
+		i18n.Logf(c.cfg.Lang, "log.imbot.rejected", "%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", c.cfg.PluginName, msg.UserID)
 		return
 	}
 	if c.cfg.OnAccepted != nil {
@@ -255,15 +264,15 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		approved := text == "/apply"
 		ch, ok := c.broker.take(msg.UserID)
 		if !ok {
-			c.send(ctx, msg, "当前没有等待确认的操作。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.none", "当前没有等待确认的操作。"))
 			return
 		}
 		// 先回执、再投答复：反过来的话，被解开的那一轮可能抢在回执前面把结果发出去，
 		// 用户会先看到执行结果再看到「已允许」
 		if approved {
-			c.send(ctx, msg, "✅ 已允许，继续执行。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.applied", "✅ 已允许，继续执行。"))
 		} else {
-			c.send(ctx, msg, "🚫 已拒绝该操作。")
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.confirm.denied", "🚫 已拒绝该操作。"))
 		}
 		ch <- approved
 		return
@@ -307,7 +316,7 @@ func (c *Core) enqueue(ctx context.Context, msg Message) {
 	select {
 	case q <- msg:
 	default:
-		c.send(ctx, msg, "上一条消息还在处理中，请稍候再发。")
+		c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.queue_full", "上一条消息还在处理中，请稍候再发。"))
 	}
 }
 
@@ -381,7 +390,7 @@ func (c *Core) PushNotice(ev plugin.NoticeEvent) {
 		go func(userID string) {
 			defer c.wg.Done()
 			if !c.cfg.Push(ctx, userID, ev.Text) {
-				log.Printf("%s: 注记推送未送达 %s", c.cfg.PluginName, userID)
+				i18n.Logf(c.cfg.Lang, "log.imbot.notice_undelivered", "%s: 注记推送未送达 %s", c.cfg.PluginName, userID)
 			}
 		}(userID)
 	}

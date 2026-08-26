@@ -73,7 +73,7 @@ func antRun(t *testing.T, frames []antFrame, req ChatRequest) (map[string]any, a
 	srv := antServer(t, frames, &got)
 	defer srv.Close()
 
-	ch, err := NewAnthropic(srv.URL, "sk-ant-test", false).ChatStream(context.Background(), req)
+	ch, err := NewAnthropic("", srv.URL, "sk-ant-test", false).ChatStream(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func antRunCached(t *testing.T, frames []antFrame, req ChatRequest) map[string]a
 	srv := antServer(t, frames, &got)
 	defer srv.Close()
 
-	ch, err := NewAnthropic(srv.URL, "sk-ant-test", true).ChatStream(context.Background(), req)
+	ch, err := NewAnthropic("", srv.URL, "sk-ant-test", true).ChatStream(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestAnthropicAPIErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ch, err := NewAnthropic(srv.URL, "bad", false).ChatStream(context.Background(), ChatRequest{
+	ch, err := NewAnthropic("", srv.URL, "bad", false).ChatStream(context.Background(), ChatRequest{
 		Model: "claude-opus-4-5", Messages: testMessages("hi"),
 	})
 	if err == nil {
@@ -358,10 +358,10 @@ func TestAnthropicAPIErrorStatus(t *testing.T) {
 }
 
 func TestAnthropicEndpointNotDuplicated(t *testing.T) {
-	if got := NewAnthropic("https://api.anthropic.com/v1", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
+	if got := NewAnthropic("", "https://api.anthropic.com/v1", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("endpoint = %s", got)
 	}
-	if got := NewAnthropic("https://api.anthropic.com/", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
+	if got := NewAnthropic("", "https://api.anthropic.com/", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("endpoint = %s", got)
 	}
 }

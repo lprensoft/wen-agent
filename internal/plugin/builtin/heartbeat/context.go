@@ -3,6 +3,8 @@ package heartbeat
 import (
 	"sort"
 	"strings"
+
+	"wen/internal/prompt"
 )
 
 // 情境提示词：同一套心跳模板每次醒来都说一样的话，机械感正来自于此。
@@ -10,7 +12,13 @@ import (
 // 什么情境，下次心跳就用那一套——判断交给模型，插件只管存与换。
 
 // contextDefault 是切回默认提示词的保留名，不允许用作情境名。
+//
+// 它进工具 Schema 的 enum，也会被模型原样报回来，因此按落盘枚举的规矩办：中文是
+// 规范值，Schema 按语言给译名，回来的先经 Canonical 换回中文。用户自己写的情境名
+// 不在此列——那是他的文本，原样存、原样比。
 const contextDefault = "默认"
+
+var contexts = prompt.NewEnum(prompt.Text("prompt.heartbeat.context_default", contextDefault))
 
 // parseContexts 解析情境提示词配置。格式：以「[情境名]」单独成行开启一段，
 // 之后的行是该情境的提示词，直到下一个段头。段头之前的内容忽略；
@@ -21,7 +29,9 @@ func parseContexts(raw string) map[string]string {
 	var lines []string
 	flush := func() {
 		body := strings.TrimSpace(strings.Join(lines, "\n"))
-		if name != "" && name != contextDefault && body != "" {
+		// 保留名认任意语言：英文用户写 [Default] 同样该被挡下
+		zh, reserved := contexts.Canonical(name)
+		if name != "" && !(reserved && zh == contextDefault) && body != "" {
 			out[name] = body
 		}
 		lines = nil
@@ -47,6 +57,13 @@ func contextNames(contexts map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
 }
 
 // beatPromptLocked 返回本次心跳该用的提示词：当前情境有配置就用它，否则用默认。

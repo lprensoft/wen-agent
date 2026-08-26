@@ -497,7 +497,7 @@ func TestDowngradeTables(t *testing.T) {
 		"| 孙七 | 31 | 成都 |",
 		"后文",
 	}, "\n")
-	out := downgradeTables(md)
+	out := downgradeTables("", md)
 	if strings.Contains(out, "|---") || strings.Contains(out, "| 张三 |") {
 		t.Fatalf("表格未降级:\n%s", out)
 	}
@@ -509,19 +509,19 @@ func TestDowngradeTables(t *testing.T) {
 	}
 	// 代码块里的管道行不能被当成表格
 	code := "```\n| a | b |\n```"
-	if out := downgradeTables(code); out != code {
+	if out := downgradeTables("", code); out != code {
 		t.Fatalf("代码块内不该降级:\n%s", out)
 	}
 }
 
 func TestSanitizeImagesAndCode(t *testing.T) {
-	out := sanitizeForQQ("看这张 ![截图](https://x/1.png) 和 ![](https://x/2.png)")
+	out := sanitizeForQQ("", "看这张 ![截图](https://x/1.png) 和 ![](https://x/2.png)")
 	if strings.Contains(out, "!") || !strings.Contains(out, "[截图](https://x/1.png)") || !strings.Contains(out, "[图片](https://x/2.png)") {
 		t.Fatalf("图片降级不符: %s", out)
 	}
 
 	long := "```\n" + strings.Repeat("字", 2000) + "\n```"
-	out = sanitizeForQQ(long)
+	out = sanitizeForQQ("", long)
 	if !strings.Contains(out, "代码过长已截断，共 2000 字符") {
 		t.Fatalf("长代码应截断: %s", out[:80])
 	}

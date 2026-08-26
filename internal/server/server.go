@@ -23,6 +23,9 @@ type Options struct {
 	TrustLoopback bool
 	// Exposed 表示实际监听地址覆盖了本机以外的网卡，供界面提示与清除口令的守卫判断。
 	Exposed bool
+	// Lang 是进程语言，只用在**没有请求可依附**的地方：模型 provider 建出来之后
+	// 要为每个人报错，那份文本不能跟着某一次请求走。界面文案仍按 reqLang 判定。
+	Lang string
 }
 
 type Server struct {
@@ -38,6 +41,7 @@ type Server struct {
 	gate          *failGate
 	trustLoopback bool
 	exposed       bool
+	lang          string
 }
 
 func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store, opts Options) *Server {
@@ -49,7 +53,7 @@ func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *
 		agent: a, store: store, plugins: plugins, models: models,
 		confirms: newConfirmBroker(), notices: newNoticeHub(),
 		auth: auth, tokens: newTokenStore(), gate: newFailGate(),
-		trustLoopback: opts.TrustLoopback, exposed: opts.Exposed,
+		trustLoopback: opts.TrustLoopback, exposed: opts.Exposed, lang: opts.Lang,
 	}
 	// 接上会话注记的实时出口。后台工作产生的注记本来只能进日志——轮次的事件流
 	// 在它跑完之前就关了。

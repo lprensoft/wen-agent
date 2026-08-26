@@ -43,7 +43,7 @@ func TestDecayState(t *testing.T) {
 }
 
 func TestStateApplyClampsAndCaps(t *testing.T) {
-	s := NewStateStore(t.TempDir())
+	s := NewStateStore("", t.TempDir())
 	now := time.Now()
 
 	// 单次上限收拢
@@ -76,7 +76,7 @@ func TestStateApplyClampsAndCaps(t *testing.T) {
 }
 
 func TestStateApplyDecaysBeforeAdd(t *testing.T) {
-	s := NewStateStore(t.TempDir())
+	s := NewStateStore("", t.TempDir())
 	start := time.Now().Add(-2 * time.Hour)
 	if _, _, _, err := s.Apply(60, 0, 100, 30, 10, "先前", start); err != nil {
 		t.Fatal(err)
@@ -129,10 +129,10 @@ func TestVisibleStateDirectionalMerge(t *testing.T) {
 }
 
 func TestRenderBodyStateOmitsZero(t *testing.T) {
-	if got := renderBodyState(BodyState{}); got != "" {
+	if got := renderBodyState("", BodyState{}); got != "" {
 		t.Errorf("全 0 应返回空串，got %q", got)
 	}
-	got := renderBodyState(BodyState{Arousal: 50, Reason: "刚才"})
+	got := renderBodyState("", BodyState{Arousal: 50, Reason: "刚才"})
 	if !strings.Contains(got, "唤起 情动（50）") || strings.Contains(got, "疲劳") {
 		t.Errorf("got %q", got)
 	}

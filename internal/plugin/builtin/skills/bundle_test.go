@@ -86,7 +86,7 @@ func TestSkillDirEscapingRootIsRejected(t *testing.T) {
 	}
 	linkDir(t, filepath.Join(outside, "sneaky"), filepath.Join(root, "sneaky"))
 
-	res := scan(root, 120)
+	res := scan("", root, 120)
 	if len(res.skills) != 0 {
 		t.Fatalf("逃出技能根的目录被收下了: %+v", res.skills)
 	}
@@ -104,7 +104,7 @@ func TestSkillDirLinkedWithinRootIsKept(t *testing.T) {
 	writeSkill(t, root, "real", "name: real\ndescription: 真身", "正文")
 	linkDir(t, filepath.Join(root, "real"), filepath.Join(root, "alias"))
 
-	res := scan(root, 120)
+	res := scan("", root, 120)
 	if len(res.skills) != 2 {
 		t.Fatalf("根内的链接该照常收下，实际收到 %d 个: %+v", len(res.skills), res.skills)
 	}

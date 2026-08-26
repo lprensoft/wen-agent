@@ -22,22 +22,30 @@ import (
 // 该做的事，说清楚「重启后生效」就够了。
 func runUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-	checkOnly := fs.Bool("check", false, "只检查有没有新版，不下载安装")
-	yes := fs.Bool("y", false, "确认更新（不加它只报告，不动程序文件）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
+	checkOnly := fs.Bool("check", false, tr("cli.update.flag.check", "只检查有没有新版，不下载安装"))
+	yes := fs.Bool("y", false, tr("cli.update.flag.yes", "确认更新（不加它只报告，不动程序文件）"))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	exe, err := updater.ExePath()
+	// 语言在最前面定下：这个命令的输出从第一行就开始了，配置读不出来也不影响
+	// 它按系统区域猜一门
+	if cfg, err := config.Load(config.ResolvePath(*configPath)); err == nil {
+		adoptLang(cfg)
+	} else {
+		adoptLang(nil)
+	}
+
+	exe, err := updater.ExePath(uiLang)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	client := updater.NewClient(version.Version)
-	fmt.Printf("当前版本 %s，正在查询最新的正式版…\n", version.Version)
+	client := updater.NewClient(uiLang, version.Version)
+	fmt.Print(trf("cli.update.querying", "当前版本 %s，正在查询最新的正式版…\n", version.Version))
 	rel, err := client.Latest(ctx)
 	if err != nil {
 		return err
@@ -45,18 +53,18 @@ func runUpdate(args []string) error {
 
 	if !updater.Newer(version.Version, rel.Tag) {
 		if cur, ok := updater.ParseVersion(version.Version); ok && cur.Dev {
-			fmt.Printf("当前是开发版 %s，比最新的正式版 %s 还新，无需更新。\n", version.Version, rel.Tag)
+			fmt.Print(trf("cli.update.dev_newer", "当前是开发版 %s，比最新的正式版 %s 还新，无需更新。\n", version.Version, rel.Tag))
 			return nil
 		}
-		fmt.Printf("已是最新版 %s。\n", version.Version)
+		fmt.Print(trf("cli.update.uptodate", "已是最新版 %s。\n", version.Version))
 		return nil
 	}
 
-	fmt.Printf("\n发现新版 %s", rel.Tag)
+	fmt.Print(trf("cli.update.found", "\n发现新版 %s", rel.Tag))
 	if !rel.PublishedAt.IsZero() {
-		fmt.Printf("（发布于 %s）", rel.PublishedAt.Local().Format("2006-01-02"))
+		fmt.Print(trf("cli.update.published", "（发布于 %s）", rel.PublishedAt.Local().Format("2006-01-02")))
 	}
-	fmt.Println("：")
+	fmt.Println(tr("cli.update.colon", "："))
 	if notes := updater.ReleaseNotes(rel.Body); notes != "" {
 		fmt.Println()
 		fmt.Println(indent(notes, "  "))
@@ -65,11 +73,11 @@ func runUpdate(args []string) error {
 		return nil
 	}
 	if !*yes {
-		fmt.Printf("\n确认无误后执行 wen update -y 开始更新（会替换 %s）。\n", exe)
+		fmt.Print(trf("cli.update.how_to", "\n确认无误后执行 wen update -y 开始更新（会替换 %s）。\n", exe))
 		return nil
 	}
 
-	if err := updater.CheckWritable(exe); err != nil {
+	if err := updater.CheckWritable(uiLang, exe); err != nil {
 		return err
 	}
 	plan, err := client.Prepare(ctx, rel)
@@ -77,10 +85,10 @@ func runUpdate(args []string) error {
 		return err
 	}
 	work := updater.WorkDir(exe)
-	fmt.Printf("\n正在下载 %s…\n", plan.Asset.Name)
+	fmt.Print(trf("cli.update.downloading", "\n正在下载 %s…\n", plan.Asset.Name))
 	archive, err := client.Fetch(ctx, plan, work, func(done, total int64) {
 		if total > 0 {
-			fmt.Fprintf(os.Stderr, "\r  %d%%（%s / %s）", done*100/total, humanSize(done), humanSize(total))
+			fmt.Fprint(os.Stderr, trf("cli.update.progress", "\r  %d%%（%s / %s）", done*100/total, humanSize(done), humanSize(total)))
 		}
 	})
 	fmt.Fprintln(os.Stderr)
@@ -88,29 +96,30 @@ func runUpdate(args []string) error {
 		return err
 	}
 
-	fmt.Println("校验通过，正在解包…")
-	bin, err := updater.Extract(archive, work, updater.HostBinaryName())
+	fmt.Println(tr("cli.update.unpacking", "校验通过，正在解包…"))
+	bin, err := updater.Extract(uiLang, archive, work, updater.HostBinaryName())
 	if err != nil {
 		return err
 	}
-	fmt.Println("正在试运行新版程序…")
-	if err := updater.SmokeTest(ctx, bin, rel.Tag); err != nil {
+	fmt.Println(tr("cli.update.trial", "正在试运行新版程序…"))
+	if err := updater.SmokeTest(ctx, uiLang, bin, rel.Tag); err != nil {
 		return err
 	}
-	if err := updater.Apply(bin, exe); err != nil {
+	if err := updater.Apply(uiLang, bin, exe); err != nil {
 		return err
 	}
-	fmt.Printf("已更新到 %s。\n", rel.Tag)
+	fmt.Print(trf("cli.update.done", "已更新到 %s。\n", rel.Tag))
 
 	// 服务正在跑的话，跑着的仍是旧版：文件换掉不会影响已经载入内存的那一份
 	if cfg, err := config.Load(config.ResolvePath(*configPath)); err == nil {
 		if info, ok := runlock.Read(cfg.BaseDir); ok && reachable(info.Addr) {
-			fmt.Printf("注意：有一个服务实例正在 %s 运行，它跑的仍是 %s。重启它才会用上新版；\n"+
-				"      也可以在设置页的「程序更新」里一键更新并重启。\n", info.Addr, info.Version)
+			fmt.Print(trf("cli.update.instance_running",
+				"注意：有一个服务实例正在 %s 运行，它跑的仍是 %s。重启它才会用上新版；\n"+
+					"      也可以在设置页的「程序更新」里一键更新并重启。\n", info.Addr, info.Version))
 			return nil
 		}
 	}
-	fmt.Println("下次启动即为新版。")
+	fmt.Println(tr("cli.update.next_start", "下次启动即为新版。"))
 	return nil
 }
 
@@ -122,7 +131,7 @@ func humanSize(n int64) string {
 	case n >= 1<<10:
 		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
 	default:
-		return fmt.Sprintf("%d 字节", n)
+		return trf("cli.update.bytes", "%d 字节", n)
 	}
 }
 

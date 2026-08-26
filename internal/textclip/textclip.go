@@ -6,18 +6,20 @@
 // 截断，各写一份迟早分叉（internal/statustext 补过这一课），故收在这里。
 package textclip
 
+import "wen/internal/prompt"
+
 import "strings"
 
 // Clip 按字节上限截断，不切断 UTF-8 字符。
 // 截断并注明，而不是整段丢弃——设定被砍掉一半仍然能扮演，整段没了就不能。
-func Clip(s string, limit int) string {
+func Clip(lang, s string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
 	if len(s) <= limit {
 		return s
 	}
-	const note = "…（设定过长已截断）"
+	note := prompt.T(lang, "prompt.core.textclip.clipped", "…（设定过长已截断）")
 	if limit <= len(note) {
 		return ""
 	}
@@ -32,25 +34,25 @@ func Clip(s string, limit int) string {
 }
 
 // ClipPair 让两段文本共用一个字节预算，第一段优先。
-func ClipPair(first, second string, limit int) (string, string) {
+func ClipPair(lang, first, second string, limit int) (string, string) {
 	if limit <= 0 || len(first)+len(second) <= limit {
 		return first, second
 	}
-	first = Clip(first, limit)
-	return first, Clip(second, limit-len(first))
+	first = Clip(lang, first, limit)
+	return first, Clip(lang, second, limit-len(first))
 }
 
 // ClipSegments 按空行分段、整段丢弃地截断——台词样例被拦腰砍断本身就是一份
 // 坏范本，教出来的就是断句。段落都塞不下时宁可整个不要，不做字节级截断。
 // 调用方须先把 \r\n 归一成 \n，否则认不出空行。
-func ClipSegments(s string, limit int) string {
+func ClipSegments(lang, s string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
 	if len(s) <= limit {
 		return s
 	}
-	const note = "\n\n（其余样例过长，已略去）"
+	note := prompt.T(lang, "prompt.core.textclip.segments_dropped", "\n\n（其余样例过长，已略去）")
 	budget := limit - len(note)
 	if budget <= 0 {
 		return ""

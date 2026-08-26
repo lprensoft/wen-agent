@@ -12,6 +12,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"wen/internal/version"
+
+	"wen/internal/i18n"
+	"wen/internal/prompt"
 )
 
 // 连接与调用的默认时限。两者分开：握手慢多半是解释器在冷启动（npx 第一次要下包），
@@ -27,6 +30,7 @@ const (
 // 那一步握着写锁，在里面拉起子进程等于让整个服务停在启动那一秒。清单因此来自安装时
 // 落盘的缓存，子进程留到第一次真的要调用时再起。
 type client struct {
+	lang           string // 进程语言，连接与取清单的报错据此取用
 	cfg            ResolvedServer
 	connectTimeout time.Duration
 	callTimeout    time.Duration
@@ -36,8 +40,8 @@ type client struct {
 	closed  bool
 }
 
-func newClient(cfg ResolvedServer) *client {
-	return &client{cfg: cfg, connectTimeout: defaultConnectTimeout, callTimeout: defaultCallTimeout}
+func newClient(lang string, cfg ResolvedServer) *client {
+	return &client{lang: lang, cfg: cfg, connectTimeout: defaultConnectTimeout, callTimeout: defaultCallTimeout}
 }
 
 // connect 建立一次新连接。
@@ -68,7 +72,7 @@ func (c *client) connect() (*mcp.ClientSession, error) {
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			return nil, fmt.Errorf("连接 %s 失败：%w", c.cfg.Name, r.err)
+			return nil, fmt.Errorf(i18n.T(c.lang, "plugin.bundle.err.connect", "连接 %s 失败：%w"), c.cfg.Name, r.err)
 		}
 		return r.s, nil
 	case <-time.After(c.connectTimeout):
@@ -78,7 +82,7 @@ func (c *client) connect() (*mcp.ClientSession, error) {
 				_ = r.s.Close()
 			}
 		}()
-		return nil, fmt.Errorf("连接 %s 超时（%s）", c.cfg.Name, c.connectTimeout)
+		return nil, fmt.Errorf(i18n.T(c.lang, "plugin.bundle.err.connect_timeout", "连接 %s 超时（%s）"), c.cfg.Name, c.connectTimeout)
 	}
 }
 
@@ -105,7 +109,7 @@ func (c *client) transport() (mcp.Transport, error) {
 			HTTPClient: httpClient(c.cfg.Headers),
 		}, nil
 	}
-	return nil, fmt.Errorf("不认识的传输方式 %q", c.cfg.Type)
+	return nil, fmt.Errorf(i18n.T(c.lang, "plugin.bundle.err.bad_transport", "不认识的传输方式 %q"), c.cfg.Type)
 }
 
 // httpClient 造一个会带上声明头的 HTTP 客户端。
@@ -138,7 +142,7 @@ func (c *client) ensure() (*mcp.ClientSession, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, fmt.Errorf("插件已停止")
+		return nil, fmt.Errorf("%s", i18n.T(c.lang, "plugin.bundle.err.stopped", "插件已停止"))
 	}
 	if c.session != nil {
 		return c.session, nil
@@ -178,7 +182,7 @@ func (c *client) listTools(ctx context.Context) ([]*mcp.Tool, error) {
 		res, err := s.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			c.drop(s)
-			return nil, fmt.Errorf("取 %s 的工具清单失败：%w", c.cfg.Name, err)
+			return nil, fmt.Errorf(i18n.T(c.lang, "plugin.bundle.err.list_tools", "取 %s 的工具清单失败：%w"), c.cfg.Name, err)
 		}
 		out = append(out, res.Tools...)
 		if res.NextCursor == "" || len(out) > maxToolsPerServer {
@@ -245,7 +249,7 @@ func (c *client) Close() {
 //
 // 非文本的内容（图片、音频、资源链接）只留一行说明：本项目的工具结果是纯文本通道，
 // 把几百 KB 的 base64 塞进上下文，既没人看得懂也会把这一轮的预算烧光。
-func renderResult(res *mcp.CallToolResult) string {
+func renderResult(lang string, res *mcp.CallToolResult) string {
 	var b strings.Builder
 	for _, ct := range res.Content {
 		switch v := ct.(type) {
@@ -253,13 +257,13 @@ func renderResult(res *mcp.CallToolResult) string {
 			b.WriteString(v.Text)
 			b.WriteString("\n")
 		case *mcp.ImageContent:
-			fmt.Fprintf(&b, "（这里有一张图片，%s，本程序的工具结果只走文本，未取回）\n", v.MIMEType)
+			b.WriteString(prompt.Tf(lang, "prompt.bundle.result.image", "（这里有一张图片，%s，本程序的工具结果只走文本，未取回）\n", v.MIMEType))
 		case *mcp.AudioContent:
-			fmt.Fprintf(&b, "（这里有一段音频，%s，本程序的工具结果只走文本，未取回）\n", v.MIMEType)
+			b.WriteString(prompt.Tf(lang, "prompt.bundle.result.audio", "（这里有一段音频，%s，本程序的工具结果只走文本，未取回）\n", v.MIMEType))
 		case *mcp.ResourceLink:
-			fmt.Fprintf(&b, "（资源链接：%s）\n", v.URI)
+			b.WriteString(prompt.Tf(lang, "prompt.bundle.result.resource", "（资源链接：%s）\n", v.URI))
 		default:
-			b.WriteString("（一段本程序不认识的内容，已略过）\n")
+			b.WriteString(prompt.T(lang, "prompt.bundle.result.unknown", "（一段本程序不认识的内容，已略过）\n"))
 		}
 	}
 	out := strings.TrimRight(b.String(), "\n")

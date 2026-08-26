@@ -1,10 +1,10 @@
 package weather
 
 import (
-	"fmt"
 	"sort"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 按日留档，供别处回头问「那一天是什么天气」（见 plugin.DayReporter）。
@@ -73,7 +73,8 @@ func (p *Plugin) DayFacts(date string) []string {
 	if !ok {
 		return nil
 	}
-	return []string{fmt.Sprintf("天气：%s %.0f~%.0f℃", d.Condition, d.MinC, d.MaxC)}
+	return []string{prompt.Tf(s.lang, "prompt.weather.day_fact", "天气：%s %.0f~%.0f℃",
+		conditions.For(s.lang, d.Condition), d.MinC, d.MaxC)}
 }
 
 var _ plugin.DayReporter = (*Plugin)(nil)

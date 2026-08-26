@@ -8,10 +8,10 @@ package health
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/prompt"
 )
 
 const (
@@ -68,7 +68,7 @@ func (p *Plugin) postDueCues(now time.Time) {
 				cue.Post(cue.Cue{
 					Source: cueSource,
 					Key:    cueKey(tag, c.ID),
-					Text:   onsetText(c),
+					Text:   onsetText(p.langOf(), c),
 					Expire: c.Onset.Add(cueTTL),
 				})
 			}
@@ -78,12 +78,13 @@ func (p *Plugin) postDueCues(now time.Time) {
 }
 
 // onsetText 是发作理由的措辞。刚发作时总是最轻的一档，峰值更重时顺带说一句走向。
-func onsetText(c Condition) string {
-	start := band(severityAt(c.Peak, 0.001))
-	if peak := band(c.Peak); peak != start {
-		return fmt.Sprintf("先前记下的「%s」到点发作了——开始%s，接下来会往%s走。", c.Name, start, peak)
+func onsetText(lang string, c Condition) string {
+	start := band(lang, severityAt(c.Peak, 0.001))
+	if peak := band(lang, c.Peak); peak != start {
+		return prompt.Tf(lang, "prompt.health.cue.onset_rising",
+			"先前记下的「%s」到点发作了——开始%s，接下来会往%s走。", c.Name, start, peak)
 	}
-	return fmt.Sprintf("先前记下的「%s」到点发作了——开始%s。", c.Name, start)
+	return prompt.Tf(lang, "prompt.health.cue.onset", "先前记下的「%s」到点发作了——开始%s。", c.Name, start)
 }
 
 // dropCue 撤回一条还没说出口的发作理由。痊愈与清除时用：已经送达的收不回，

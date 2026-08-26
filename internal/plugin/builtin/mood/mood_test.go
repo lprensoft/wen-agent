@@ -72,21 +72,21 @@ func TestBands(t *testing.T) {
 		{15, "愉快"}, {39, "愉快"}, {40, "开心"}, {69, "开心"}, {70, "雀跃"}, {100, "雀跃"},
 	}
 	for _, c := range cases {
-		if got := band(c.v); got != c.want {
+		if got := band("", c.v); got != c.want {
 			t.Errorf("band(%d) = %q，期望 %q", c.v, got, c.want)
 		}
 	}
 }
 
 func TestRenderState(t *testing.T) {
-	if got := renderState(State{Value: 0}); got != "此刻：平静。" {
+	if got := renderState("", State{Value: 0}); got != "此刻：平静。" {
 		t.Errorf("平静时 = %q", got)
 	}
-	got := renderState(State{Value: 22, Reason: "她夸了新剪的头发"})
+	got := renderState("", State{Value: 22, Reason: "她夸了新剪的头发"})
 	if !strings.Contains(got, "愉快（+22）") || !strings.Contains(got, "起因：她夸了新剪的头发") {
 		t.Errorf("渲染 = %q", got)
 	}
-	if !strings.Contains(renderState(State{Value: -30}), "（-30）") {
+	if !strings.Contains(renderState("", State{Value: -30}), "（-30）") {
 		t.Error("负值应当带符号显示")
 	}
 }
@@ -112,7 +112,7 @@ func TestTurnPromptRendersCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{stateHeader, "愉快（+22）", "她夸了新剪的头发"} {
+	for _, want := range []string{stateHeaderFor(""), "愉快（+22）", "她夸了新剪的头发"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("注入缺少 %q，实际:\n%s", want, got)
 		}

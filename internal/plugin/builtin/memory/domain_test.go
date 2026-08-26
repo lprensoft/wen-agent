@@ -71,7 +71,7 @@ func TestSaveWritesToWriteDomain(t *testing.T) {
 		t.Errorf("表侧记忆应落在 outer 库: %v", err)
 	}
 	// 基准库（共享）不该被这两次写入污染
-	if entries, _ := NewStore(base).List(); len(entries) != 0 {
+	if entries, _ := NewStore("", base).List(); len(entries) != 0 {
 		t.Errorf("共享库应为空，得到 %d 条", len(entries))
 	}
 	if !strings.HasSuffix(p.storeFor("inner").Dir(), filepath.Base(base)+"-inner") {

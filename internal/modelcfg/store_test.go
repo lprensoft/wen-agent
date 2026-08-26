@@ -29,7 +29,7 @@ func baseConfig() *config.Config {
 func newStore(t *testing.T, cfg *config.Config) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "models.json")
-	s, err := NewStore(path, cfg)
+	s, err := NewStore("", path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestOverlayOverridesConfigProvider(t *testing.T) {
       "current": {"provider":"deepseek","model":"deepseek-reasoner"}
     }`), 0o600)
 
-	s, err := NewStore(path, baseConfig())
+	s, err := NewStore("", path, baseConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestRemovedTombstone(t *testing.T) {
 			next.Providers = append(next.Providers, p)
 		}
 	}
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := findProvider(s.Snapshot().Providers, "zhipu"); ok {
@@ -119,7 +119,7 @@ func TestRemovedTombstone(t *testing.T) {
 	}
 
 	// 重启后不能复活
-	s2, err := NewStore(path, cfg)
+	s2, err := NewStore("", path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +135,12 @@ func TestFieldFallback(t *testing.T) {
 		{ID: "deepseek-chat"},
 		{ID: "custom", MaxTokens: intp(8192), Thinking: strp("low"), Temperature: floatp(0), ContextLength: intp(128000)},
 	}
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
 
 	// 留空 → 取 config.yaml 的全局值
-	r, err := s.Resolve()
+	r, err := s.Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +149,10 @@ func TestFieldFallback(t *testing.T) {
 	}
 
 	// 显式设置 → 覆盖；temperature 为 0 也必须生效（指针语义）
-	if _, err := s.SetCurrent(Selection{Provider: "deepseek", Model: "custom"}); err != nil {
+	if _, err := s.SetCurrent("", Selection{Provider: "deepseek", Model: "custom"}); err != nil {
 		t.Fatal(err)
 	}
-	r, _ = s.Resolve()
+	r, _ = s.Resolve("")
 	if r.MaxTokens != 8192 || r.Thinking != "low" || r.ContextLength != 128000 {
 		t.Errorf("override resolved = %+v", r)
 	}
@@ -168,14 +168,14 @@ func TestSaveIsAtomicAndReloads(t *testing.T) {
 		Name: "anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com", APIKey: "sk-ant",
 		Models: []Model{{ID: "claude-opus-4-5", Name: "Claude Opus 4.5"}},
 	})
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Error("temp file should not remain after an atomic write")
 	}
-	s2, err := NewStore(path, baseConfig())
+	s2, err := NewStore("", path, baseConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestSaveKeepsEmptyAPIKey(t *testing.T) {
 	next := s.Snapshot()
 	next.Providers[0].APIKey = "" // 界面只拿得到掩码，留空表示不修改
 	next.Providers[0].BaseURL = "https://proxy.local"
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Snapshot().Providers[0].APIKey; got != "sk-cfg" {
@@ -207,7 +207,7 @@ func TestSaveDoesNotTakeOverUnchangedConfigProvider(t *testing.T) {
 		Name: "anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com", APIKey: "sk-ant",
 		Models: []Model{{ID: "claude-opus-4-5"}},
 	})
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
 
@@ -219,7 +219,7 @@ func TestSaveDoesNotTakeOverUnchangedConfigProvider(t *testing.T) {
 		t.Error("未改动的 config.yaml 提供商不应被固化进 models.json")
 	}
 	cfg.Providers["deepseek"] = config.ProviderConfig{Type: "openai_compat", BaseURL: "https://new.deepseek.com", APIKey: "sk-cfg2"}
-	s2, err := NewStore(path, cfg)
+	s2, err := NewStore("", path, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestValidateRejects(t *testing.T) {
 			s, _ := newStore(t, baseConfig())
 			next := s.Snapshot()
 			tc.apply(&next)
-			if _, err := s.Save(next); err == nil {
+			if _, err := s.Save("", next); err == nil {
 				t.Fatalf("%s 应当被拒绝", tc.name)
 			}
 		})
@@ -264,7 +264,7 @@ func TestCannotDeleteProviderInUse(t *testing.T) {
 	next := s.Snapshot()
 	next.Providers[0].Models = nil // 删掉正在使用的模型
 
-	if _, err := s.Save(next); err == nil {
+	if _, err := s.Save("", next); err == nil {
 		t.Fatal("删除正在使用的模型应当被拒绝")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -286,13 +286,13 @@ func TestSetCurrentRejectsEmptyKeyAndMissingTarget(t *testing.T) {
 			next.Providers[i].Models = []Model{{ID: "claude-opus-4-5"}}
 		}
 	}
-	if _, err := s.Save(next); err != nil {
+	if _, err := s.Save("", next); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetCurrent(Selection{Provider: "nokey", Model: "claude-opus-4-5"}); err == nil {
+	if _, err := s.SetCurrent("", Selection{Provider: "nokey", Model: "claude-opus-4-5"}); err == nil {
 		t.Error("切到没有 API Key 的提供商应当被拒绝")
 	}
-	if _, err := s.SetCurrent(Selection{Provider: "deepseek", Model: "不存在"}); err == nil {
+	if _, err := s.SetCurrent("", Selection{Provider: "deepseek", Model: "不存在"}); err == nil {
 		t.Error("切到不存在的模型应当被拒绝")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
@@ -46,13 +47,13 @@ func (a *Agent) SetNoticeSink(fn NoticeSink) {
 func (a *Agent) AppendNotice(ctx context.Context, sessionID, text string) error {
 	text = strings.TrimSpace(text)
 	if sessionID == "" {
-		return fmt.Errorf("需要提供会话 id")
+		return fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.err.need_session_id", "需要提供会话 id"))
 	}
 	if text == "" {
 		return nil // 没话说不是错误，省掉调用方一处判断
 	}
 	m := session.StoredMessage{
-		Message: llm.Message{Role: llm.RoleSystem, Content: truncateRunes(text, noticeMaxRunes)},
+		Message: llm.Message{Role: llm.RoleSystem, Content: truncateRunes(a.opts.Lang, text, noticeMaxRunes)},
 		Kind:    session.KindNotice,
 		Tag:     plugin.ScopeFrom(ctx).Write,
 		Origin:  plugin.TurnOriginFrom(ctx),

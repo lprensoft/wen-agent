@@ -2,10 +2,11 @@ package weather
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // 观测缓存的持久化。
@@ -43,7 +44,7 @@ func (p *Plugin) loadInto(dir string, wanted []string) {
 	}
 	var st persisted
 	if json.Unmarshal(raw, &st) != nil {
-		log.Printf("weather: 观测缓存已损坏，忽略并重新获取")
+		i18n.Logf(p.langOf(), "log.weather.cache_corrupt", "weather: 观测缓存已损坏，忽略并重新获取")
 		return
 	}
 
@@ -93,7 +94,7 @@ func (p *Plugin) save(dir string) {
 		return
 	}
 	if err := os.WriteFile(statePath(dir), raw, 0o644); err != nil {
-		log.Printf("weather: 观测缓存写入失败: %v", err)
+		i18n.Logf(p.langOf(), "log.weather.cache_write_failed", "weather: 观测缓存写入失败: %v", err)
 	}
 }
 

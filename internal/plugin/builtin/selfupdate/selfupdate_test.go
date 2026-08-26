@@ -176,7 +176,7 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 		t.Fatalf("检查阶段动了程序文件: %q %v", raw, err)
 	}
 	// 查到的版本要落盘，重启后不必再等一个周期才知道有新版
-	if got := loadState(stateDir).Latest; got != newTag {
+	if got := loadState("", stateDir).Latest; got != newTag {
 		t.Fatalf("状态没记下最新版本: %q", got)
 	}
 	// 版本号在 Detail 里而不是 Label 里：Label 要能进语言包，掺了版本号就进不去
@@ -186,7 +186,7 @@ func TestCheckOnlyReportsFirst(t *testing.T) {
 	if got := p.Actions()[0].Label; got != "检查并更新" {
 		t.Fatalf("按钮文案该是固定的一句: %q", got)
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], newTag) {
+	if lines := p.StatusLines(""); len(lines) != 1 || !strings.Contains(lines[0], newTag) {
 		t.Fatalf("状态行不符: %v", lines)
 	}
 }
@@ -249,7 +249,7 @@ func TestInstallAndRestart(t *testing.T) {
 		t.Fatalf("程序文件没被换成新版: %q", raw)
 	}
 	// 换好了但还没重启完：状态里留着 pending，重启后由 reconcile 认领
-	st := loadState(stateDir)
+	st := loadState("", stateDir)
 	if st.Pending == nil || st.Pending.To != newTag || st.Pending.From != version.Version {
 		t.Fatalf("没有记下待生效的更新: %+v", st.Pending)
 	}
@@ -329,7 +329,7 @@ func TestReconcileAfterRestart(t *testing.T) {
 		t.Fatalf("重启后没把上次的更新定稿: %+v", st)
 	}
 	// 认领过就该销账，否则每次启动都再宣布一遍
-	if loadState(stateDir).Pending != nil {
+	if loadState("", stateDir).Pending != nil {
 		t.Fatal("pending 没有被清掉")
 	}
 }
@@ -361,7 +361,7 @@ func TestReconcileVersionMismatch(t *testing.T) {
 	if st.Status != plugin.ActionError || !strings.Contains(st.Message, newTag) {
 		t.Fatalf("没有报出「换了但没生效」: %+v", st)
 	}
-	if loadState(stateDir).Pending != nil {
+	if loadState("", stateDir).Pending != nil {
 		t.Fatal("pending 没有被清掉，下次启动会再宣布一遍")
 	}
 }

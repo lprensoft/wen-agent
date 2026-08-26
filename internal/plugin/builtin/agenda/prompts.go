@@ -7,10 +7,23 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
-// guidePrompt 是静态判据。表与约定的本体走 TurnPrompt（取决于可见域、要读盘）。
-const guidePrompt = `[日程]
+// 四段块名与判据各按语言取一次。
+func guideFor(lang string) string { return prompt.T(lang, "prompt.agenda.guide", guidePromptZH) }
+func stateHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.agenda.state_header", stateHeaderZH)
+}
+func commitHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.agenda.commit_header", commitHeaderZH)
+}
+func promiseHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.agenda.promise_header", promiseHeaderZH)
+}
+
+// guidePromptZH 是静态判据。表与约定的本体走 TurnPrompt（取决于可见域、要读盘）。
+const guidePromptZH = `[日程]
 你在对话之外有自己的一天。本轮状态里的 [今日安排] 是今天的表，[未来约定] 是已经定下
 的事；你此刻在哪、在做什么以它们为准，不另编行程，表尚未排定时也不要宣布今天的安排。
 - 定在某天某时的事（和对方约好的、答应别人的、自己要去办的）用 add_commitment 登记，
@@ -29,16 +42,16 @@ const guidePrompt = `[日程]
 
 // stateHeader / commitHeader 领起两块注入。
 const (
-	stateHeader   = "[今日安排]"
-	commitHeader  = "[未来约定]"
-	promiseHeader = "[答应过的事]"
+	stateHeaderZH   = "[今日安排]"
+	commitHeaderZH  = "[未来约定]"
+	promiseHeaderZH = "[答应过的事]"
 )
 
-// planPrompt 是规划轮次的一次性输入。花括号由代码填：星期、日期、时刻、今天的约定。
-// 昨天的事不由这里传入：规划是一轮完整对话，[最近经历]、天气、心情、人物清单都随
+// planPromptZH 是规划轮次的一次性输入。花括号由代码填：星期、日期、时刻、今天的约定。
+// 昨天的事不由这里传入：规划是一轮完整对话，[最近几天]、天气、心情、人物清单都随
 // 各自的 TurnPrompt 自然到场，本插件不读任何别家的文件。
-const planPrompt = `【规划今天】现在是 %s %s %s，你刚醒来，给自己排一张今天的表。
-昨天与前几天的事见 [最近经历]，今天别排成一样的。
+const planPromptZH = `【规划今天】现在是 %s %s %s，你刚醒来，给自己排一张今天的表。
+昨天与前几天的事见 [最近几天]，今天别排成一样的。
 今天已经定下的约定（必须排进表里，与对方的约定时间不能改）：
 %s
 要求：
@@ -52,8 +65,8 @@ const planPrompt = `【规划今天】现在是 %s %s %s，你刚醒来，给自
 排好后用 set_day_plan 提交。提交成功就算完了：不要再提交第二次、也不要再调用别的
 工具，这一轮就此结束。不必对对方说话，输出空回复即可。`
 
-// startPrompt 是活动开始轮次的一次性输入。
-const startPrompt = `【日程·开始】现在 %s，到了「%s」（%s-%s，%s）的时间。%s
+// startPromptZH 是活动开始轮次的一次性输入。
+const startPromptZH = `【日程·开始】现在 %s，到了「%s」（%s-%s，%s）的时间。%s
 看看此刻的天气、心情、身体状态，以及刚才的对话，决定怎么办：
 - 照做：用 update_day_plan 把它标为 ongoing（做法有变可一并改标题与 busy），
   用现场工具更新你的所在与在做的事，然后出门。
@@ -63,8 +76,8 @@ const startPrompt = `【日程·开始】现在 %s，到了「%s」（%s-%s，%s
 决定了就用 update_day_plan 提交一次，成功后不要再提交第二次，这一轮就此结束。
 不必对对方说话，除非有事要告诉他（比如要改和他的约定）；否则输出空回复。`
 
-// endPrompt 是活动结束轮次的一次性输入；第一句在补记时换成 catchUpLead。
-const endPrompt = `【日程·结束】%s
+// endPromptZH 是活动结束轮次的一次性输入；第一句在补记时换成补记的说法。
+const endPromptZH = `【日程·结束】%s
 写下这段时间的经历：做了什么、有什么小事发生、感觉如何，一两句即可，用 update_day_plan
 标为 done 并把经历写进 outcome。顺手把该更新的更新掉：和谁见了面就用 upsert_person
 记一笔；现场回到哪、在做什么；心情与身体若有变化；买了或用掉了什么。
@@ -73,35 +86,41 @@ const endPrompt = `【日程·结束】%s
 输出空回复即可——回来后想说的，之后自然会说。`
 
 // buildPlanPrompt 填好规划输入。
-func buildPlanPrompt(now time.Time, today []Commitment) string {
-	lines := "（无）"
+func buildPlanPrompt(lang string, now time.Time, today []Commitment) string {
+	lines := prompt.T(lang, "prompt.agenda.plan.none", "（无）")
 	if len(today) > 0 {
 		var b strings.Builder
 		for _, c := range today {
-			fmt.Fprintf(&b, "- [%s] %s%s %s（%s）\n", c.ID, c.Start, dashEnd(c.End), c.Title, c.Flex)
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.plan.commit_line", "- [%s] %s%s %s（%s）")+"\n",
+				c.ID, c.Start, dashEnd(c.End), c.Title, flexLevels.For(lang, c.Flex))
 		}
 		lines = strings.TrimRight(b.String(), "\n")
 	}
-	return fmt.Sprintf(planPrompt, weekdayCN(now), now.Format("01-02"), now.Format("15:04"), lines)
+	return prompt.Tf(lang, "prompt.agenda.plan_prompt", planPromptZH,
+		weekdayName(lang, now), now.Format("01-02"), now.Format("15:04"), lines)
 }
 
 // buildStartPrompt 填好开始输入。late 超过宽限时注明已经晚了多久。
-func buildStartPrompt(now time.Time, it Item, late time.Duration, grace time.Duration) string {
+func buildStartPrompt(lang string, now time.Time, it Item, late, grace time.Duration) string {
 	note := ""
 	if late > grace {
-		note = fmt.Sprintf("\n已经晚了 %s，先决定还去不去。", humanMinutes(late))
+		note = "\n" + prompt.Tf(lang, "prompt.agenda.start.late", "已经晚了 %s，先决定还去不去。",
+			humanMinutes(lang, late))
 	}
-	return fmt.Sprintf(startPrompt, now.Format("15:04"), it.Title, it.Start, it.End, it.Flex, note)
+	return prompt.Tf(lang, "prompt.agenda.start_prompt", startPromptZH,
+		now.Format("15:04"), it.Title, it.Start, it.End, flexLevels.For(lang, it.Flex), note)
 }
 
 // buildEndPrompt 填好结束输入。catchUp 表示这项在离线期间已经过去，只补记一句经历。
-func buildEndPrompt(now time.Time, it Item, catchUp bool) string {
-	lead := fmt.Sprintf("现在 %s，「%s」（%s-%s）该结束了。", now.Format("15:04"), it.Title, it.Start, it.End)
+func buildEndPrompt(lang string, now time.Time, it Item, catchUp bool) string {
+	lead := prompt.Tf(lang, "prompt.agenda.end.lead", "现在 %s，「%s」（%s-%s）该结束了。",
+		now.Format("15:04"), it.Title, it.Start, it.End)
 	if catchUp {
-		lead = fmt.Sprintf("现在 %s，「%s」（%s-%s）在你离线期间已经过去，补记一句经历即可。",
+		lead = prompt.Tf(lang, "prompt.agenda.end.catch_up",
+			"现在 %s，「%s」（%s-%s）在你离线期间已经过去，补记一句经历即可。",
 			now.Format("15:04"), it.Title, it.Start, it.End)
 	}
-	return fmt.Sprintf(endPrompt, lead)
+	return prompt.Tf(lang, "prompt.agenda.end_prompt", endPromptZH, lead)
 }
 
 func dashEnd(end string) string {
@@ -133,12 +152,12 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil {
 		return "", err
 	}
-	return renderPrompt(pl, cs, ps, p.now(), s), nil
+	return renderPrompt(s.lang, pl, cs, ps, p.now(), s), nil
 }
 
 // renderPrompt 按预算渲染两块注入，分级降级：去掉已做项的经历 → 已做项压成条数 →
 // 约定只剩条数。进行中与下一项永远保留——它们是行为判据。
-func renderPrompt(pl Plan, cs []Commitment, ps []Promise, now time.Time, s settings) string {
+func renderPrompt(lang string, pl Plan, cs []Commitment, ps []Promise, now time.Time, s settings) string {
 	day := s.today(now)
 	today := day.Format(dateLayout)
 	var todayCs, future []Commitment
@@ -157,35 +176,40 @@ func renderPrompt(pl Plan, cs []Commitment, ps []Promise, now time.Time, s setti
 
 	for level := 0; level <= 3; level++ {
 		var b strings.Builder
-		b.WriteString(stateHeader + "（" + weekdayCN(day) + "）\n")
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.today_head", "%s（%s）")+"\n",
+			stateHeaderFor(lang), weekdayName(lang, day))
 		if planned {
-			b.WriteString(renderPlan(pl, day, now, s.dayStartHour, level))
+			b.WriteString(renderPlan(lang, pl, day, now, s.dayStartHour, level))
 		} else {
-			b.WriteString("今天的安排尚未排定。")
+			b.WriteString(prompt.T(lang, "prompt.agenda.render.unplanned", "今天的安排尚未排定。"))
 			if len(todayCs) > 0 {
-				b.WriteString("\n今天已定的约定：" + joinCommitLines(todayCs, false) + "。")
+				b.WriteString("\n" + prompt.Tf(lang, "prompt.agenda.render.today_commits",
+					"今天已定的约定：%s。", joinCommitLines(lang, todayCs, false)))
 			}
 		}
 		if len(future) > 0 {
-			b.WriteString("\n" + commitHeader + "\n")
+			b.WriteString("\n" + commitHeaderFor(lang) + "\n")
 			if level >= 3 {
-				fmt.Fprintf(&b, "共 %d 条，可用 list_commitments 查看。", len(future))
+				fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.commits_count",
+					"共 %d 条，可用 list_commitments 查看。"), len(future))
 			} else {
 				shown := future
 				if len(shown) > s.maxCommitInject {
 					shown = shown[:s.maxCommitInject]
 				}
 				for _, c := range shown {
-					fmt.Fprintf(&b, "%s %s %s（%s）\n", fmtDateShort(c.Date, now.Location()), c.Start, c.Title, c.Flex)
+					fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.commit_line", "%s %s %s（%s）")+"\n",
+						fmtDateShort(lang, c.Date, now.Location()), c.Start, c.Title, flexLevels.For(lang, c.Flex))
 				}
 				if rest := len(future) - len(shown); rest > 0 {
-					fmt.Fprintf(&b, "另有 %d 条，可用 list_commitments 查看。", rest)
+					fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.commits_more",
+						"另有 %d 条，可用 list_commitments 查看。"), rest)
 				}
 			}
 		}
 		if len(open) > 0 {
-			b.WriteString("\n" + promiseHeader + "\n")
-			b.WriteString(renderPromises(open, day, now.Location(), level))
+			b.WriteString("\n" + promiseHeaderFor(lang) + "\n")
+			b.WriteString(renderPromises(lang, open, day, now.Location(), level))
 		}
 		out := strings.TrimRight(b.String(), "\n")
 		if s.maxInjectBytes <= 0 || len(out) <= s.maxInjectBytes || level == 3 {
@@ -196,7 +220,7 @@ func renderPrompt(pl Plan, cs []Commitment, ps []Promise, now time.Time, s setti
 }
 
 // renderPlan 写今天的表：此刻 / 之后 / 今天已做 / 今天没去。level 是降级档位。
-func renderPlan(pl Plan, day, now time.Time, dayStartHour int, level int) string {
+func renderPlan(lang string, pl Plan, day, now time.Time, dayStartHour int, level int) string {
 	var (
 		cur, pending *Item
 		upcoming     []*Item
@@ -230,7 +254,7 @@ func renderPlan(pl Plan, day, now time.Time, dayStartHour int, level int) string
 		}
 	}
 	if active == 0 {
-		return "今天没有安排，整天空着。"
+		return prompt.T(lang, "prompt.agenda.render.nothing_today", "今天没有安排，整天空着。")
 	}
 
 	var b strings.Builder
@@ -238,77 +262,86 @@ func renderPlan(pl Plan, day, now time.Time, dayStartHour int, level int) string
 	case cur != nil:
 		start, end := cur.span(day, dayStartHour)
 		if end.After(now) {
-			fmt.Fprintf(&b, "此刻：%s（%s-%s，%s），已进行 %s。", cur.Title, cur.Start, cur.End, cur.Flex, humanMinutes(now.Sub(start)))
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.now_ongoing", "此刻：%s（%s-%s，%s），已进行 %s。"),
+				cur.Title, cur.Start, cur.End, flexLevels.For(lang, cur.Flex), humanMinutes(lang, now.Sub(start)))
 		} else {
-			fmt.Fprintf(&b, "此刻：%s（%s-%s）已过了结束时间 %s，还没收尾。", cur.Title, cur.Start, cur.End, humanMinutes(now.Sub(end)))
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.now_overrun", "此刻：%s（%s-%s）已过了结束时间 %s，还没收尾。"),
+				cur.Title, cur.Start, cur.End, humanMinutes(lang, now.Sub(end)))
 		}
 	case pending != nil:
-		fmt.Fprintf(&b, "此刻：到了「%s」的时间（%s-%s，%s），还没动身。", pending.Title, pending.Start, pending.End, pending.Flex)
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.now_due", "此刻：到了「%s」的时间（%s-%s，%s），还没动身。"),
+			pending.Title, pending.Start, pending.End, flexLevels.For(lang, pending.Flex))
 	case len(upcoming) > 0:
 		next := upcoming[0]
 		start, _ := next.span(day, dayStartHour)
-		fmt.Fprintf(&b, "此刻：空闲。下一项 %s %s（%s），还有 %s。", next.Start, next.Title, next.Flex, humanMinutes(start.Sub(now)))
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.now_free_next", "此刻：空闲。下一项 %s %s（%s），还有 %s。"),
+			next.Start, next.Title, flexLevels.For(lang, next.Flex), humanMinutes(lang, start.Sub(now)))
 		upcoming = upcoming[1:]
 	default:
-		b.WriteString("此刻：空闲，今天剩下的时间都空着。")
+		b.WriteString(prompt.T(lang, "prompt.agenda.render.now_free", "此刻：空闲，今天剩下的时间都空着。"))
 	}
+	sep := prompt.T(lang, "prompt.agenda.render.item_sep", "；")
 	if len(upcoming) > 0 {
 		parts := make([]string, 0, len(upcoming))
 		for _, it := range upcoming {
-			parts = append(parts, fmt.Sprintf("%s %s（%s）", it.Start, it.Title, it.Flex))
+			parts = append(parts, prompt.Tf(lang, "prompt.agenda.render.upcoming_item", "%s %s（%s）",
+				it.Start, it.Title, flexLevels.For(lang, it.Flex)))
 		}
-		b.WriteString("\n之后：" + strings.Join(parts, "；") + "。")
+		b.WriteString("\n" + prompt.Tf(lang, "prompt.agenda.render.later", "之后：%s。", strings.Join(parts, sep)))
 	}
 	if len(done) > 0 {
 		switch {
 		case level >= 2:
-			fmt.Fprintf(&b, "\n今天已做 %d 项。", len(done))
+			fmt.Fprintf(&b, "\n"+prompt.T(lang, "prompt.agenda.render.done_count", "今天已做 %d 项。"), len(done))
 		default:
-			b.WriteString("\n今天已做：" + joinItems(done, level == 0) + "。")
+			b.WriteString("\n" + prompt.Tf(lang, "prompt.agenda.render.done_list", "今天已做：%s。",
+				joinItems(lang, done, level == 0)))
 		}
 	}
 	if len(missed) > 0 {
 		switch {
 		case level >= 2:
-			fmt.Fprintf(&b, "\n今天没去 %d 项。", len(missed))
+			fmt.Fprintf(&b, "\n"+prompt.T(lang, "prompt.agenda.render.missed_count", "今天没去 %d 项。"), len(missed))
 		default:
-			b.WriteString("\n今天没去：" + joinItems(missed, level == 0) + "。")
+			b.WriteString("\n" + prompt.Tf(lang, "prompt.agenda.render.missed_list", "今天没去：%s。",
+				joinItems(lang, missed, level == 0)))
 		}
 	}
 	return b.String()
 }
 
 // joinItems 把若干项写成「标题——经历」，withOutcome 为假时只留标题。
-func joinItems(items []*Item, withOutcome bool) string {
+func joinItems(lang string, items []*Item, withOutcome bool) string {
 	parts := make([]string, 0, len(items))
 	for _, it := range items {
 		s := it.Title
 		if withOutcome {
 			switch {
 			case it.Outcome != "" && it.Status == statusDeferred:
-				s += "——已延期：" + it.Outcome
+				s += prompt.Tf(lang, "prompt.agenda.render.deferred_outcome", "——已延期：%s", it.Outcome)
 			case it.Outcome != "":
-				s += "——" + it.Outcome
+				s += prompt.Tf(lang, "prompt.agenda.render.outcome", "——%s", it.Outcome)
 			case it.Status == statusPlanned:
-				s += "——到点没去，没有记录"
+				s += prompt.T(lang, "prompt.agenda.render.no_show", "——到点没去，没有记录")
 			}
 		}
 		parts = append(parts, s)
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(parts, prompt.T(lang, "prompt.agenda.render.item_sep", "；"))
 }
 
 // joinCommitLines 把几条约定写成「18:30 和对方吃晚饭（不能动）」，用分号连接。
-func joinCommitLines(cs []Commitment, withID bool) string {
+func joinCommitLines(lang string, cs []Commitment, withID bool) string {
 	parts := make([]string, 0, len(cs))
 	for _, c := range cs {
-		s := fmt.Sprintf("%s %s（%s）", c.Start, c.Title, c.Flex)
+		s := prompt.Tf(lang, "prompt.agenda.render.upcoming_item", "%s %s（%s）",
+			c.Start, c.Title, flexLevels.For(lang, c.Flex))
 		if withID {
 			s = "[" + c.ID + "] " + s
 		}
 		parts = append(parts, s)
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(parts, prompt.T(lang, "prompt.agenda.render.item_sep", "；"))
 }
 
 // openPromises 挑出还该注入的条目：没了结、且到期日还没过完宽限期。
@@ -330,10 +363,11 @@ func openPromises(ps []Promise, day time.Time) []Promise {
 
 // renderPromises 写「答应过的事」：一行一条，过了日子的标出来。
 // level 是降级档位，与表、约定共用同一套：0 全写，1 去掉备注，2 只留标题，3 只报条数。
-func renderPromises(ps []Promise, day time.Time, loc *time.Location, level int) string {
+func renderPromises(lang string, ps []Promise, day time.Time, loc *time.Location, level int) string {
 	today := day.Format(dateLayout)
 	if level >= 3 {
-		return fmt.Sprintf("共 %d 条，可用 list_promises 查看。", len(ps))
+		return prompt.Tf(lang, "prompt.agenda.render.promises_count",
+			"共 %d 条，可用 list_promises 查看。", len(ps))
 	}
 	shown := ps
 	if len(shown) > maxPromiseShown {
@@ -341,20 +375,22 @@ func renderPromises(ps []Promise, day time.Time, loc *time.Location, level int) 
 	}
 	var b strings.Builder
 	for _, pr := range shown {
-		fmt.Fprintf(&b, "[%s] %s %s%s", pr.ID, fmtDateShort(pr.Date, loc), promiseByCN(pr.By), pr.Title)
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.promise_line", "[%s] %s %s%s"),
+			pr.ID, fmtDateShort(lang, pr.Date, loc), promiseByCN(lang, pr.By), pr.Title)
 		if pr.Note != "" && level == 0 {
-			b.WriteString("（" + pr.Note + "）")
+			b.WriteString(prompt.Tf(lang, "prompt.agenda.render.promise_note", "（%s）", pr.Note))
 		}
 		switch {
 		case pr.Date < today:
-			b.WriteString(" —— 到日子了还没了结")
+			b.WriteString(prompt.T(lang, "prompt.agenda.render.promise_overdue", " —— 到日子了还没了结"))
 		case pr.Date == today:
-			b.WriteString(" —— 就是今天")
+			b.WriteString(prompt.T(lang, "prompt.agenda.render.promise_today", " —— 就是今天"))
 		}
 		b.WriteString("\n")
 	}
 	if rest := len(ps) - len(shown); rest > 0 {
-		fmt.Fprintf(&b, "另有 %d 条，可用 list_promises 查看。\n", rest)
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.agenda.render.promises_more",
+			"另有 %d 条，可用 list_promises 查看。")+"\n", rest)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -143,11 +143,11 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 	}
 
 	typeOpts := make([]huh.Option[string], 0)
-	for _, t := range modelcfg.TypeOptions() {
+	for _, t := range modelcfg.TypeOptions(uiLang) {
 		typeOpts = append(typeOpts, huh.NewOption(t["label"], t["value"]))
 	}
 	dialectOpts := make([]huh.Option[string], 0)
-	for _, d := range modelcfg.DialectOptions() {
+	for _, d := range modelcfg.DialectOptions(uiLang) {
 		dialectOpts = append(dialectOpts, huh.NewOption(d["label"], d["value"]))
 	}
 

@@ -2,11 +2,13 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"wen/internal/i18n"
+	"wen/internal/oslocale"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,6 +16,14 @@ import (
 )
 
 type Config struct {
+	// Lang 是进程级的兜底语言（zh / en / …），决定没有 HTTP 请求可依附的那些路径
+	// 用哪门语言：模型收到的提示词、插件的状态行、会话注记、运行日志，以及
+	// wen status 这类一次性命令。留空表示跟随操作系统的区域设置。
+	//
+	// Web UI 与 wen config 仍按请求判定（?lang= 优先于 Accept-Language），
+	// 这里的值只是它们判不出来时的最后一档——同一个服务可能一台电脑一台手机各用
+	// 一种语言，服务端不该替谁记住界面语言。
+	Lang      string                    `yaml:"lang"`
 	Server    ServerConfig              `yaml:"server"`
 	Model     ModelConfig               `yaml:"model"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
@@ -105,13 +115,16 @@ func Default() *Config {
 // 于是配置文件里的内容会慢慢变成误导。这里只警告不报错——不该因为一段过时的配置
 // 就让程序起不来。
 func warnLegacyPlugins(path string, raw []byte) {
+	// 语言只能自己再认一次：这句警告在 Load 里打出来，而 Load 正是那个还没算出
+	// 语言的地方（配置刚读进来、外面的 adoptLang 还没跑）。PeekLang 只读 lang: 一个键。
+	lang := i18n.Match(PeekLang(path), oslocale.Current())
 	var probe struct {
 		Plugins map[string]any `yaml:"plugins"`
 	}
 	if err := yaml.Unmarshal(raw, &probe); err != nil || len(probe.Plugins) == 0 {
 		return
 	}
-	log.Printf("提示: %s 中的 plugins 段已不再生效，可以删掉。"+
+	i18n.Logf(lang, "log.config.legacy_plugins", "提示: %s 中的 plugins 段已不再生效，可以删掉。"+
 		"插件的开关与配置请在设置页调整（存于 <配置目录>/plugins.state.json）", path)
 }
 
@@ -133,6 +146,26 @@ func ResolvePath(flagPath string) string {
 
 // Load 加载配置：读取 path 指向的 YAML（不存在则用默认值）。
 // 值中的 ${VAR} 占位符会替换为进程环境变量（api_key 推荐直接写在配置里）。
+// PeekLang 只把配置文件里的 lang: 读出来，不做任何校验，出任何差错都答空串。
+//
+// 给参数分发之前的那一步用：帮助文本与未知命令的提示要在 Load 之前打出来，而 Load
+// 会校验模型配置（缺 api_key 直接报错）、还会为遗留的 plugins: 段打一行警告——为了
+// 认一个语言名把这些副作用提前触发一遍是不划算的，况且 wen help 本来就该在配置还
+// 不完整时也能用。
+func PeekLang(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var probe struct {
+		Lang string `yaml:"lang"`
+	}
+	if err := yaml.Unmarshal(expandEnv(raw), &probe); err != nil {
+		return ""
+	}
+	return probe.Lang
+}
+
 func Load(path string) (*Config, error) {
 	cfg := Default()
 

@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -20,6 +22,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang           string // 进程语言，注入片段与工具文本据此取用
 	base           string // 基准清单库目录（= 共享域）
 	maxEntries     int
 	maxInjectBytes int
@@ -70,7 +73,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把清单散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存心里话")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.unspoken.no_state_dir",
+			"没有可用的持久化目录，无法保存心里话"))
 	}
 
 	p.storesMu.Lock()
@@ -79,6 +83,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "unspoken")
 	p.maxEntries = plugin.CfgInt(cfg, "max_entries", defaultMaxEntries)
 	p.maxInjectBytes = plugin.CfgInt(cfg, "max_inject_bytes", defaultMaxInject)
@@ -91,6 +96,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang           string
 	base           string
 	maxEntries     int
 	maxInjectBytes int
@@ -100,12 +106,20 @@ type settings struct {
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{base: p.base, maxEntries: p.maxEntries, maxInjectBytes: p.maxInjectBytes}
+	return settings{lang: p.lang, base: p.base, maxEntries: p.maxEntries, maxInjectBytes: p.maxInjectBytes}
 }
 
 // SystemPrompt 注入维护判据，全部为静态内容。
 // 清单本体改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
+
+// langOf 取进程语言。未初始化时是空串，prompt.T 据此回中文——Manager.List 会对
+// 未启用的插件调 SystemPrompt，走的正是这一档。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // TurnPrompt 注入本轮的清单。一条都没有时不注入：判据已在 SystemPrompt 里。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
@@ -118,13 +132,13 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || len(es) == 0 {
 		return "", err
 	}
-	return stateHeader + "\n" + renderEntries(es, s.maxInjectBytes, time.Now()), nil
+	return stateHeaderFor(s.lang) + "\n" + renderEntries(s.lang, es, s.maxInjectBytes, time.Now()), nil
 }
 
 // storeFor 返回某个可见域的清单库（惰性创建）。未初始化时返回 nil。
 func (p *Plugin) storeFor(tag string) *Store {
 	p.mu.RLock()
-	base := p.base
+	base, lang := p.base, p.lang
 	p.mu.RUnlock()
 	if base == "" {
 		return nil
@@ -138,7 +152,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(lang, plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -155,25 +169,25 @@ func (p *Plugin) storeFor(tag string) *Store {
 //
 // 超出预算时从最早的开始省，末尾注明「另有 N 条更早的」；一条都放不下时只报条数。
 // 降级保住存在性：模型知道心里还压着事，不会演成什么都没发生。
-func renderEntries(es []Entry, maxBytes int, now time.Time) string {
+func renderEntries(lang string, es []Entry, maxBytes int, now time.Time) string {
 	for skip := 0; skip < len(es); skip++ {
-		out := renderLines(es[skip:], now)
+		out := renderLines(lang, es[skip:], now)
 		if skip > 0 {
-			out += fmt.Sprintf("\n（另有 %d 条更早的未列出）", skip)
+			out += prompt.Tf(lang, "prompt.unspoken.render.more", "\n（另有 %d 条更早的未列出）", skip)
 		}
 		if maxBytes <= 0 || len(out) <= maxBytes {
 			return out
 		}
 	}
-	return fmt.Sprintf("（共 %d 条，注入预算不足以列出）", len(es))
+	return prompt.Tf(lang, "prompt.unspoken.render.over_budget", "（共 %d 条，注入预算不足以列出）", len(es))
 }
 
-func renderLines(es []Entry, now time.Time) string {
+func renderLines(lang string, es []Entry, now time.Time) string {
 	var b strings.Builder
 	for _, e := range es {
 		b.WriteString("- ")
-		if a := agoText(e.Created, now); a != "" {
-			b.WriteString(a + "：")
+		if a := agoText(lang, e.Created, now); a != "" {
+			b.WriteString(prompt.Tf(lang, "prompt.unspoken.render.when", "%s：", a))
 		}
 		b.WriteString(e.Text + "\n")
 	}
@@ -183,7 +197,7 @@ func renderLines(es []Entry, now time.Time) string {
 // agoText 把时刻化成「今天 / 昨天 / N 天前 / N 个月前 / N 年前」，按日历日算而不是
 // 按 24 小时——昨晚记下的事今天凌晨不该说「今天」。零值或倒流（改过系统时钟）时不标。
 // 口径与人物库一致。
-func agoText(t, now time.Time) string {
+func agoText(lang string, t, now time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
@@ -196,14 +210,11 @@ func agoText(t, now time.Time) string {
 	case days < 0:
 		return ""
 	case days == 0:
-		return "今天"
+		return prompt.T(lang, "prompt.unspoken.ago.today", "今天")
 	case days == 1:
-		return "昨天"
-	case days < 30:
-		return fmt.Sprintf("%d 天前", days)
-	case days < 365:
-		return fmt.Sprintf("%d 个月前", days/30)
-	default:
-		return fmt.Sprintf("%d 年前", days/365)
+		return prompt.T(lang, "prompt.unspoken.ago.yesterday", "昨天")
 	}
+	// 天数以上走全程序共用的时长口径，分档与别处一致。
+	return prompt.Tf(lang, "prompt.unspoken.ago.before", "%s前",
+		prompt.Duration(lang, time.Duration(days)*24*time.Hour))
 }

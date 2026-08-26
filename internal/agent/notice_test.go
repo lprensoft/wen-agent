@@ -153,7 +153,7 @@ func TestNoticeExcludedFromCompactionSummary(t *testing.T) {
 		{Message: llm.Message{Role: llm.RoleSystem, Content: "🧠 记忆提炼：新增「事实/某事」"}, Kind: session.KindNotice},
 		{Message: llm.Message{Role: llm.RoleAssistant, Content: "回答"}},
 	}
-	got := serializeHistory(msgs)
+	got := serializeHistory("", msgs)
 	if strings.Contains(got, "记忆提炼") {
 		t.Errorf("注记不该进摘要——它不是对话内容：\n%s", got)
 	}

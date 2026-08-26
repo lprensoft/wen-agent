@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 配置默认值。
@@ -70,6 +72,7 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置（Init 写入）
+	lang     string // 进程语言，注入片段与工具文本据此取用
 	base     time.Duration
 	minIv    time.Duration
 	maxIv    time.Duration
@@ -116,16 +119,18 @@ func (p *Plugin) SystemPrompt() string { return "" }
 // 固定节奏时不注入：调整会被工具拒绝，亮出来只会诱导模型去调。
 func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
 	p.mu.Lock()
-	cur, dynamic, pausedUntil := p.cur, p.dynamic, p.pausedUntil
+	lang, cur, dynamic, pausedUntil := p.lang, p.cur, p.dynamic, p.pausedUntil
 	p.mu.Unlock()
 	if !dynamic || cur <= 0 {
 		return "", nil
 	}
 	if until := time.Until(pausedUntil); until > 0 {
-		return fmt.Sprintf("[心跳]\n主动开口已暂停，约 %s后恢复常规节奏。", humanDur(until)), nil
+		return prompt.Tf(lang, "prompt.heartbeat.state_paused",
+			"[心跳]\n主动开口已暂停，约 %s后恢复常规节奏。", humanDur(lang, until)), nil
 	}
-	return fmt.Sprintf("[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
-		humanDur(cur)), nil
+	return prompt.Tf(lang, "prompt.heartbeat.state",
+		"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
+		humanDur(lang, cur)), nil
 }
 
 // Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用
@@ -176,22 +181,27 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	minIv := time.Duration(plugin.CfgInt(cfg, "min_minutes", defMinMinutes)) * time.Minute
 	maxIv := time.Duration(plugin.CfgInt(cfg, "max_minutes", defMaxMinutes)) * time.Minute
 	if minIv > base || base > maxIv {
-		return fmt.Errorf("心跳间隔需满足 最快(%v) ≤ 基础(%v) ≤ 最慢(%v)", minIv, base, maxIv)
+		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.heartbeat.err.range",
+			"心跳间隔需满足 最快(%v) ≤ 基础(%v) ≤ 最慢(%v)"), minIv, base, maxIv)
 	}
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法记录心跳状态")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_state_dir",
+			"没有可用的持久化目录，无法记录心跳状态"))
 	}
 	if ictx.RunTurn == nil {
-		return fmt.Errorf("当前环境不支持插件发起对话轮次")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_run_turn",
+			"当前环境不支持插件发起对话轮次"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("当前环境不支持会话查询")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.heartbeat.no_sessions",
+			"当前环境不支持会话查询"))
 	}
 
 	p.Stop() // 重入：先停上一轮循环，避免两套定时器并行
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base, p.minIv, p.maxIv = base, minIv, maxIv
 	p.prompt = plugin.CfgString(cfg, "prompt", defaultPrompt)
 	p.dynamic = plugin.CfgBool(cfg, "dynamic", true)

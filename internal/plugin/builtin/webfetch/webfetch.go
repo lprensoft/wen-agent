@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const defaultMaxBytes = 64 * 1024
@@ -22,6 +23,7 @@ type Plugin struct {
 	timeout  time.Duration
 	maxBytes int
 	client   *http.Client
+	lang     string
 }
 
 func New() *Plugin {
@@ -34,7 +36,7 @@ func (p *Plugin) Category() string    { return plugin.CategoryTools }
 func (p *Plugin) Description() string { return "抓取网页并返回其文本内容" }
 
 func (p *Plugin) SystemPrompt() string {
-	return "你可以使用 fetch_url 工具抓取网页的文本内容。"
+	return prompt.T(p.lang, "prompt.web_fetch.system", "你可以使用 fetch_url 工具抓取网页的文本内容。")
 }
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
@@ -60,7 +62,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	}
 }
 
-func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
+func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
+	p.lang = ictx.Lang
 	p.timeout = time.Duration(plugin.CfgInt(cfg, "timeout_seconds", 20)) * time.Second
 	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
 	p.client = &http.Client{Timeout: p.timeout}
@@ -76,17 +79,22 @@ type tool struct {
 func (t *tool) Name() string { return "fetch_url" }
 
 func (t *tool) Description() string {
-	return "抓取指定 URL 的网页并返回其文本内容（HTML 会剥离标签）。仅支持 http/https，内容过长会被截断。"
+	return prompt.T(t.p.lang, "prompt.web_fetch.tool.fetch_url.desc",
+		"抓取指定 URL 的网页并返回其文本内容（HTML 会剥离标签）。仅支持 http/https，内容过长会被截断。")
 }
 
-func (t *tool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+// schemaZH 是参数 Schema。整段一个键：它是手写的 JSON，拆成一个字段一个键的话，
+// 译者要照着结构去拼，而拼错一个引号就是一份非法的 Schema。
+const schemaZH = `{
 		"type": "object",
 		"properties": {
 			"url": {"type": "string", "description": "要抓取的网页地址（http/https）"}
 		},
 		"required": ["url"]
-	}`)
+	}`
+
+func (t *tool) Schema() json.RawMessage {
+	return json.RawMessage(prompt.T(t.p.lang, "prompt.web_fetch.tool.fetch_url.schema", schemaZH))
 }
 
 func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -98,7 +106,7 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	}
 	u, err := url.Parse(a.URL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", fmt.Errorf("仅支持 http/https 地址")
+		return "", fmt.Errorf("%s", prompt.T(t.p.lang, "prompt.web_fetch.result.scheme", "仅支持 http/https 地址"))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
@@ -134,7 +142,8 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 
 	out := fmt.Sprintf("[HTTP %d] %s\n\n%s", resp.StatusCode, a.URL, strings.TrimSpace(text))
 	if truncated {
-		out += fmt.Sprintf("\n...[内容超过 %d 字节，已截断]", t.p.maxBytes)
+		out += prompt.Tf(t.p.lang, "prompt.web_fetch.result.truncated",
+			"\n...[内容超过 %d 字节，已截断]", t.p.maxBytes)
 	}
 	return out, nil
 }

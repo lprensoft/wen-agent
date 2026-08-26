@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -25,6 +26,7 @@ type Plugin struct {
 	mu sync.RWMutex
 
 	workdir        string
+	lang           string
 	timeout        time.Duration
 	guard          string
 	confirmTimeout time.Duration
@@ -51,10 +53,10 @@ func (p *Plugin) SystemPrompt() string {
 	if p.snapshot().guard == guardOff {
 		return ""
 	}
-	return promptGuard
+	return prompt.T(p.snapshot().lang, "prompt.exec_command.guard", promptGuardZH)
 }
 
-const promptGuard = `[命令执行]
+const promptGuardZH = `[命令执行]
 可能造成不可逆后果的命令（删除、覆盖、改写提交历史、改动系统配置等）会先交由对方确认，
 个别极高危的命令直接被拒绝。被拒绝或未获同意时，说明原因并另找办法，不要改写命令绕过、
 也不要反复重试。破坏性操作请一条一条单独执行，不要串联在一条命令里——那样对方无法只同意
@@ -101,6 +103,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.workdir = ictx.Workdir
+	p.lang = ictx.Lang
 	p.timeout = time.Duration(plugin.CfgInt(cfg, "timeout_seconds", defaultTimeoutSeconds)) * time.Second
 	p.guard = plugin.CfgString(cfg, "guard", defaultGuard)
 	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_seconds", defaultConfirmTimeout)) * time.Second
@@ -110,6 +113,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 // settings 是一次调用期间使用的配置快照（SetConfig 会在运行时重新 Init）。
 type settings struct {
 	workdir        string
+	lang           string
 	timeout        time.Duration
 	guard          string
 	confirmTimeout time.Duration
@@ -120,6 +124,7 @@ func (p *Plugin) snapshot() settings {
 	defer p.mu.RUnlock()
 	return settings{
 		workdir:        p.workdir,
+		lang:           p.lang,
 		timeout:        p.timeout,
 		guard:          p.guard,
 		confirmTimeout: p.confirmTimeout,
@@ -135,18 +140,23 @@ type tool struct {
 func (t *tool) Name() string { return "exec_command" }
 
 func (t *tool) Description() string {
-	return "在工作目录下执行一条 shell 命令并返回其输出（stdout 与 stderr 合并）。使用的 shell 见系统环境信息。" +
-		"有超时限制，输出过长会被截断。可能造成不可逆后果的命令会先交由对方确认，个别极高危的命令直接拒绝。"
+	return prompt.T(t.p.snapshot().lang, "prompt.exec_command.tool.exec_command.desc",
+		"在工作目录下执行一条 shell 命令并返回其输出（stdout 与 stderr 合并）。使用的 shell 见系统环境信息。"+
+			"有超时限制，输出过长会被截断。可能造成不可逆后果的命令会先交由对方确认，个别极高危的命令直接拒绝。")
 }
 
-func (t *tool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+// schemaZH 是参数 Schema。整段一个键：它是手写的 JSON，拆成一个字段一个键的话，
+// 译者要照着结构去拼，而拼错一个引号就是一份非法的 Schema。
+const schemaZH = `{
 		"type": "object",
 		"properties": {
 			"command": {"type": "string", "description": "要执行的 shell 命令"}
 		},
 		"required": ["command"]
-	}`)
+	}`
+
+func (t *tool) Schema() json.RawMessage {
+	return json.RawMessage(prompt.T(t.p.snapshot().lang, "prompt.exec_command.tool.exec_command.schema", schemaZH))
 }
 
 func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -186,15 +196,18 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 
 	result := string(out)
 	if truncated {
-		result += fmt.Sprintf("\n...[输出超过 %d 字节，已截断]", outputMaxBytes)
+		result += prompt.Tf(s.lang, "prompt.exec_command.result.truncated",
+			"\n...[输出超过 %d 字节，已截断]", outputMaxBytes)
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		result += fmt.Sprintf("\n[命令超时（%s），已终止]", timeout)
+		result += prompt.Tf(s.lang, "prompt.exec_command.result.timeout",
+			"\n[命令超时（%s），已终止]", timeout)
 		return result, nil
 	}
 	if err != nil {
 		// 命令非零退出也把输出带回给模型，方便其自行判断
-		result += fmt.Sprintf("\n[命令退出异常: %v]", err)
+		result += prompt.Tf(s.lang, "prompt.exec_command.result.exit_error",
+			"\n[命令退出异常: %v]", err)
 	}
 	return result, nil
 }

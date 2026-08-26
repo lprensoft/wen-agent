@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // Handshake 连一遍插件包里的每台 server，取回工具清单并落盘。
@@ -18,7 +20,7 @@ import (
 //
 // dataDir 是交给 server 的 PLUGIN_DATA。握手用的是与真正运行时同一份参数，否则「握手
 // 时好好的、一调用就不行」这种问题会很难查。
-func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []string, error) {
+func Handshake(ctx context.Context, lang string, b *Bundle, dataDir string) ([]ToolInfo, []string, error) {
 	if len(b.Servers) == 0 {
 		return nil, nil, nil
 	}
@@ -36,11 +38,12 @@ func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []st
 		// 密钥的文件，密钥就等于公开了。只提醒不拦——它是包作者的选择，用户装它
 		// 时那个文件就在手边，拦下来只会变成一次没有解释的失败。
 		if h := credentialHeaders(s.Headers); len(h) > 0 {
-			problems = append(problems, fmt.Sprintf("%s：mcp.json 里直接写了 %s，插件包是公开分发的，别把凭据放在里面",
-				s.Name, strings.Join(h, "、")))
+			problems = append(problems, i18n.Tf(lang, "plugin.bundle.warn.inline_secret",
+				"%s：mcp.json 里直接写了 %s，插件包是公开分发的，别把凭据放在里面",
+				s.Name, strings.Join(h, i18n.T(lang, "plugin.bundle.sep", "、"))))
 		}
 
-		c := newClient(resolved)
+		c := newClient(lang, resolved)
 		remote, err := c.listTools(ctx)
 		c.Close() // 握手完就放掉：真正用的时候会按需重新拉起
 		if err != nil {
@@ -51,7 +54,8 @@ func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []st
 		for _, rt := range remote {
 			local := LocalToolName(b.Manifest.Name, s.Name, rt.Name)
 			if seen[local] {
-				problems = append(problems, fmt.Sprintf("%s 的 %s：与同包里另一件工具重名，已跳过", s.Name, rt.Name))
+				problems = append(problems, i18n.Tf(lang, "plugin.bundle.warn.dup_tool",
+					"%s 的 %s：与同包里另一件工具重名，已跳过", s.Name, rt.Name))
 				continue
 			}
 			seen[local] = true
@@ -68,7 +72,8 @@ func Handshake(ctx context.Context, b *Bundle, dataDir string) ([]ToolInfo, []st
 			})
 		}
 		if len(remote) >= maxToolsPerServer {
-			problems = append(problems, fmt.Sprintf("%s：工具超过 %d 件，只收下了前面这些——清单每一轮都要随请求发出去", s.Name, maxToolsPerServer))
+			problems = append(problems, i18n.Tf(lang, "plugin.bundle.warn.too_many_tools",
+				"%s：工具超过 %d 件，只收下了前面这些——清单每一轮都要随请求发出去", s.Name, maxToolsPerServer))
 		}
 	}
 

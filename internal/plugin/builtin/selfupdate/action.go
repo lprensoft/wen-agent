@@ -3,10 +3,10 @@ package selfupdate
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/updater"
 	"wen/internal/version"
@@ -48,25 +48,26 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // 会下载几十兆并替换程序文件，半路重来只会留下一份没人认领的下载。
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	if key != actionUpdate {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	s := p.snapshot()
 	if s.exe == "" {
-		return fmt.Errorf("插件尚未初始化")
+		return fmt.Errorf("%s", i18n.T(s.lang, "plugin.self_update.err.not_ready", "插件尚未初始化"))
 	}
 
 	install := s.newerTag() != ""
 	p.actMu.Lock()
 	if p.running {
 		p.actMu.Unlock()
-		return fmt.Errorf("更新正在进行中，请等它结束")
+		return fmt.Errorf("%s", i18n.T(s.lang, "plugin.self_update.err.running",
+			"更新正在进行中，请等它结束"))
 	}
 	p.running = true
 	p.actSeq++
 	seq := p.actSeq
-	first := "正在检查有没有新版本…"
+	first := i18n.T(s.lang, "plugin.self_update.step.checking", "正在检查有没有新版本…")
 	if install {
-		first = "正在核对最新版本…"
+		first = i18n.T(s.lang, "plugin.self_update.step.verifying", "正在核对最新版本…")
 	}
 	p.actState = plugin.ActionState{Status: plugin.ActionPending, Message: first}
 	p.actMu.Unlock()
@@ -84,7 +85,7 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionUpdate {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()
@@ -101,19 +102,20 @@ func (p *Plugin) run(seq uint64, install bool, s snapshot) {
 
 	rel, err := p.check(ctx, s)
 	if err != nil {
-		p.finish(seq, plugin.ActionState{Status: plugin.ActionError, Message: "检查更新失败：" + err.Error()})
+		p.finish(seq, plugin.ActionState{Status: plugin.ActionError,
+			Message: i18n.Tf(s.lang, "plugin.self_update.err.check", "检查更新失败：%s", err.Error())})
 		return
 	}
 
 	if !updater.Newer(version.Version, rel.Tag) {
-		p.finish(seq, plugin.ActionState{Status: plugin.ActionDone, Message: uptodateMessage(rel.Tag)})
+		p.finish(seq, plugin.ActionState{Status: plugin.ActionDone, Message: uptodateMessage(s.lang, rel.Tag)})
 		return
 	}
 	if !install {
 		// 第一次点：只报告。按钮文案随之变成「更新到 vX 并重启」，再点才装。
 		// 这一条里嵌着 GitHub 的发布正文，本来就是 markdown，交给界面按 markdown 渲染。
 		p.finish(seq, plugin.ActionState{
-			Status: plugin.ActionDone, Message: foundMessage(rel), Markdown: true,
+			Status: plugin.ActionDone, Message: foundMessage(s.lang, rel), Markdown: true,
 		})
 		return
 	}
@@ -124,12 +126,12 @@ func (p *Plugin) run(seq uint64, install bool, s snapshot) {
 func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel updater.Release) {
 	fail := func(err error) {
 		p.finish(seq, plugin.ActionState{Status: plugin.ActionError, Message: err.Error()})
-		log.Printf("self_update: 更新到 %s 失败: %v", rel.Tag, err)
+		i18n.Logf(p.langOf(), "log.selfupdate.install_failed", "self_update: 更新到 %s 失败: %v", rel.Tag, err)
 	}
 
 	// 先确认安装目录可写：装在系统目录或由包管理器装的，这一步就该停，
 	// 而不是下完十几兆再来报错
-	if err := updater.CheckWritable(s.exe); err != nil {
+	if err := updater.CheckWritable(s.lang, s.exe); err != nil {
 		fail(err)
 		return
 	}
@@ -140,30 +142,31 @@ func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel update
 	}
 
 	work := updater.WorkDir(s.exe)
-	p.progress(seq, fmt.Sprintf("正在下载 %s（%s）…", plan.Asset.Name, humanSize(plan.Asset.Size)))
+	p.progress(seq, i18n.Tf(s.lang, "plugin.self_update.step.downloading", "正在下载 %s（%s）…",
+		plan.Asset.Name, humanSize(s.lang, plan.Asset.Size)))
 	archive, err := s.client.Fetch(ctx, plan, work, func(done, total int64) {
-		p.progress(seq, downloadMessage(plan.Asset.Name, done, total))
+		p.progress(seq, downloadMessage(s.lang, plan.Asset.Name, done, total))
 	})
 	if err != nil {
 		fail(err)
 		return
 	}
 
-	p.progress(seq, "校验通过，正在解包…")
-	bin, err := updater.Extract(archive, work, updater.HostBinaryName())
+	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.unpacking", "校验通过，正在解包…"))
+	bin, err := updater.Extract(s.lang, archive, work, updater.HostBinaryName())
 	if err != nil {
 		fail(err)
 		return
 	}
 
-	p.progress(seq, "正在试运行新版程序…")
-	if err := updater.SmokeTest(ctx, bin, rel.Tag); err != nil {
+	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.trial", "正在试运行新版程序…"))
+	if err := updater.SmokeTest(ctx, s.lang, bin, rel.Tag); err != nil {
 		fail(err)
 		return
 	}
 
-	p.progress(seq, "正在替换程序文件…")
-	if err := updater.Apply(bin, s.exe); err != nil {
+	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.replacing", "正在替换程序文件…"))
+	if err := updater.Apply(s.lang, bin, s.exe); err != nil {
 		fail(err)
 		return
 	}
@@ -173,30 +176,33 @@ func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel update
 	p.st.Pending = &pendingUpdate{From: from, To: rel.Tag, At: p.now()}
 	p.saveLocked()
 	p.mu.Unlock()
-	log.Printf("self_update: 已把程序文件替换为 %s（原 %s）", rel.Tag, from)
+	i18n.Logf(p.langOf(), "log.selfupdate.replaced", "self_update: 已把程序文件替换为 %s（原 %s）", rel.Tag, from)
 
 	if !s.autoRestart || s.restart == nil {
-		why := "「更新后自动重启」是关的"
+		why := i18n.T(s.lang, "plugin.self_update.why.disabled", "「更新后自动重启」是关的")
 		if s.restart == nil {
-			why = "当前的启动方式下无法自行重启"
+			why = i18n.T(s.lang, "plugin.self_update.why.unsupported", "当前的启动方式下无法自行重启")
 		}
 		p.finish(seq, plugin.ActionState{
-			Status:  plugin.ActionDone,
-			Message: fmt.Sprintf("已更新到 %s（原 %s）。%s，重新启动程序后生效。", rel.Tag, from, why),
+			Status: plugin.ActionDone,
+			Message: i18n.Tf(s.lang, "plugin.self_update.done.manual",
+				"已更新到 %s（原 %s）。%s，重新启动程序后生效。", rel.Tag, from, why),
 		})
 		return
 	}
 
-	p.progress(seq, fmt.Sprintf("已更新到 %s，正在重启服务…\n重启期间界面会短暂断开，稍等几秒会自动接上。", rel.Tag))
+	p.progress(seq, i18n.Tf(s.lang, "plugin.self_update.done.restarting",
+		"已更新到 %s，正在重启服务…\n重启期间界面会短暂断开，稍等几秒会自动接上。", rel.Tag))
 	// 留一点时间让界面把上面这条取走：重启一发生，这个进程连同它的 HTTP 服务就没了
 	select {
 	case <-time.After(restartDelay):
 	case <-ctx.Done():
 	}
-	if err := s.restart(fmt.Sprintf("更新到 %s", rel.Tag)); err != nil {
+	if err := s.restart(i18n.Tf(s.lang, "plugin.self_update.restart_reason", "更新到 %s", rel.Tag)); err != nil {
 		p.finish(seq, plugin.ActionState{
 			Status: plugin.ActionError,
-			Message: fmt.Sprintf("已更新到 %s，但自动重启失败（%v）。手工重启程序即可用上新版。",
+			Message: i18n.Tf(s.lang, "plugin.self_update.done.restart_failed",
+				"已更新到 %s，但自动重启失败（%v）。手工重启程序即可用上新版。",
 				rel.Tag, err),
 		})
 		return
@@ -254,46 +260,50 @@ func (p *Plugin) setAction(st plugin.ActionState) {
 
 // ---------- 文案 ----------
 
-func uptodateMessage(latest string) string {
+func uptodateMessage(lang, latest string) string {
 	cur, ok := updater.ParseVersion(version.Version)
 	if ok && cur.Dev {
-		return fmt.Sprintf("当前运行的是开发版 %s，它比最新的正式版 %s 还新，无需更新。",
-			version.Version, latest)
+		return i18n.Tf(lang, "plugin.self_update.msg.dev_newer",
+			"当前运行的是开发版 %s，它比最新的正式版 %s 还新，无需更新。", version.Version, latest)
 	}
-	return fmt.Sprintf("已是最新版 %s。", version.Version)
+	return i18n.Tf(lang, "plugin.self_update.msg.uptodate", "已是最新版 %s。", version.Version)
 }
 
-func foundMessage(rel updater.Release) string {
+func foundMessage(lang string, rel updater.Release) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "发现新版 %s（当前 %s）", rel.Tag, version.Version)
+	b.WriteString(i18n.Tf(lang, "plugin.self_update.msg.found", "发现新版 %s（当前 %s）",
+		rel.Tag, version.Version))
 	if !rel.PublishedAt.IsZero() {
-		fmt.Fprintf(&b, "，发布于 %s", rel.PublishedAt.Local().Format("2006-01-02"))
+		b.WriteString(i18n.Tf(lang, "plugin.self_update.msg.published", "，发布于 %s",
+			rel.PublishedAt.Local().Format("2006-01-02")))
 	}
-	b.WriteString("。\n")
+	b.WriteString(i18n.T(lang, "plugin.self_update.msg.found_end", "。\n"))
 	if notes := updater.ReleaseNotes(rel.Body); notes != "" {
 		b.WriteString("\n")
 		b.WriteString(truncateNotes(notes))
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "\n关闭这个窗口，再点一次「更新到 %s 并重启」就开始更新。", rel.Tag)
+	b.WriteString(i18n.Tf(lang, "plugin.self_update.msg.how_to_start",
+		"\n关闭这个窗口，再点一次「更新到 %s 并重启」就开始更新。", rel.Tag))
 	return b.String()
 }
 
-func downloadMessage(name string, done, total int64) string {
+func downloadMessage(lang, name string, done, total int64) string {
 	if total <= 0 {
-		return fmt.Sprintf("正在下载 %s：已下 %s", name, humanSize(done))
+		return i18n.Tf(lang, "plugin.self_update.msg.downloading_unknown", "正在下载 %s：已下 %s",
+			name, humanSize(lang, done))
 	}
-	return fmt.Sprintf("正在下载 %s：%d%%（%s / %s）",
-		name, done*100/total, humanSize(done), humanSize(total))
+	return i18n.Tf(lang, "plugin.self_update.msg.downloading", "正在下载 %s：%d%%（%s / %s）",
+		name, done*100/total, humanSize(lang, done), humanSize(lang, total))
 }
 
-func humanSize(n int64) string {
+func humanSize(lang string, n int64) string {
 	switch {
 	case n >= 1<<20:
 		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
 	case n >= 1<<10:
 		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
 	default:
-		return fmt.Sprintf("%d 字节", n)
+		return i18n.Tf(lang, "plugin.self_update.msg.bytes", "%d 字节", n)
 	}
 }

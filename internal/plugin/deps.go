@@ -2,9 +2,10 @@ package plugin
 
 import (
 	"fmt"
-	"log"
 	"slices"
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // Dependent 是插件的可选能力：声明必须同时启用的其他插件。
@@ -149,7 +150,7 @@ func (m *Manager) Resolve() {
 	defer m.mu.Unlock()
 
 	if cycles := m.cyclesLocked(); len(cycles) > 0 {
-		log.Printf("警告: 插件依赖成环，涉及 %s，这些插件将保持禁用", strings.Join(cycles, "、"))
+		i18n.Logf(m.lang(), "log.plugin.dep_cycle", "警告: 插件依赖成环，涉及 %s，这些插件将保持禁用", joinNames(m.lang(), cycles))
 	}
 	// 迭代到稳定：关掉一个插件可能让依赖它的插件也变成依赖未满足
 	for {
@@ -162,7 +163,7 @@ func (m *Manager) Resolve() {
 			if unmet := m.unmetLocked(name); len(unmet) > 0 {
 				e.enabled = false
 				e.forcedOff = true
-				log.Printf("插件 %q 的依赖未满足（%s），保持禁用", name, strings.Join(unmet, "、"))
+				i18n.Logf(m.lang(), "log.plugin.dep_unmet", "插件 %q 的依赖未满足（%s），保持禁用", name, joinNames(m.lang(), unmet))
 				changed = true
 			}
 		}
@@ -197,4 +198,10 @@ func quoteJoin(names []string) string {
 		parts = append(parts, fmt.Sprintf("%q", n))
 	}
 	return strings.Join(parts, "、")
+}
+
+// joinNames 按语言的习惯连接一串插件名：中文用顿号，西文用逗号加空格。
+// 这种标点差异逐处硬写会漏。
+func joinNames(lang string, names []string) string {
+	return strings.Join(names, i18n.T(lang, "log.plugin.name_sep", "、"))
 }

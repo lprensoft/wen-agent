@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"wen/internal/i18n"
+
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 时间线：按日一行的「何时 + 什么转折」编年史。
@@ -40,9 +42,9 @@ const (
 	defaultTimelineDays = 7
 )
 
-// timelinePrompt 把一天的对话收束成一行。SKIP 那条不能省：没有实质内容的一天
+// timelinePromptZH 把一天的对话收束成一行。SKIP 那条不能省：没有实质内容的一天
 // 硬凑一行，时间线很快会被「聊了聊天」这类废话填满。
-const timelinePrompt = `下面是 %s 这一天的对话摘录。请把这一天概括成时间线上的一行记录：
+const timelinePromptZH = `下面是 %s 这一天的对话摘录。请把这一天概括成时间线上的一行记录：
 这一天发生的关键事件、转折、决定或进展，一句话，不超过 60 字。
 只输出这一句话本身，不带日期、不带引号、不带任何解释。
 这一天没有实质内容（只是寒暄或没有要点的闲聊）时，只输出 SKIP。
@@ -50,8 +52,8 @@ const timelinePrompt = `下面是 %s 这一天的对话摘录。请把这一天�
 对话摘录：
 %s`
 
-// timelineHeader 领起本轮注入的时间线。
-const timelineHeader = `[最近几天]
+// timelineHeaderZH 领起本轮注入的时间线。
+const timelineHeaderZH = `[最近几天]
 按日的时间线，新的在前；提到某天的事而这里没有时，说明那天没有留下记录：`
 
 // dayBuf 是一个自然日攒下的对话文本。
@@ -92,10 +94,10 @@ func (p *Plugin) appendDayBuf(s settings, tag string, ev plugin.TurnEndEvent) {
 	dir := plugin.DomainDir(s.libBase, tag)
 	var b strings.Builder
 	if t := strings.TrimSpace(ev.UserInput); t != "" {
-		fmt.Fprintf(&b, "用户: %s\n", t)
+		b.WriteString(prompt.Tf(s.lang, "prompt.memory.dialogue.user", "用户: %s\n", t))
 	}
 	if t := strings.TrimSpace(ev.FinalText); t != "" {
-		fmt.Fprintf(&b, "助手: %s\n", t)
+		b.WriteString(prompt.Tf(s.lang, "prompt.memory.dialogue.assistant", "助手: %s\n", t))
 	}
 	if b.Len() == 0 {
 		return
@@ -127,7 +129,7 @@ func (p *Plugin) appendDayBuf(s settings, tag string, ev plugin.TurnEndEvent) {
 		text = text[nl+1:]
 	}
 	f.Days[idx].Text = text
-	saveDayBuf(dir, f)
+	saveDayBuf(s.lang, dir, f)
 }
 
 func loadDayBuf(dir string) dayBufFile {
@@ -143,7 +145,7 @@ func loadDayBuf(dir string) dayBufFile {
 }
 
 // saveDayBuf 落盘缓冲。0600：内容是对话原文。失败只影响时间线的完整性，不打断对话。
-func saveDayBuf(dir string, f dayBufFile) {
+func saveDayBuf(lang, dir string, f dayBufFile) {
 	if len(f.Days) == 0 {
 		_ = os.Remove(filepath.Join(dir, dayBufFileName))
 		return
@@ -156,7 +158,7 @@ func saveDayBuf(dir string, f dayBufFile) {
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, dayBufFileName), raw, 0o600); err != nil {
-		log.Printf("时间线：当日缓冲写入失败：%v", err)
+		i18n.Logf(lang, "log.memory.daybuf_write_failed", "时间线：当日缓冲写入失败：%v", err)
 	}
 }
 
@@ -193,11 +195,11 @@ func (p *Plugin) runTimeline(s settings) {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(s.ctx, extractTimeout)
-			raw, err := complete(ctx, fmt.Sprintf(timelinePrompt, day.Date, day.Text))
+			raw, err := complete(ctx, fmt.Sprintf(prompt.T(s.lang, "prompt.memory.timeline_prompt", timelinePromptZH), day.Date, day.Text))
 			cancel()
 			if err != nil {
 				if s.ctx.Err() == nil {
-					log.Printf("时间线：收束 %s 失败，下次日切再试：%v", day.Date, err)
+					i18n.Logf(s.lang, "log.memory.timeline_close_failed", "时间线：收束 %s 失败，下次日切再试：%v", day.Date, err)
 				}
 				continue // 缓冲留着，明天的收束会连它一起处理
 			}
@@ -205,7 +207,7 @@ func (p *Plugin) runTimeline(s settings) {
 			if summary != "" && !strings.EqualFold(summary, "SKIP") {
 				e := timelineEntry{Date: day.Date, Summary: summary, Facts: p.factsFor(day.Date)}
 				p.appendTimeline(dir, e)
-				log.Printf("时间线：%s | %s", day.Date, renderEntry(e))
+				i18n.Logf(s.lang, "log.memory.timeline_entry", "时间线：%s | %s", day.Date, renderEntry(s.lang, e))
 			}
 			p.dropDay(dir, day.Date)
 		}
@@ -224,7 +226,7 @@ func (p *Plugin) dropDay(dir, date string) {
 		}
 	}
 	f.Days = out
-	saveDayBuf(dir, f)
+	saveDayBuf(p.langOf(), dir, f)
 }
 
 // appendTimeline 追加一行时间线并按日期排好，超出上限丢最早的。
@@ -245,7 +247,7 @@ func (p *Plugin) appendTimeline(dir string, e timelineEntry) {
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600); err != nil {
-		log.Printf("时间线：写入失败：%v", err)
+		i18n.Logf(p.langOf(), "log.memory.timeline_write_failed", "时间线：写入失败：%v", err)
 	}
 }
 
@@ -293,10 +295,10 @@ func (p *Plugin) timelineBlock(ctx context.Context, s settings) string {
 		all = all[:s.timelineDays]
 	}
 	var b strings.Builder
-	b.WriteString(timelineHeader)
+	b.WriteString(prompt.T(s.lang, "prompt.memory.timeline_header", timelineHeaderZH))
 	for _, e := range all {
 		b.WriteString("\n- ")
-		b.WriteString(renderEntry(e))
+		b.WriteString(renderEntry(s.lang, e))
 	}
 	return b.String()
 }
@@ -307,25 +309,34 @@ func (p *Plugin) timelineBlock(ctx context.Context, s settings) string {
 //
 // 星期几由日期算出来，不占存储：日记里「周五」比「2026-08-21」更能唤起那天是什么样。
 // 认不出的日期（不该出现，除非文件被外部改过）就只写日期本身。
-func renderEntry(e timelineEntry) string {
+func renderEntry(lang string, e timelineEntry) string {
 	var b strings.Builder
 	b.WriteString(e.Date)
 	if t, err := time.ParseInLocation("2006-01-02", e.Date, time.Local); err == nil {
 		b.WriteString(" ")
-		b.WriteString(weekdayCN(t))
+		b.WriteString(weekdayName(lang, t))
 	}
+	sep := prompt.T(lang, "prompt.memory.timeline.sep", "，")
 	for _, f := range e.Facts {
-		b.WriteString("，")
+		b.WriteString(sep)
 		b.WriteString(f)
 	}
-	b.WriteString("，")
+	b.WriteString(sep)
 	b.WriteString(e.Summary)
 	return b.String()
 }
 
-var weekdayNames = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+// weekdaysZH 是七个星期名，一行一个，从周日排起。整表一个键：七个键在别的语言里
+// 只会被译得七零八落，而它们本来就该一起换。
+const weekdaysZH = "周日\n周一\n周二\n周三\n周四\n周五\n周六"
 
-func weekdayCN(t time.Time) string { return weekdayNames[int(t.Weekday())] }
+func weekdayName(lang string, t time.Time) string {
+	names := strings.Split(prompt.T(lang, "prompt.memory.weekdays", weekdaysZH), "\n")
+	if len(names) != 7 {
+		names = strings.Split(weekdaysZH, "\n") // 译文行数不对就退回中文，别越界
+	}
+	return names[int(t.Weekday())]
+}
 
 // factsFor 问一遍各插件那一天有什么可说的。入口不可用（评测装配、插件单测）时
 // 返回 nil，日记照写，只是没有抬头那几句。

@@ -12,7 +12,7 @@ import (
 var base = time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 
 func TestApplyAccumulates(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, _, err := s.Apply(20, 30, 0, "被夸了", base); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestApplyAccumulates(t *testing.T) {
 }
 
 func TestApplyClampsDeltaAndRange(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	// 单次幅度上限
 	st, applied, err := s.Apply(500, 30, 0, "很离谱", base)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestApplyClampsDeltaAndRange(t *testing.T) {
 }
 
 func TestApplyRejectsZeroDelta(t *testing.T) {
-	if _, _, err := NewStore(t.TempDir()).Apply(0, 30, 0, "什么也没发生", base); err == nil {
+	if _, _, err := NewStore("", t.TempDir()).Apply(0, 30, 0, "什么也没发生", base); err == nil {
 		t.Fatal("变化量为 0 应当报错")
 	}
 }
@@ -100,7 +100,7 @@ func TestDecaySkipsZeroTimestamp(t *testing.T) {
 
 // 折算必须在叠加之前：不然隔了一天再调整，会从一天前那个没回落的值上继续加。
 func TestApplyDecaysBeforeAdding(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, _, err := s.Apply(60, 100, 5, "很开心", base); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestApplyDecaysBeforeAdding(t *testing.T) {
 // 读取路径不回写：读一次写一次盘没有必要，也会让并发的读覆盖彼此的时间戳。
 func TestCurrentDoesNotPersistDecay(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	if _, _, err := s.Apply(60, 100, 5, "很开心", base); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestCurrentDoesNotPersistDecay(t *testing.T) {
 }
 
 func TestCurrentReportsNoRecord(t *testing.T) {
-	if _, ok, err := NewStore(t.TempDir()).Current(5, base); err != nil || ok {
+	if _, ok, err := NewStore("", t.TempDir()).Current(5, base); err != nil || ok {
 		t.Fatalf("空库应当报告没有记录，得到 ok=%v err=%v", ok, err)
 	}
 }
@@ -144,14 +144,14 @@ func TestLoadRejectsBrokenFileAndClampsRange(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{不是 JSON"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := NewStore(dir).Current(0, base); err == nil {
+	if _, _, err := NewStore("", dir).Current(0, base); err == nil {
 		t.Fatal("损坏的文件应当报错")
 	}
 	// 手改过头的值要收回量程内，而不是原样用出去
 	if err := os.WriteFile(path, []byte(`{"value": 9999}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, _, err := NewStore(dir).Current(0, base)
+	st, _, err := NewStore("", dir).Current(0, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,12 +172,12 @@ func TestClipReason(t *testing.T) {
 
 func TestClearAndPersistence(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	if _, _, err := s.Apply(40, 100, 0, "开心", base); err != nil {
 		t.Fatal(err)
 	}
 	// 换一个 Store 指向同一目录，读到的应当是落盘的内容
-	if st, ok, err := NewStore(dir).Current(0, base); err != nil || !ok || st.Value != 40 {
+	if st, ok, err := NewStore("", dir).Current(0, base); err != nil || !ok || st.Value != 40 {
 		t.Fatalf("落盘读取 = %+v ok=%v err=%v", st, ok, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "mood.json.tmp")); !os.IsNotExist(err) {
@@ -195,7 +195,7 @@ func TestClearAndPersistence(t *testing.T) {
 }
 
 func TestConcurrentApply(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Add(1)

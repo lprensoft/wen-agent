@@ -1,6 +1,16 @@
 package agent
 
-// historyRules 是关于「怎么读历史」的约定，与环境块、工具约定同层注入 system 开头。
+import "wen/internal/prompt"
+
+// historyRulesFor 按语言取一份历史约定。
+//
+// 它逐字引述 dayMark 与 gapNote 的措辞，两处必须同语言对得上，否则说明会指向一段
+// 模型在上下文里根本找不到的东西——TestHistoryRulesQuoteRealMarkers 逐语言盯着这点。
+func historyRulesFor(lang string) string {
+	return prompt.T(lang, "prompt.core.history_rules", historyRulesZH)
+}
+
+// historyRulesZH 是关于「怎么读历史」的约定，与环境块、工具约定同层注入 system 开头。
 //
 // 它针对的是一类具体的错位：角色在某天晚上说「明天给你带菜」，那句话此后一直留在
 // 上下文里，措辞永远是「明天」。第二天它被读到时，既没有东西说这件事已经兑现，也没有
@@ -13,7 +23,7 @@ package agent
 // 放在 system 而不是每轮状态块里：这段整轮之间逐字节不变，是提示词缓存前缀的一部分
 // （见「上下文分层约定」）。措辞不提任何插件的块名——核心不知道有日程、约定这些东西，
 // 只能指向 <本轮状态> 这个它自己拥有的位置。
-const historyRules = `[历史与时间]
+const historyRulesZH = `[历史与时间]
 历史里带括号的标注由程序插入，不是谁说的话，但内容可信：日界线「（以下是 …… 的对话）」
 说明底下那些话是哪一天说的，间隔「（此处距上一条消息约……）」说明中间隔了多久。
 - 对话正文里的「今天」「明天」「昨天」「下周」，按说这句话的那条消息所在的日界线理解，

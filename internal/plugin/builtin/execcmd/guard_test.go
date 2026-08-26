@@ -9,7 +9,7 @@ func check(t *testing.T, guard string, want verdict, commands ...string) {
 	t.Helper()
 	names := map[verdict]string{verdictAllow: "放行", verdictConfirm: "需确认", verdictDeny: "拒绝"}
 	for _, c := range commands {
-		got, reason := classify(c, guard)
+		got, reason := classify(c, guard, "")
 		if got != want {
 			t.Errorf("classify(%q, %q) = %s（%s）, want %s", c, guard, names[got], reason, names[want])
 		}
@@ -155,7 +155,7 @@ func TestEmptyCommand(t *testing.T) {
 func TestReasonIsExplained(t *testing.T) {
 	// 原因会同时出现在确认卡片与回给模型的错误里，不能为空
 	for _, c := range []string{"rm -rf build", "git reset --hard", "format c:"} {
-		if _, reason := classify(c, guardDangerous); reason == "" {
+		if _, reason := classify(c, guardDangerous, ""); reason == "" {
 			t.Errorf("classify(%q) 没有给出原因", c)
 		}
 	}
@@ -163,12 +163,12 @@ func TestReasonIsExplained(t *testing.T) {
 
 func TestAllReasonsReported(t *testing.T) {
 	// 一条串联命令可能既删文件又改写提交历史；只说一样会让人以为自己已经看清了要同意什么
-	_, reason := classify("git reset --hard HEAD~3 && rm -rf build", guardDangerous)
+	_, reason := classify("git reset --hard HEAD~3 && rm -rf build", guardDangerous, "")
 	if !strings.Contains(reason, "删除") || !strings.Contains(reason, "提交历史") {
 		t.Errorf("应列出全部命中的类别，得到 %q", reason)
 	}
 	// 同一类别不重复
-	_, reason = classify("rm a && rm b && del c", guardDangerous)
+	_, reason = classify("rm a && rm b && del c", guardDangerous, "")
 	if strings.Count(reason, "删除文件或目录") != 1 {
 		t.Errorf("同类原因应去重，得到 %q", reason)
 	}

@@ -10,7 +10,7 @@ import (
 
 func newAuthStoreWithPassword(t *testing.T, pwd string) *AuthStore {
 	t.Helper()
-	s, err := NewAuthStore(t.TempDir())
+	s, err := NewAuthStore("", t.TempDir())
 	if err != nil {
 		t.Fatalf("NewAuthStore: %v", err)
 	}
@@ -24,7 +24,7 @@ func newAuthStoreWithPassword(t *testing.T, pwd string) *AuthStore {
 
 func TestAuthStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewAuthStore(dir)
+	s, err := NewAuthStore("", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestAuthStoreRoundTrip(t *testing.T) {
 	}
 
 	// 重新加载，确认落盘的哈希能校验
-	again, err := NewAuthStore(dir)
+	again, err := NewAuthStore("", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestAuthStoreVerifyWithoutPassword(t *testing.T) {
 
 func TestAuthStoreEnvOverride(t *testing.T) {
 	t.Setenv(envPasswordKey, "from-env-password")
-	s, err := NewAuthStore(t.TempDir())
+	s, err := NewAuthStore("", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

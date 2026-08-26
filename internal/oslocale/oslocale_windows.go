@@ -1,14 +1,14 @@
 //go:build windows
 
-package agent
+package oslocale
 
 import (
 	"syscall"
 	"unsafe"
 )
 
-// systemLocale 通过 Win32 API 获取用户区域名（如 zh-CN）。
-func systemLocale() string {
+// Current 通过 Win32 API 获取用户区域名（如 zh-CN）。
+func Current() string {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	proc := kernel32.NewProc("GetUserDefaultLocaleName")
 	buf := make([]uint16, 85) // LOCALE_NAME_MAX_LENGTH

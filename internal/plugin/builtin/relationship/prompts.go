@@ -1,8 +1,16 @@
 package relationship
 
-// guidePrompt 是维护判据。「每轮照它来，不要忽远忽近」这一条是本插件存在的理由：
+import "wen/internal/prompt"
+
+// 两段文本各按语言取一次。
+func guideFor(lang string) string { return prompt.T(lang, "prompt.relationship.guide", guidePromptZH) }
+func stateHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.relationship.state_header", stateHeaderZH)
+}
+
+// guidePromptZH 是维护判据。「每轮照它来，不要忽远忽近」这一条是本插件存在的理由：
 // 对对方的态度不再每轮从接触记录与记忆里重新推一遍，有一份落盘的底色，压缩与换会话都接得上。
-const guidePrompt = `[关系状态]
+const guidePromptZH = `[关系状态]
 你与对方之间的关系有一份底色：处在什么阶段、彼此怎么称呼、最近一次关系上的变动、
 相处出来的默契与不碰的禁区、对方的近况。本轮状态里的[关系]块就是这份底色，每轮的
 态度与分寸照它来，不要忽远忽近——上一轮还腻着，这一轮就客气生分，不是同一个人。
@@ -16,5 +24,5 @@ const guidePrompt = `[关系状态]
   （在忙什么、在经历什么），用来拿捏分寸；对方是谁、喜欢什么、经历过什么这类事实
   以 [对方信息] 与记忆为准，不写在这里。`
 
-// stateHeader 领起本轮注入的关系快照。
-const stateHeader = "[关系]"
+// stateHeaderZH 领起本轮注入的关系快照。
+const stateHeaderZH = "[关系]"

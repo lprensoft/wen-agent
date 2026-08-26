@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang           string
 	stage          string // 用户配置的场景与环境设定（已按上限截断）
 	base           string // 基准场景库目录（= 共享域）
 	maxScenes      int
@@ -89,7 +91,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.stage = clip(strings.TrimSpace(plugin.CfgString(cfg, "stage", "")), maxStageBytes)
+	p.lang = ictx.Lang
+	p.stage = clip(ictx.Lang, strings.TrimSpace(plugin.CfgString(cfg, "stage", "")), maxStageBytes)
 	p.base = filepath.Join(ictx.StateDir, "scenes")
 	p.maxScenes = plugin.CfgInt(cfg, "max_scenes", defaultMaxScenes)
 	p.maxInjectBytes = plugin.CfgInt(cfg, "max_inject_bytes", defaultMaxInjectBytes)
@@ -106,6 +109,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang           string
 	stage          string
 	base           string
 	maxScenes      int
@@ -117,6 +121,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:           p.lang,
 		stage:          p.stage,
 		base:           p.base,
 		maxScenes:      p.maxScenes,
@@ -124,11 +129,11 @@ func (p *Plugin) snapshot() settings {
 	}
 }
 
-const stageHeader = `[场景与环境]
+const stageHeaderZH = `[场景与环境]
 以下是对话发生的场景与环境设定，作为演绎的舞台背景。位置、环境与氛围的描写以此为
 基准，不与之矛盾；设定之外的细节可以合理补充，但一旦写出就保持前后一致。`
 
-const guidePrompt = `[场景感知]
+const guidePromptZH = `[场景感知]
 对话中凡是出现场景或地理位置的描述——所处的城市、街区、建筑、房间、店铺，或反复
 出现的活动场所——都用 save_scene 记录下来，使场景在之后的对话中得以延续。
 - 记录前先查看 [场景记忆] 中是否已有相同或同一地点的条目：已有且信息一致就不再
@@ -137,7 +142,7 @@ const guidePrompt = `[场景感知]
   动作与对话内容。
 - 场景已不复存在或彻底改变时，用 replace 更新或用 delete_scene 移除。`
 
-const scenesHeader = `[场景记忆]
+const scenesHeaderZH = `[场景记忆]
 以下是此前记录下来的场景与地点。演绎到相关位置时保持与这些描述一致，已有的条目
 不重复记录：`
 
@@ -146,10 +151,11 @@ const scenesHeader = `[场景记忆]
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
 func (p *Plugin) SystemPrompt() string {
 	s := p.snapshot()
+	guide := prompt.T(s.lang, "prompt.scene.guide", guidePromptZH)
 	if s.stage == "" {
-		return guidePrompt
+		return guide
 	}
-	return stageHeader + "\n\n" + s.stage + "\n\n" + guidePrompt
+	return prompt.T(s.lang, "prompt.scene.stage_header", stageHeaderZH) + "\n\n" + s.stage + "\n\n" + guide
 }
 
 // TurnPrompt 注入本轮可读的场景记忆。库为空时不注入：记录判据已在 SystemPrompt 里。
@@ -162,7 +168,8 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || len(scenes) == 0 {
 		return "", err
 	}
-	return scenesHeader + "\n" + renderScenes(scenes, s.maxScenes, s.maxInjectBytes), nil
+	return prompt.T(s.lang, "prompt.scene.scenes_header", scenesHeaderZH) + "\n" +
+		renderScenes(s.lang, scenes, s.maxScenes, s.maxInjectBytes), nil
 }
 
 // ---------- 按可见域分库 ----------
@@ -185,7 +192,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(dir)
+	s := NewStore(p.snapshot().lang, dir)
 	p.stores[tag] = s
 	return s
 }
@@ -229,7 +236,8 @@ func (p *Plugin) visibleScenes(ctx context.Context) ([]Scene, error) {
 		}
 	}
 	if out == nil && len(errs) > 0 {
-		return nil, fmt.Errorf("读取场景记忆失败: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf(prompt.T(p.snapshot().lang, "prompt.scene.result.read_failed",
+			"读取场景记忆失败: %s"), strings.Join(errs, "; "))
 	}
 	return out, nil
 }
@@ -243,7 +251,8 @@ func (p *Plugin) findVisible(ctx context.Context, name string) (Scene, *Store, e
 	if i := indexOf(scenes, name); i >= 0 {
 		return scenes[i], p.storeFor(scenes[i].Domain), nil
 	}
-	return Scene{}, nil, fmt.Errorf("没有名为 %q 的场景", strings.TrimSpace(name))
+	return Scene{}, nil, fmt.Errorf(prompt.T(p.snapshot().lang, "prompt.scene.result.not_found",
+		"没有名为 %q 的场景"), strings.TrimSpace(name))
 }
 
 // ---------- 注入渲染 ----------
@@ -251,23 +260,24 @@ func (p *Plugin) findVisible(ctx context.Context, name string) (Scene, *Store, e
 // renderScenes 按预算渲染场景清单，分三级降级：
 // 全列（名称 + 描述）→ 省略描述只留名称 → 只注明条数。
 // 降级优先砍描述而不是砍条目：名称在，模型才知道这处场景存在，不会重复记录。
-func renderScenes(scenes []Scene, maxScenes, maxBytes int) string {
+func renderScenes(lang string, scenes []Scene, maxScenes, maxBytes int) string {
 	kept, dropped := limitScenes(scenes, maxScenes)
 
-	if out, ok := renderLines(kept, dropped, maxBytes, true); ok {
+	if out, ok := renderLines(lang, kept, dropped, maxBytes, true); ok {
 		return out
 	}
-	if out, ok := renderLines(kept, dropped, maxBytes, false); ok {
+	if out, ok := renderLines(lang, kept, dropped, maxBytes, false); ok {
 		return out
 	}
 	// 仍然超预算：按最近更新丢弃更多条目，直到装得下
 	for n := len(kept) - 1; n > 0; n-- {
 		trimmed, more := limitScenes(scenes, n)
-		if out, ok := renderLines(trimmed, more, maxBytes, false); ok {
+		if out, ok := renderLines(lang, trimmed, more, maxBytes, false); ok {
 			return out
 		}
 	}
-	return fmt.Sprintf("（共 %d 处场景，注入预算不足以列出，可用 list_scenes 查看）", len(scenes))
+	return prompt.Tf(lang, "prompt.scene.too_many",
+		"（共 %d 处场景，注入预算不足以列出，可用 list_scenes 查看）", len(scenes))
 }
 
 // limitScenes 在超出条数上限时按最近更新保留，返回保留的条目（仍是原顺序）与被略去的条数。
@@ -294,7 +304,7 @@ func limitScenes(scenes []Scene, max int) ([]Scene, int) {
 	return out, len(scenes) - len(out)
 }
 
-func renderLines(scenes []Scene, dropped, maxBytes int, withDetail bool) (string, bool) {
+func renderLines(lang string, scenes []Scene, dropped, maxBytes int, withDetail bool) (string, bool) {
 	var b strings.Builder
 	for _, sc := range scenes {
 		b.WriteString("- ")
@@ -306,7 +316,8 @@ func renderLines(scenes []Scene, dropped, maxBytes int, withDetail bool) (string
 		b.WriteString("\n")
 	}
 	if dropped > 0 {
-		fmt.Fprintf(&b, "（另有 %d 处未列出，可用 list_scenes 查看）\n", dropped)
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.scene.more_hidden",
+			"（另有 %d 处未列出，可用 list_scenes 查看）\n"), dropped)
 	}
 	out := strings.TrimRight(b.String(), "\n")
 	if maxBytes > 0 && len(out) > maxBytes {
@@ -316,11 +327,11 @@ func renderLines(scenes []Scene, dropped, maxBytes int, withDetail bool) (string
 }
 
 // clip 按字节上限截断，不切断 UTF-8 字符。超出时截断并注明，而不是整段丢弃。
-func clip(s string, limit int) string {
+func clip(lang, s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	const note = "…（设定过长已截断）"
+	note := prompt.T(lang, "prompt.scene.clipped", "…（设定过长已截断）")
 	cut := limit - len(note)
 	if cut <= 0 {
 		return ""

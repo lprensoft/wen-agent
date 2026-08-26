@@ -156,17 +156,17 @@ func TestPickRecallsRespectsMax(t *testing.T) {
 
 func TestRenderRecallsTruncatesBody(t *testing.T) {
 	e := entryAt("小白那只猫", "家里的猫", strings.Repeat("猫", 500), time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC))
-	block, n := renderRecalls([]recallHit{{entry: e}}, 100, 0)
+	block, n := renderRecalls("", []recallHit{{entry: e}}, 100, 0)
 	if n != 1 {
 		t.Fatalf("应放进 1 条，实际 %d", n)
 	}
-	if !strings.HasPrefix(block, recallHeader) {
-		t.Errorf("块应以 %q 开头", recallHeader)
+	if !strings.HasPrefix(block, recallHeaderZH) {
+		t.Errorf("块应以 %q 开头", recallHeaderZH)
 	}
 	if !strings.Contains(block, "「事实/小白那只猫」（更新于 2026-05-10）") {
 		t.Errorf("应注明来源标题与更新日期:\n%s", block)
 	}
-	if !strings.Contains(block, recallEllipsis) {
+	if !strings.Contains(block, recallEllipsisZH) {
 		t.Error("超长正文应被截断并注明后文略")
 	}
 	if strings.Count(block, "猫") > 100+2 { // 标题里还有一个「猫」
@@ -180,7 +180,7 @@ func TestRenderRecallsHonorsByteBudget(t *testing.T) {
 		{entry: entryAt("第一条", "摘要", strings.Repeat("内容", 200), now)},
 		{entry: entryAt("第二条", "摘要", strings.Repeat("内容", 200), now)},
 	}
-	block, n := renderRecalls(hits, 0, 700)
+	block, n := renderRecalls("", hits, 0, 700)
 	if n != 1 {
 		t.Errorf("700 字节只装得下一条，实际放进 %d 条", n)
 	}
@@ -191,7 +191,7 @@ func TestRenderRecallsHonorsByteBudget(t *testing.T) {
 		t.Error("预算不够时应保留排序靠前的那条")
 	}
 	// 连一条都装不下时整块不出现，而不是只剩一个标题
-	if block, n := renderRecalls(hits, 0, 60); n != 0 || block != "" {
+	if block, n := renderRecalls("", hits, 0, 60); n != 0 || block != "" {
 		t.Errorf("一条都装不下时块应为空，实际 n=%d block=%q", n, block)
 	}
 }
@@ -229,7 +229,7 @@ func TestTurnPromptRecallsBeforeIndex(t *testing.T) {
 	saveCat(t, p, plugin.Scope{})
 
 	got := turnPrompt(t, p, context.Background(), catQuestion)
-	ri, ii := strings.Index(got, recallHeader), strings.Index(got, "[已保存的记忆]")
+	ri, ii := strings.Index(got, recallHeaderZH), strings.Index(got, "[已保存的记忆]")
 	if ri < 0 {
 		t.Fatalf("应注入 [想起来的事]:\n%s", got)
 	}
@@ -239,7 +239,7 @@ func TestTurnPromptRecallsBeforeIndex(t *testing.T) {
 	if !strings.Contains(got, "三年前从朋友家抱回来") {
 		t.Error("召回块应带正文")
 	}
-	if !strings.Contains(got, recallEllipsis) {
+	if !strings.Contains(got, recallEllipsisZH) {
 		t.Error("正文应按配置的字数截断")
 	}
 	// 索引里照样列着：索引是目录，召回是内容
@@ -253,7 +253,7 @@ func TestTurnPromptNoRecallForUnrelatedInput(t *testing.T) {
 	saveCat(t, p, plugin.Scope{})
 
 	got := turnPrompt(t, p, context.Background(), "明天的会议材料我已经发到邮箱里了，记得看一眼")
-	if strings.Contains(got, recallHeader) {
+	if strings.Contains(got, recallHeaderZH) {
 		t.Errorf("无关的话不该召回:\n%s", got)
 	}
 	if !strings.Contains(got, "[已保存的记忆]") {
@@ -264,7 +264,7 @@ func TestTurnPromptNoRecallForUnrelatedInput(t *testing.T) {
 func TestTurnPromptRecallCanBeDisabled(t *testing.T) {
 	p := newTestPlugin(t, map[string]any{"turn_extract": false, "recall_max": 0})
 	saveCat(t, p, plugin.Scope{})
-	if got := turnPrompt(t, p, context.Background(), catQuestion); strings.Contains(got, recallHeader) {
+	if got := turnPrompt(t, p, context.Background(), catQuestion); strings.Contains(got, recallHeaderZH) {
 		t.Error("recall_max 为 0 时不该召回")
 	}
 }
@@ -273,7 +273,7 @@ func TestTurnPromptSkipsRecallForEphemeralInput(t *testing.T) {
 	p := newTestPlugin(t, map[string]any{"turn_extract": false})
 	saveCat(t, p, plugin.Scope{})
 	ctx := plugin.WithEphemeralInput(context.Background())
-	if got := turnPrompt(t, p, ctx, catQuestion); strings.Contains(got, recallHeader) {
+	if got := turnPrompt(t, p, ctx, catQuestion); strings.Contains(got, recallHeaderZH) {
 		t.Error("机器注入的一次性输入不该触发召回")
 	}
 }
@@ -319,14 +319,14 @@ func TestTurnPromptRecallRespectsScope(t *testing.T) {
 	if got := turnPrompt(t, p, scoped(outerScope), catQuestion); strings.Contains(got, "小白") {
 		t.Errorf("outer 域不该看到 inner 域的记忆:\n%s", got)
 	}
-	if got := turnPrompt(t, p, scoped(innerScope), catQuestion); !strings.Contains(got, recallHeader) {
+	if got := turnPrompt(t, p, scoped(innerScope), catQuestion); !strings.Contains(got, recallHeaderZH) {
 		t.Errorf("inner 域应能召回自己的记忆:\n%s", got)
 	}
 }
 
 func TestGuideExplainsRecallBlock(t *testing.T) {
 	got := newTestPlugin(t, nil).SystemPrompt()
-	if !strings.Contains(got, recallHeader) || !strings.Contains(got, "不必再 recall_memory") {
+	if !strings.Contains(got, recallHeaderZH) || !strings.Contains(got, "不必再 recall_memory") {
 		t.Errorf("判据应说明 [想起来的事] 的用法:\n%s", got)
 	}
 }

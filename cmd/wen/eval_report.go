@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"wen/internal/stylecheck"
+
+	"wen/internal/prompt"
 )
 
 // 评测结果与报告渲染。这一半不碰模型与磁盘，测试据此覆盖。
@@ -91,7 +93,7 @@ func (r evalResult) sayRows() []evalRow {
 
 // judgePrompt 要求模型只看回复、按三项打分。不提任何与模型身份有关的词；
 // 「角色」「对方」是这段对话自己的词汇。
-const judgePromptHead = `下面是一段角色扮演对话里角色一方在每一轮说的话，附对方那一轮说了什么作为上下文。
+const judgePromptHeadZH = `下面是一段角色扮演对话里角色一方在每一轮说的话，附对方那一轮说了什么作为上下文。
 请只根据这些回复，从三个方面各打 1 到 5 分（5 分最好），并各写一句话理由：
 - same_person：像不像同一个人——用词、口癖、句子的长短与留白、分寸感是否从头到尾是同一个声音。
 - tone：语气是否一致——尤其是标着「此处做过一次压缩」的分界前后，有没有变得更客气、
@@ -101,40 +103,41 @@ const judgePromptHead = `下面是一段角色扮演对话里角色一方在每�
 
 打分只看回复本身的前后一致，不评价内容好不好、对不对。`
 
-const judgePromptTail = `只输出下面形状的 JSON，不要输出任何其它文字：
+const judgePromptTailZH = `只输出下面形状的 JSON，不要输出任何其它文字：
 {"same_person":{"score":1,"reason":"一句话"},"tone":{"score":1,"reason":"一句话"},"relation":{"score":1,"reason":"一句话"}}`
 
 // buildJudgePrompt 拼评判提示词。角色设定与样例是评判的参照；回复按轮编号，
 // 压缩与间隔以分界线的形式穿插其中。
 func buildJudgePrompt(persona, samples string, rows []evalRow, points []string) string {
+	lang := uiLang
 	var b strings.Builder
-	b.WriteString(judgePromptHead)
-	b.WriteString("\n\n[角色设定]\n")
-	b.WriteString(orNone(persona))
-	b.WriteString("\n\n[台词样例]\n")
-	b.WriteString(orNone(samples))
+	b.WriteString(prompt.T(lang, "prompt.eval.judge_head", judgePromptHeadZH))
+	b.WriteString(prompt.T(lang, "prompt.eval.persona_head", "\n\n[角色设定]\n"))
+	b.WriteString(orNone(lang, persona))
+	b.WriteString(prompt.T(lang, "prompt.eval.samples_head", "\n\n[台词样例]\n"))
+	b.WriteString(orNone(lang, samples))
 	if len(points) > 0 {
-		b.WriteString("\n\n[额外关注点]\n")
+		b.WriteString(prompt.T(lang, "prompt.eval.points_head", "\n\n[额外关注点]\n"))
 		for _, p := range points {
 			b.WriteString("- " + strings.TrimSpace(p) + "\n")
 		}
 	}
-	b.WriteString("\n\n[回复]\n")
-	b.WriteString(renderRowsForJudge(rows, judgeMaxBytes))
+	b.WriteString(prompt.T(lang, "prompt.eval.replies_head", "\n\n[回复]\n"))
+	b.WriteString(renderRowsForJudge(lang, rows, judgeMaxBytes))
 	b.WriteString("\n\n")
-	b.WriteString(judgePromptTail)
+	b.WriteString(prompt.T(lang, "prompt.eval.judge_tail", judgePromptTailZH))
 	return b.String()
 }
 
-func orNone(s string) string {
+func orNone(lang, s string) string {
 	if strings.TrimSpace(s) == "" {
-		return "（未提供）"
+		return prompt.T(lang, "prompt.eval.none", "（未提供）")
 	}
 	return strings.TrimSpace(s)
 }
 
 // renderRowsForJudge 把记录渲染成评判用的文本，超出预算时从最早的轮次开始丢。
-func renderRowsForJudge(rows []evalRow, maxBytes int) string {
+func renderRowsForJudge(lang string, rows []evalRow, maxBytes int) string {
 	parts := make([]string, 0, len(rows))
 	for _, row := range rows {
 		switch row.Kind {
@@ -142,11 +145,13 @@ func renderRowsForJudge(rows []evalRow, maxBytes int) string {
 			if row.Err != "" {
 				continue
 			}
-			parts = append(parts, fmt.Sprintf("第 %d 轮（对方：%s）\n角色：%s", row.Index, row.Say, row.Reply))
+			parts = append(parts, prompt.Tf(lang, "prompt.eval.turn", "第 %d 轮（对方：%s）\n角色：%s",
+				row.Index, row.Say, row.Reply))
 		case rowCompact, rowAutoCompact:
-			parts = append(parts, "—— 此处做过一次压缩 ——")
+			parts = append(parts, prompt.T(lang, "prompt.eval.compacted", "—— 此处做过一次压缩 ——"))
 		case rowGap:
-			parts = append(parts, fmt.Sprintf("—— 此处隔了 %s ——", humanHours(row.GapHours)))
+			parts = append(parts, prompt.Tf(lang, "prompt.eval.gap", "—— 此处隔了 %s ——",
+				humanHours(lang, row.GapHours)))
 		}
 	}
 	total := 0
@@ -161,16 +166,16 @@ func renderRowsForJudge(rows []evalRow, maxBytes int) string {
 	}
 	out := strings.Join(parts, "\n\n")
 	if dropped > 0 {
-		out = fmt.Sprintf("（更早的 %d 条记录因篇幅省略）\n\n", dropped) + out
+		out = prompt.Tf(lang, "prompt.eval.dropped", "（更早的 %d 条记录因篇幅省略）\n\n", dropped) + out
 	}
 	return out
 }
 
-func humanHours(h float64) string {
+func humanHours(lang string, h float64) string {
 	if h == float64(int(h)) {
-		return fmt.Sprintf("%d 小时", int(h))
+		return prompt.Tf(lang, "prompt.eval.hours", "%d 小时", int(h))
 	}
-	return fmt.Sprintf("%.1f 小时", h)
+	return prompt.Tf(lang, "prompt.eval.hours_frac", "%.1f 小时", h)
 }
 
 // parseJudge 解析评判输出。模型常把 JSON 包在围栏里或前后带说明文字，
@@ -198,11 +203,11 @@ func parseJudge(raw string) (evalJudge, error) {
 	}
 	var j evalJudge
 	if err := json.Unmarshal([]byte(s), &j); err != nil {
-		return j, fmt.Errorf("评判输出不是预期的 JSON: %w", err)
+		return j, fmt.Errorf(tr("cli.eval.err.judge_json", "评判输出不是预期的 JSON: %w"), err)
 	}
 	for name, sc := range map[string]evalScore{"same_person": j.SamePerson, "tone": j.Tone, "relation": j.Relation} {
 		if sc.Score < 1 || sc.Score > 5 {
-			return j, fmt.Errorf("评判项 %s 的分数 %d 不在 1-5 之间", name, sc.Score)
+			return j, fmt.Errorf(tr("cli.eval.err.judge_score", "评判项 %s 的分数 %d 不在 1-5 之间"), name, sc.Score)
 		}
 	}
 	return j, nil
@@ -213,9 +218,9 @@ func parseJudge(raw string) (evalJudge, error) {
 // renderEvalReport 把结果渲染成 Markdown。
 func renderEvalReport(r evalResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# 回放评测：%s\n\n", r.Name)
+	b.WriteString(trf("cli.eval.title", "# 回放评测：%s\n\n", r.Name))
 	if r.SetupErr != "" {
-		fmt.Fprintf(&b, "> 评测未能开始：%s\n", r.SetupErr)
+		b.WriteString(trf("cli.eval.setup_failed", "> 评测未能开始：%s\n", r.SetupErr))
 		return b.String()
 	}
 
@@ -232,51 +237,52 @@ func renderEvalReport(r evalResult) string {
 		bracket += row.Metrics.BracketRatio
 	}
 
-	fmt.Fprintf(&b, "- 模型：%s\n", r.Model)
-	fmt.Fprintf(&b, "- 轮数：%d", len(says))
+	b.WriteString(trf("cli.eval.model", "- 模型：%s\n", r.Model))
+	b.WriteString(trf("cli.eval.turns", "- 轮数：%d", len(says)))
 	if r.Compactions > 0 || r.AutoCompactions > 0 {
-		fmt.Fprintf(&b, "，压缩 %d 次（脚本要求 %d、自动触发 %d）", r.Compactions+r.AutoCompactions, r.Compactions, r.AutoCompactions)
+		b.WriteString(trf("cli.eval.compactions", "，压缩 %d 次（脚本要求 %d、自动触发 %d）",
+			r.Compactions+r.AutoCompactions, r.Compactions, r.AutoCompactions))
 	} else {
-		b.WriteString("，未压缩")
+		b.WriteString(tr("cli.eval.no_compaction", "，未压缩"))
 	}
 	b.WriteString("\n")
 	if !r.HasRoleplay {
-		b.WriteString("- 角色：roleplay 插件未启用，评判没有角色设定可参照\n")
+		b.WriteString(tr("cli.eval.no_roleplay", "- 角色：roleplay 插件未启用，评判没有角色设定可参照\n"))
 	}
-	fmt.Fprintf(&b, "- 助手腔总命中：%d 处", hitCount)
+	b.WriteString(trf("cli.eval.hits", "- 助手腔总命中：%d 处", hitCount))
 	if bd := hitBreakdown(totalHits); bd != "" {
-		fmt.Fprintf(&b, "（%s）", bd)
+		b.WriteString(trf("cli.eval.hits_detail", "（%s）", bd))
 	}
 	b.WriteString("\n")
 	if n := len(says); n > 0 {
-		fmt.Fprintf(&b, "- 平均字数：%d，演绎占比均值：%d%%\n", runes/n, int(bracket/float64(n)*100+0.5))
+		b.WriteString(trf("cli.eval.avg", "- 平均字数：%d，演绎占比均值：%d%%\n", runes/n, int(bracket/float64(n)*100+0.5)))
 	}
 	if r.Duration > 0 {
-		fmt.Fprintf(&b, "- 用时：%s\n", r.Duration.Round(time.Second))
+		b.WriteString(trf("cli.eval.duration", "- 用时：%s\n", r.Duration.Round(time.Second)))
 	}
 	if r.failed() {
-		b.WriteString("- **有轮次失败**，其后的步骤未执行\n")
+		b.WriteString(tr("cli.eval.had_failure", "- **有轮次失败**，其后的步骤未执行\n"))
 	}
 
-	b.WriteString("\n## 评分\n\n")
+	b.WriteString(tr("cli.eval.scores_head", "\n## 评分\n\n"))
 	if r.Judge.Err != "" {
-		fmt.Fprintf(&b, "> 评判未完成：%s\n", r.Judge.Err)
+		b.WriteString(trf("cli.eval.judge_failed", "> 评判未完成：%s\n", r.Judge.Err))
 		if r.Judge.Raw != "" {
-			fmt.Fprintf(&b, ">\n> 模型原话：%s\n", mdCell(clipLine(r.Judge.Raw, 300)))
+			b.WriteString(trf("cli.eval.judge_raw", ">\n> 模型原话：%s\n", mdCell(clipLine(r.Judge.Raw, 300))))
 		}
 	} else {
-		b.WriteString("| 项 | 分 | 理由 |\n|---|---|---|\n")
-		fmt.Fprintf(&b, "| 像不像同一个人 | %d/5 | %s |\n", r.Judge.SamePerson.Score, mdCell(r.Judge.SamePerson.Reason))
-		fmt.Fprintf(&b, "| 语气是否一致 | %d/5 | %s |\n", r.Judge.Tone.Score, mdCell(r.Judge.Tone.Reason))
-		fmt.Fprintf(&b, "| 关系与称呼是否连续 | %d/5 | %s |\n", r.Judge.Relation.Score, mdCell(r.Judge.Relation.Reason))
+		b.WriteString(tr("cli.eval.table_head", "| 项 | 分 | 理由 |\n|---|---|---|\n"))
+		b.WriteString(trf("cli.eval.row.same_person", "| 像不像同一个人 | %d/5 | %s |\n", r.Judge.SamePerson.Score, mdCell(r.Judge.SamePerson.Reason)))
+		b.WriteString(trf("cli.eval.row.tone", "| 语气是否一致 | %d/5 | %s |\n", r.Judge.Tone.Score, mdCell(r.Judge.Tone.Reason)))
+		b.WriteString(trf("cli.eval.row.relation", "| 关系与称呼是否连续 | %d/5 | %s |\n", r.Judge.Relation.Score, mdCell(r.Judge.Relation.Reason)))
 	}
 
-	b.WriteString("\n## 逐轮\n\n| 轮 | 用户 | 字数 | 句数 | 演绎 | 命中 |\n|---|---|---|---|---|---|\n")
+	b.WriteString(tr("cli.eval.rows_head", "\n## 逐轮\n\n| 轮 | 用户 | 字数 | 句数 | 演绎 | 命中 |\n|---|---|---|---|---|---|\n"))
 	for _, row := range r.Rows {
 		switch row.Kind {
 		case rowSay:
 			if row.Err != "" {
-				fmt.Fprintf(&b, "| %d | %s | | | | **失败**：%s |\n", row.Index, mdCell(row.Say), mdCell(row.Err))
+				b.WriteString(trf("cli.eval.row.failed", "| %d | %s | | | | **失败**：%s |\n", row.Index, mdCell(row.Say), mdCell(row.Err)))
 				continue
 			}
 			fmt.Fprintf(&b, "| %d | %s | %d | %d | %d%% | %s |\n",
@@ -284,33 +290,33 @@ func renderEvalReport(r evalResult) string {
 				int(row.Metrics.BracketRatio*100+0.5), mdCell(hitsCell(row.Hits)))
 		case rowCompact:
 			if row.Err != "" {
-				fmt.Fprintf(&b, "| — | （压缩失败：%s） | | | | |\n", mdCell(row.Err))
+				b.WriteString(trf("cli.eval.row.compact_failed", "| — | （压缩失败：%s） | | | | |\n", mdCell(row.Err)))
 			} else {
-				b.WriteString("| — | （压缩） | | | | |\n")
+				b.WriteString(tr("cli.eval.row.compact", "| — | （压缩） | | | | |\n"))
 			}
 		case rowAutoCompact:
-			b.WriteString("| — | （自动压缩） | | | | |\n")
+			b.WriteString(tr("cli.eval.row.auto_compact", "| — | （自动压缩） | | | | |\n"))
 		case rowGap:
-			fmt.Fprintf(&b, "| — | （间隔 %s，仅记录，不改系统时间） | | | | |\n", humanHours(row.GapHours))
+			b.WriteString(trf("cli.eval.row.gap", "| — | （间隔 %s，仅记录，不改系统时间） | | | | |\n", humanHours(uiLang, row.GapHours)))
 		}
 	}
 
-	b.WriteString("\n## 回复原文\n")
+	b.WriteString(tr("cli.eval.replies_head", "\n## 回复原文\n"))
 	for _, row := range r.Rows {
 		switch row.Kind {
 		case rowSay:
-			fmt.Fprintf(&b, "\n### 第 %d 轮\n\n> %s\n\n", row.Index, strings.ReplaceAll(row.Say, "\n", "\n> "))
+			b.WriteString(trf("cli.eval.reply_head", "\n### 第 %d 轮\n\n> %s\n\n", row.Index, strings.ReplaceAll(row.Say, "\n", "\n> ")))
 			if row.Err != "" {
-				fmt.Fprintf(&b, "（失败：%s）\n", row.Err)
+				b.WriteString(trf("cli.eval.reply_failed", "（失败：%s）\n", row.Err))
 			} else if row.Reply == "" {
-				b.WriteString("（空回复）\n")
+				b.WriteString(tr("cli.eval.reply_empty", "（空回复）\n"))
 			} else {
 				b.WriteString(row.Reply + "\n")
 			}
 		case rowCompact, rowAutoCompact:
-			b.WriteString("\n---\n*此处做过一次压缩*\n")
+			b.WriteString(tr("cli.eval.mark_compact", "\n---\n*此处做过一次压缩*\n"))
 		case rowGap:
-			fmt.Fprintf(&b, "\n---\n*此处隔了 %s（仅记录）*\n", humanHours(row.GapHours))
+			b.WriteString(trf("cli.eval.mark_gap", "\n---\n*此处隔了 %s（仅记录）*\n", humanHours(uiLang, row.GapHours)))
 		}
 	}
 	return b.String()
@@ -341,14 +347,14 @@ func hitsCell(hits []stylecheck.Hit) string {
 		a := by[id]
 		s := a.label
 		if a.n > 1 {
-			s += fmt.Sprintf(" ×%d", a.n)
+			s += trf("cli.eval.hit_times", " ×%d", a.n)
 		}
 		if a.snippet != "" && a.n == 1 {
-			s += "「" + a.snippet + "」"
+			s += trf("cli.eval.hit_snippet", "「%s」", a.snippet)
 		}
 		parts = append(parts, s)
 	}
-	return strings.Join(parts, "、")
+	return joinList(parts)
 }
 
 // hitBreakdown 把按规则的总命中渲染成「客套收尾 2、加粗 1」，多的在前。
@@ -369,9 +375,9 @@ func hitBreakdown(hits map[string]int) string {
 	})
 	parts := make([]string, 0, len(items))
 	for _, it := range items {
-		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(it.id), it.n))
+		parts = append(parts, fmt.Sprintf("%s %d", stylecheck.LabelOf(uiLang, it.id), it.n))
 	}
-	return strings.Join(parts, "、")
+	return joinList(parts)
 }
 
 // mdCell 让一段文本能放进表格单元：换行变空格，竖线转义。

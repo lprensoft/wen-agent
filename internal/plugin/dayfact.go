@@ -25,7 +25,7 @@ func (m *Manager) DayFacts(date string) []string {
 	var out []string
 	for _, e := range enabledAs[DayReporter](m) {
 		var lines []string
-		safely(e.name, "汇报当日事实", func() { lines = e.impl.DayFacts(date) })
+		safely(m.lang(), e.name, "DayFacts", func() { lines = e.impl.DayFacts(date) })
 		for _, line := range lines {
 			if line != "" {
 				out = append(out, line)

@@ -27,18 +27,19 @@ func runPlugins(args []string) error {
 	}
 
 	fs := flag.NewFlagSet("plugins "+sub, flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-	noConnect := fs.Bool("no-connect", false, "装完不连接包里的 MCP server（不取工具清单）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
+	noConnect := fs.Bool("no-connect", false, tr("cli.plugins.flag.no_connect", "装完不连接包里的 MCP server（不取工具清单）"))
 	rest := parseMixed(fs, args)
 
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
-	store := agentplugin.NewStore(cfg.BaseDir)
+	adoptLang(cfg)
+	store := agentplugin.NewStore(uiLang, cfg.BaseDir)
 	if store.Dir() == "" {
-		return fmt.Errorf("没有可用的配置目录，无法管理插件包")
+		return fmt.Errorf("%s", tr("cli.plugins.no_base_dir", "没有可用的配置目录，无法管理插件包"))
 	}
 
 	switch sub {
@@ -46,26 +47,26 @@ func runPlugins(args []string) error {
 		return listBundles(store)
 	case "install":
 		if len(rest) != 1 {
-			return fmt.Errorf("用法: wen plugins install <目录或 .zip>")
+			return fmt.Errorf("%s", tr("cli.plugins.usage.install", "用法: wen plugins install <目录或 .zip>"))
 		}
 		return installBundle(store, rest[0], cfg, *noConnect)
 	case "uninstall", "remove":
 		if len(rest) != 1 {
-			return fmt.Errorf("用法: wen plugins uninstall <插件包名称>")
+			return fmt.Errorf("%s", tr("cli.plugins.usage.uninstall", "用法: wen plugins uninstall <插件包名称>"))
 		}
 		return uninstallBundle(store, rest[0], cfg.BaseDir)
 	case "refresh":
 		if len(rest) != 1 {
-			return fmt.Errorf("用法: wen plugins refresh <插件包名称>")
+			return fmt.Errorf("%s", tr("cli.plugins.usage.refresh", "用法: wen plugins refresh <插件包名称>"))
 		}
 		return refreshBundle(store, rest[0], cfg)
 	case "info":
 		if len(rest) != 1 {
-			return fmt.Errorf("用法: wen plugins info <插件包名称>")
+			return fmt.Errorf("%s", tr("cli.plugins.usage.info", "用法: wen plugins info <插件包名称>"))
 		}
 		return bundleInfo(store, rest[0])
 	default:
-		return fmt.Errorf("未知的子命令 %q（可用：list / install / refresh / uninstall / info）", sub)
+		return fmt.Errorf(tr("cli.plugins.unknown_sub", "未知的子命令 %q（可用：list / install / refresh / uninstall / info）"), sub)
 	}
 }
 
@@ -88,9 +89,9 @@ func parseMixed(fs *flag.FlagSet, args []string) []string {
 
 func listBundles(store *agentplugin.Store) error {
 	bundles, problems := store.List()
-	fmt.Printf("插件包目录  %s\n\n", store.Dir())
+	fmt.Print(trf("cli.plugins.dir", "插件包目录  %s\n\n", store.Dir()))
 	if len(bundles) == 0 && len(problems) == 0 {
-		fmt.Println("还没有装过插件包。用 wen plugins install <目录或 .zip> 装一个。")
+		fmt.Println(tr("cli.plugins.empty", "还没有装过插件包。用 wen plugins install <目录或 .zip> 装一个。"))
 		return nil
 	}
 	if len(bundles) > 0 {
@@ -106,7 +107,8 @@ func listBundles(store *agentplugin.Store) error {
 			kindW = max(kindW, runewidth.StringWidth(kinds[i]))
 		}
 		fmt.Printf("%s  %s  %s  %s\n",
-			pad("名称", nameW), pad("版本", verW), pad("内容", kindW), "说明")
+			pad(tr("cli.plugins.col.name", "名称"), nameW), pad(tr("cli.plugins.col.version", "版本"), verW),
+			pad(tr("cli.plugins.col.content", "内容"), kindW), tr("cli.plugins.col.desc", "说明"))
 		for i, b := range bundles {
 			fmt.Printf("%s  %s  %s  %s\n",
 				pad(b.Manifest.Name, nameW), pad(dash(b.Manifest.Version), verW),
@@ -124,12 +126,12 @@ func installBundle(store *agentplugin.Store, src string, cfg *config.Config, noC
 	if err != nil {
 		return err
 	}
-	fmt.Printf("已装好 %s%s\n", b.Manifest.Name, paren(b.Manifest.Version))
-	fmt.Printf("  位置  %s\n", store.Path(b.Manifest.Name))
-	fmt.Printf("  内容  %s\n", strings.Join(components(b, -1), "、"))
-	fmt.Printf("  插件  %s（设置页上标记为「外源」，可单独开关）\n", agentplugin.PluginName(b.Manifest.Name))
+	fmt.Print(trf("cli.plugins.installed", "已装好 %s%s\n", b.Manifest.Name, paren(b.Manifest.Version)))
+	fmt.Print(trf("cli.plugins.at", "  位置  %s\n", store.Path(b.Manifest.Name)))
+	fmt.Print(trf("cli.plugins.content", "  内容  %s\n", joinList(components(b, -1))))
+	fmt.Print(trf("cli.plugins.as_plugin", "  插件  %s（设置页上标记为「外源」，可单独开关）\n", agentplugin.PluginName(b.Manifest.Name)))
 	for _, p := range b.Problems {
-		fmt.Printf("  提示  %s\n", p)
+		fmt.Print(trf("cli.plugins.note", "  提示  %s\n", p))
 	}
 	if b.SkillsDir != "" {
 		noteSkillsOff(cfg)
@@ -138,15 +140,15 @@ func installBundle(store *agentplugin.Store, src string, cfg *config.Config, noC
 		if err := handshake(store, b, cfg); err != nil {
 			// 握手失败不回滚安装：包已经装好了，连不上多半是那台 server 自己的事
 			// （依赖没装、要先登录），用 wen plugins refresh 重来一次即可。
-			fmt.Println("  × 取工具清单失败：" + err.Error())
-			fmt.Println("    包已装好，修好之后用 wen plugins refresh " + b.Manifest.Name + " 重试。")
+			fmt.Println(trf("cli.plugins.tools_failed", "  × 取工具清单失败：%s", err.Error()))
+			fmt.Println(trf("cli.plugins.retry_hint", "    包已装好，修好之后用 wen plugins refresh %s 重试。", b.Manifest.Name))
 		}
 	} else if b.HasMCP && len(b.Servers) == 0 {
 		fmt.Println()
-		fmt.Println("注意：这个包里有 mcp.json，但没有一台可用的 server（原因见上面的提示）。")
+		fmt.Println(tr("cli.plugins.no_server", "注意：这个包里有 mcp.json，但没有一台可用的 server（原因见上面的提示）。"))
 	} else if noConnect && len(b.Servers) > 0 {
 		fmt.Println()
-		fmt.Println("按要求没有连接。包里的工具要等 wen plugins refresh " + b.Manifest.Name + " 之后才可用。")
+		fmt.Println(trf("cli.plugins.skipped_connect", "按要求没有连接。包里的工具要等 wen plugins refresh %s 之后才可用。", b.Manifest.Name))
 	}
 	noteRestart(cfg.BaseDir)
 	return nil
@@ -154,7 +156,7 @@ func installBundle(store *agentplugin.Store, src string, cfg *config.Config, noC
 
 // refreshBundle 连一遍包里的 MCP server，把工具清单重取一遍。
 func refreshBundle(store *agentplugin.Store, name string, cfg *config.Config) error {
-	b, err := agentplugin.Load(store.Path(name))
+	b, err := agentplugin.Load(uiLang, store.Path(name))
 	if err != nil {
 		return fmt.Errorf("%s：%w", name, err)
 	}
@@ -179,22 +181,23 @@ func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Conf
 		}
 	}
 	fmt.Println()
-	fmt.Println(fmt.Sprint("正在连接 ", len(b.Servers), " 台 MCP server。其中 ", len(local), " 台将在本机启动："))
+	fmt.Println(trf("cli.plugins.connecting", "正在连接 %d 台 MCP server。其中 %d 台将在本机启动：",
+		len(b.Servers), len(local)))
 	for _, s := range local {
 		fmt.Println("  " + s.Name + "  " + strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	tools, problems, err := agentplugin.Handshake(ctx, b, agentplugin.DataDir(cfg.BaseDir, b.Manifest.Name))
+	tools, problems, err := agentplugin.Handshake(ctx, uiLang, b, agentplugin.DataDir(cfg.BaseDir, b.Manifest.Name))
 	if err != nil {
 		return err
 	}
 	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
-		return fmt.Errorf("工具清单没能存下来：%w", err)
+		return fmt.Errorf(tr("cli.plugins.save_tools_failed", "工具清单没能存下来：%w"), err)
 	}
 
-	fmt.Println(fmt.Sprint("取到 ", len(tools), " 件工具"))
+	fmt.Println(trf("cli.plugins.got_tools", "取到 %d 件工具", len(tools)))
 	for _, t := range tools {
 		fmt.Println("  " + t.Local)
 	}
@@ -209,50 +212,50 @@ func uninstallBundle(store *agentplugin.Store, name, baseDir string) error {
 		return err
 	}
 	store.DropTools(name)
-	fmt.Printf("已卸载 %s\n", name)
-	fmt.Printf("提示：它在设置页上的开关状态还留在 plugins.state.json 里，重新装回来时会沿用。\n")
+	fmt.Print(trf("cli.plugins.uninstalled", "已卸载 %s\n", name))
+	fmt.Print(tr("cli.plugins.state_kept", "提示：它在设置页上的开关状态还留在 plugins.state.json 里，重新装回来时会沿用。\n"))
 	noteRestart(baseDir)
 	return nil
 }
 
 func bundleInfo(store *agentplugin.Store, name string) error {
-	b, err := agentplugin.Load(store.Path(name))
+	b, err := agentplugin.Load(uiLang, store.Path(name))
 	if err != nil {
 		return fmt.Errorf("%s：%w", name, err)
 	}
 	m := b.Manifest
-	fmt.Printf("名称      %s\n", m.Name)
-	fmt.Println("格式      " + b.Format)
-	fmt.Printf("插件名    %s\n", agentplugin.PluginName(m.Name))
+	fmt.Print(trf("cli.plugins.info.name", "名称      %s\n", m.Name))
+	fmt.Println(trf("cli.plugins.info.format", "格式      %s", b.Format))
+	fmt.Print(trf("cli.plugins.info.plugin", "插件名    %s\n", agentplugin.PluginName(m.Name)))
 	if m.Version != "" {
-		fmt.Printf("版本      %s\n", m.Version)
+		fmt.Print(trf("cli.plugins.info.version", "版本      %s\n", m.Version))
 	}
 	if m.Description != "" {
-		fmt.Printf("说明      %s\n", m.Description)
+		fmt.Print(trf("cli.plugins.info.desc", "说明      %s\n", m.Description))
 	}
 	if m.Author != nil && m.Author.Name != "" {
-		fmt.Printf("作者      %s\n", m.Author.Name)
+		fmt.Print(trf("cli.plugins.info.author", "作者      %s\n", m.Author.Name))
 	}
 	if m.License != "" {
-		fmt.Printf("许可      %s\n", m.License)
+		fmt.Print(trf("cli.plugins.info.license", "许可      %s\n", m.License))
 	}
 	if m.Homepage != "" {
-		fmt.Printf("主页      %s\n", m.Homepage)
+		fmt.Print(trf("cli.plugins.info.homepage", "主页      %s\n", m.Homepage))
 	}
-	fmt.Printf("位置      %s\n", b.Root.Path())
+	fmt.Print(trf("cli.plugins.info.path", "位置      %s\n", b.Root.Path()))
 	tools, _ := store.LoadTools(name)
-	fmt.Printf("内容      %s\n", strings.Join(components(b, len(tools)), "、"))
+	fmt.Print(trf("cli.plugins.info.content", "内容      %s\n", joinList(components(b, len(tools)))))
 	if b.SkillsDir != "" {
-		fmt.Printf("技能目录  %s\n", b.SkillsDir)
+		fmt.Print(trf("cli.plugins.info.skills_dir", "技能目录  %s\n", b.SkillsDir))
 	}
 	for _, p := range b.Problems {
-		fmt.Printf("提示      %s\n", p)
+		fmt.Print(trf("cli.plugins.info.note", "提示      %s\n", p))
 	}
 	for _, t := range tools {
-		fmt.Println("工具      " + t.Local)
+		fmt.Println(trf("cli.plugins.info.tool", "工具      %s", t.Local))
 	}
 	if len(tools) == 0 && b.HasMCP {
-		fmt.Println("提示      还没取到工具，用 wen plugins refresh " + name + " 连一次")
+		fmt.Println(trf("cli.plugins.info.no_tools", "提示      还没取到工具，用 wen plugins refresh %s 连一次", name))
 	}
 	return nil
 }
@@ -262,7 +265,7 @@ func bundleInfo(store *agentplugin.Store, name string) error {
 func components(b *agentplugin.Bundle, tools int) []string {
 	var out []string
 	if b.SkillsDir != "" {
-		out = append(out, "技能")
+		out = append(out, tr("cli.plugins.kind.skills", "技能"))
 	}
 	if b.HasMCP {
 		// 带上工具数：一个包「有 MCP 声明」与「真的取到了工具」是两回事，
@@ -270,11 +273,11 @@ func components(b *agentplugin.Bundle, tools int) []string {
 		if tools < 0 {
 			out = append(out, "MCP") // 还没握手，件数未知
 		} else {
-			out = append(out, fmt.Sprint("MCP·", tools, " 件工具"))
+			out = append(out, trf("cli.plugins.kind.mcp", "MCP·%d 件工具", tools))
 		}
 	}
 	if len(out) == 0 {
-		out = append(out, "（空）")
+		out = append(out, tr("cli.plugins.kind.empty", "（空）"))
 	}
 	return out
 }
@@ -297,8 +300,8 @@ func noteSkillsOff(cfg *config.Config) {
 	for _, st := range list {
 		if st.Name == "skills" && !st.Enabled {
 			fmt.Println()
-			fmt.Println("注意：「技能手册」插件当前是关的，包里的技能要等它打开之后才进清单。")
-			fmt.Println("      用 wen config plugins 打开它，或在设置页的「基础工具」一节里打开。")
+			fmt.Println(tr("cli.plugins.skills_off", "注意：「技能手册」插件当前是关的，包里的技能要等它打开之后才进清单。"))
+			fmt.Println(tr("cli.plugins.skills_off_how", "      用 wen config plugins 打开它，或在设置页的「基础工具」一节里打开。"))
 			return
 		}
 	}
@@ -306,7 +309,7 @@ func noteSkillsOff(cfg *config.Config) {
 
 func noteRestart(baseDir string) {
 	if info, ok := runlock.Read(baseDir); ok && reachable(info.Addr) {
-		fmt.Printf("\n服务正在 %s 运行，插件在启动期注册，重启之后才会生效。\n", info.Addr)
+		fmt.Print(trf("cli.plugins.needs_restart", "\n服务正在 %s 运行，插件在启动期注册，重启之后才会生效。\n", info.Addr))
 	}
 }
 

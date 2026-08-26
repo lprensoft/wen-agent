@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"wen/internal/i18n"
 	"wen/internal/pathsafe"
 )
 
@@ -43,7 +44,7 @@ type scanResult struct {
 //
 // 一处坏掉不影响其余：装了十个技能，其中一个的 frontmatter 写错了，
 // 该加载的九个照样要加载，坏的那个单独报出来。
-func scan(dir string, descLimit int) scanResult {
+func scan(lang, dir string, descLimit int) scanResult {
 	var res scanResult
 	if dir == "" {
 		return res
@@ -52,9 +53,9 @@ func scan(dir string, descLimit int) scanResult {
 	if err != nil {
 		if os.IsNotExist(err) {
 			res.missing = true
-			res.problems = append(res.problems, "技能目录不存在："+dir)
+			res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.no_dir", "技能目录不存在：%s", dir))
 		} else {
-			res.problems = append(res.problems, "读取技能目录失败："+err.Error())
+			res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.read_dir", "读取技能目录失败：%s", err.Error()))
 		}
 		return res
 	}
@@ -73,7 +74,7 @@ func scan(dir string, descLimit int) scanResult {
 		}
 		if !validSkillName.MatchString(name) {
 			res.problems = append(res.problems,
-				fmt.Sprintf("%s：目录名只能用小写字母、数字、下划线与连字符，已跳过", name))
+				i18n.Tf(lang, "plugin.skills.problem.bad_name", "%s：目录名只能用小写字母、数字、下划线与连字符，已跳过", name))
 			continue
 		}
 		// 技能目录不得经链接指到技能根之外。指到根**之内**的链接照常收下——那是用户
@@ -83,29 +84,29 @@ func scan(dir string, descLimit int) scanResult {
 		// 出来的一类问题。插件包是从外面拿来的，Agent Plugins 标准也明确要求客户端
 		// 拒绝这种逃逸。
 		if !pathsafe.Within(dir, sdir) {
-			res.problems = append(res.problems, name+"：经链接指到了技能目录之外，已跳过")
+			res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.escapes", "%s：经链接指到了技能目录之外，已跳过", name))
 			continue
 		}
 		path := filepath.Join(sdir, skillFile)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				res.problems = append(res.problems, name+"：目录下没有 "+skillFile+"，已跳过")
+				res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.no_file", "%s：目录下没有 %s，已跳过", name, skillFile))
 			} else {
-				res.problems = append(res.problems, name+"：读取 "+skillFile+" 失败——"+err.Error())
+				res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.read_file", "%s：读取 %s 失败——%s", name, skillFile, err.Error()))
 			}
 			continue
 		}
-		meta, err := parseMeta(string(data))
+		meta, err := parseMeta(lang, string(data))
 		if err != nil {
-			res.problems = append(res.problems, name+"："+err.Error()+"，已跳过")
+			res.problems = append(res.problems, i18n.Tf(lang, "plugin.skills.problem.skipped", "%s：%s，已跳过", name, err.Error()))
 			continue
 		}
 		if meta.Name != "" && meta.Name != name {
 			// 不以 frontmatter 的名字为准：标识必须与目录一一对应，否则重名或改名
 			// 之后 read_skill 拿到的名字就找不到对应的目录了。只提醒一句。
 			res.problems = append(res.problems,
-				fmt.Sprintf("%s：文件里写的名称是 %q，与目录名不一致，已按目录名加载", name, meta.Name))
+				i18n.Tf(lang, "plugin.skills.problem.name_mismatch", "%s：文件里写的名称是 %q，与目录名不一致，已按目录名加载", name, meta.Name))
 		}
 		res.skills = append(res.skills, skill{
 			Name: name,
@@ -126,19 +127,19 @@ type meta struct {
 // parseMeta 取出 frontmatter。没有 description 视为解析失败：
 // 清单里那一行用途就是模型判断「该不该读这份手册」的全部依据，缺了它这个技能
 // 永远不会被用上，静默收录只会让人以为装好了。
-func parseMeta(src string) (meta, error) {
+func parseMeta(lang, src string) (meta, error) {
 	fm, _, ok := splitFrontMatter(src)
 	if !ok {
-		return meta{}, fmt.Errorf("开头缺少 --- 包起来的说明块")
+		return meta{}, fmt.Errorf("%s", i18n.T(lang, "plugin.skills.problem.no_front_matter", "开头缺少 --- 包起来的说明块"))
 	}
 	var m meta
 	if err := yaml.Unmarshal([]byte(fm), &m); err != nil {
-		return meta{}, fmt.Errorf("开头的说明块解析失败——%s", err.Error())
+		return meta{}, fmt.Errorf(i18n.T(lang, "plugin.skills.problem.bad_front_matter", "开头的说明块解析失败——%s"), err.Error())
 	}
 	m.Name = strings.TrimSpace(m.Name)
 	m.Description = strings.Join(strings.Fields(m.Description), " ")
 	if m.Description == "" {
-		return meta{}, fmt.Errorf("开头的说明块里没有写 description")
+		return meta{}, fmt.Errorf("%s", i18n.T(lang, "plugin.skills.problem.no_description", "开头的说明块里没有写 description"))
 	}
 	return m, nil
 }

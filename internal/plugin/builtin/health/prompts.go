@@ -1,9 +1,20 @@
 package health
 
-// guidePrompt 是登记判据。写进去的是「什么时候该想一想」与几条红线，不写疾病表——
+import "wen/internal/prompt"
+
+// 三段文本各按语言取一次。
+func guideFor(lang string) string { return prompt.T(lang, "prompt.health.guide", guidePromptZH) }
+func stateHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.health.state_header", stateHeaderZH)
+}
+func guideLineFor(lang string) string {
+	return prompt.T(lang, "prompt.health.guide_line", guideLineZH)
+}
+
+// guidePromptZH 是登记判据。写进去的是「什么时候该想一想」与几条红线，不写疾病表——
 // 常见小恙与典型病程只作为范例给模型校准，判断本身归模型：会不会生病、生什么、
 // 多重、怎么处理，都是叙事判断，代码只负责让时间往前走。
-const guidePrompt = `[健康]
+const guidePromptZH = `[健康]
 角色会像真人一样偶尔有些小恙：着凉、发烧、头疼、肠胃不适、过敏、没睡好的倦怠。
 会不会生病由你按剧情判断，不抽签、不找戏：淋雨回来、受了凉、熬夜又降温、吃了放久的
 东西之后，想一想这个人这回会不会中招；多数时候不会。
@@ -21,9 +32,9 @@ const guidePrompt = `[健康]
   工具拒绝时按它说的办。
 - 没有给出 [身体状况] 时就是一切如常，不要自己演出没记下的病。`
 
-// stateHeader 领起本轮注入的当前状况。
-const stateHeader = "[身体状况]"
+// stateHeaderZH 领起本轮注入的当前状况。
+const stateHeaderZH = "[身体状况]"
 
-// guideLine 是有状况在身时附在状态块末尾的表现指引。不做新机制：虚弱时话少，
+// guideLineZH 是有状况在身时附在状态块末尾的表现指引。不做新机制：虚弱时话少，
 // 是角色自己的选择，一句话交给模型就够了。
-const guideLine = "病着的时候话少、句子短、没精神，回应慢半拍；不想说就空回复。"
+const guideLineZH = "病着的时候话少、句子短、没精神，回应慢半拍；不想说就空回复。"

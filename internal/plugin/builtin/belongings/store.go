@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 const (
@@ -76,13 +78,15 @@ type ApplyResult struct {
 // Store 管理一个可见域的清单库：单个 JSON 文件。文件可能被用户在进程外修改，
 // 因此每次操作都重新读取，不做缓存——条目数量有上限，读取开销可以忽略。
 type Store struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
 	path string
 }
 
 // NewStore 建立指向 <dir>/containers.json 的清单库。
-func NewStore(dir string) *Store {
-	return &Store{path: filepath.Join(dir, "containers.json")}
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, path: filepath.Join(dir, "containers.json")}
 }
 
 // List 返回全部容器，按记录顺序。文件不存在时返回空列表。
@@ -98,11 +102,11 @@ func (s *Store) load() ([]Container, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("读取持有物清单失败: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.read_failed_err", "读取持有物清单失败: %w"), err)
 	}
 	var cs []Container
 	if err := json.Unmarshal(raw, &cs); err != nil {
-		return nil, fmt.Errorf("持有物清单文件损坏: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.corrupt", "持有物清单文件损坏: %w"), err)
 	}
 	return cs, nil
 }
@@ -111,7 +115,7 @@ func (s *Store) load() ([]Container, error) {
 // 整批在同一临界区内完成并一次写回，任何一项校验失败都整批不落盘——
 // 半批生效会让回执与磁盘状态对不上。
 func (s *Store) Apply(container string, add, remove []Change, now time.Time, lim Limits) (ApplyResult, error) {
-	cname, err := normalizeName(container, "容器名称", maxContainerNameRunes)
+	cname, err := normalizeName(s.lang, container, containerWhat, maxContainerNameRunes)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -126,12 +130,14 @@ func (s *Store) Apply(container string, add, remove []Change, now time.Time, lim
 	ci := containerIndex(cs, cname)
 	if ci < 0 {
 		if len(add) == 0 {
-			return ApplyResult{}, fmt.Errorf("没有名为 %q 的容器，现有：%s", cname, nameList(containerNames(cs)))
+			return ApplyResult{}, fmt.Errorf(prompt.T(s.lang, "prompt.belongings.result.no_container",
+				"没有名为 %q 的容器，现有：%s"), cname, nameList(s.lang, containerNames(cs)))
 		}
 		// 拦截生效时要把规则告诉模型，否则它只会换个名字再试一次
 		if lim.MaxContainers > 0 && len(cs) >= lim.MaxContainers {
-			return ApplyResult{}, fmt.Errorf("容器已达上限（%d 个），不再新建；可把物品记进已有容器，或在设置页调大上限。现有：%s",
-				lim.MaxContainers, nameList(containerNames(cs)))
+			return ApplyResult{}, fmt.Errorf(prompt.T(s.lang, "prompt.belongings.result.container_limit",
+				"容器已达上限（%d 个），不再新建；可把物品记进已有容器，或在设置页调大上限。现有：%s"),
+				lim.MaxContainers, nameList(s.lang, containerNames(cs)))
 		}
 		cs = append(cs, Container{Name: cname})
 		ci = len(cs) - 1
@@ -140,14 +146,14 @@ func (s *Store) Apply(container string, add, remove []Change, now time.Time, lim
 	res := ApplyResult{Container: cont.Name}
 
 	for _, ch := range remove {
-		frag, err := removeItem(cont, ch, now)
+		frag, err := removeItem(s.lang, cont, ch, now)
 		if err != nil {
 			return ApplyResult{}, err
 		}
 		res.Removed = append(res.Removed, frag)
 	}
 	for _, ch := range add {
-		frag, err := addItem(cont, ch, now, lim)
+		frag, err := addItem(s.lang, cont, ch, now, lim)
 		if err != nil {
 			return ApplyResult{}, err
 		}
@@ -162,24 +168,26 @@ func (s *Store) Apply(container string, add, remove []Change, now time.Time, lim
 }
 
 // removeItem 从容器里取出/消耗一项。Qty 为 0、物品不计数、或减到 0 时整条移除。
-func removeItem(cont *Container, ch Change, now time.Time) (string, error) {
+func removeItem(lang string, cont *Container, ch Change, now time.Time) (string, error) {
 	name := strings.TrimSpace(ch.Name)
 	i := itemIndex(cont.Items, name)
 	if i < 0 {
-		return "", fmt.Errorf("%s里没有 %q，现有：%s", cont.Name, name, nameList(itemNames(cont.Items)))
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.no_item",
+			"%s里没有 %q，现有：%s"), cont.Name, name, nameList(lang, itemNames(cont.Items)))
 	}
 	if ch.Qty < 0 {
-		return "", fmt.Errorf("取出数量不能为负")
+		return "", fmt.Errorf("%s", prompt.T(lang, "prompt.belongings.result.negative_qty", "取出数量不能为负"))
 	}
 	it := &cont.Items[i]
 	if ch.Qty > 0 && it.Qty > ch.Qty {
 		it.Qty -= ch.Qty
 		it.Updated = now
-		return fmt.Sprintf("%s×%d（余 %d）", it.Name, ch.Qty, it.Qty), nil
+		return prompt.Tf(lang, "prompt.belongings.result.taken_left",
+			"%s×%d（余 %d）", it.Name, ch.Qty, it.Qty), nil
 	}
 	frag := it.Name
 	if it.Qty > 0 {
-		frag = fmt.Sprintf("%s×%d（已取完）", it.Name, it.Qty)
+		frag = prompt.Tf(lang, "prompt.belongings.result.taken_all", "%s×%d（已取完）", it.Name, it.Qty)
 	}
 	cont.Items = append(cont.Items[:i], cont.Items[i+1:]...)
 	return frag, nil
@@ -187,24 +195,27 @@ func removeItem(cont *Container, ch Change, now time.Time) (string, error) {
 
 // addItem 往容器里放入一项。同名已存在时叠加数量、更新备注，并把入库时刻
 // 更新为最新一次——分不清新旧批次时，按最近的算对「还新鲜吗」最不误事。
-func addItem(cont *Container, ch Change, now time.Time, lim Limits) (string, error) {
-	name, err := normalizeName(ch.Name, "物品名称", maxItemNameRunes)
+func addItem(lang string, cont *Container, ch Change, now time.Time, lim Limits) (string, error) {
+	name, err := normalizeName(lang, ch.Name, itemWhat, maxItemNameRunes)
 	if err != nil {
 		return "", err
 	}
 	if ch.Qty < 0 || ch.Qty > maxQty {
-		return "", fmt.Errorf("数量要在 0~%d 之间（0 表示不计数）", maxQty)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.qty_range",
+			"数量要在 0~%d 之间（0 表示不计数）"), maxQty)
 	}
 	note := strings.TrimSpace(ch.Note)
 	if n := len([]rune(note)); n > maxNoteRunes {
-		return "", fmt.Errorf("备注过长（%d 字，上限 %d 字），请压缩后重试", n, maxNoteRunes)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.note_long",
+			"备注过长（%d 字，上限 %d 字），请压缩后重试"), n, maxNoteRunes)
 	}
 
 	if i := itemIndex(cont.Items, name); i >= 0 {
 		it := &cont.Items[i]
 		if ch.Qty > 0 {
 			if it.Qty+ch.Qty > maxQty {
-				return "", fmt.Errorf("%q 叠加后数量超出上限 %d", it.Name, maxQty)
+				return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.qty_overflow",
+					"%q 叠加后数量超出上限 %d"), it.Name, maxQty)
 			}
 			it.Qty += ch.Qty
 		}
@@ -214,14 +225,16 @@ func addItem(cont *Container, ch Change, now time.Time, lim Limits) (string, err
 		it.Added = now
 		it.Updated = now
 		if it.Qty > 0 {
-			return fmt.Sprintf("%s×%d（现共 %d）", it.Name, ch.Qty, it.Qty), nil
+			return prompt.Tf(lang, "prompt.belongings.result.added_total",
+				"%s×%d（现共 %d）", it.Name, ch.Qty, it.Qty), nil
 		}
-		return it.Name + "（已有，更新）", nil
+		return it.Name + prompt.T(lang, "prompt.belongings.result.updated", "（已有，更新）"), nil
 	}
 
 	// 拦截生效时要把规则告诉模型
 	if lim.MaxItemsPerContainer > 0 && len(cont.Items) >= lim.MaxItemsPerContainer {
-		return "", fmt.Errorf("%s的物品已达上限（%d 项），先取出不再需要的，或在设置页调大上限",
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.item_limit",
+			"%s的物品已达上限（%d 项），先取出不再需要的，或在设置页调大上限"),
 			cont.Name, lim.MaxItemsPerContainer)
 	}
 	cont.Items = append(cont.Items, Item{Name: name, Qty: ch.Qty, Note: note, Added: now, Updated: now})
@@ -239,18 +252,18 @@ func (s *Store) save(cs []Container) error {
 	}
 	raw, err := json.MarshalIndent(cs, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存持有物清单失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.save_failed", "保存持有物清单失败: %w"), err)
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("创建持有物清单目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.mkdir_failed", "创建持有物清单目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存持有物清单失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.save_failed", "保存持有物清单失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存持有物清单失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.belongings.store.save_failed", "保存持有物清单失败: %w"), err)
 	}
 	return nil
 }
@@ -293,28 +306,35 @@ func itemNames(items []Item) []string {
 }
 
 // nameList 把候选名拼成一句，限量——装了很多东西时，一次拼错不该灌进去一大段。
-func nameList(names []string) string {
+func nameList(lang string, names []string) string {
 	const maxNames = 20
 	if len(names) == 0 {
-		return "（空）"
+		return prompt.T(lang, "prompt.belongings.render.empty", "（空）")
 	}
 	shown := names
 	var more string
 	if len(shown) > maxNames {
-		more = fmt.Sprintf(" 等 %d 项", len(names))
+		more = prompt.Tf(lang, "prompt.belongings.render.and_more", " 等 %d 项", len(names))
 		shown = shown[:maxNames]
 	}
-	return strings.Join(shown, "、") + more
+	return strings.Join(shown, prompt.T(lang, "prompt.belongings.render.sep", "、")) + more
 }
 
 // normalizeName 规整名称：压掉换行与连续空白，校验非空与长度。
-func normalizeName(name, what string, maxRunes int) (string, error) {
+func normalizeName(lang, name string, what prompt.Piece, maxRunes int) (string, error) {
 	name = strings.Join(strings.Fields(name), " ")
 	if name == "" {
-		return "", fmt.Errorf("%s不能为空", what)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.name_empty", "%s不能为空"), what.For(lang))
 	}
 	if n := len([]rune(name)); n > maxRunes {
-		return "", fmt.Errorf("%s过长（%d 字，上限 %d 字），请用更短的名称", what, n, maxRunes)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.belongings.result.name_long",
+			"%s过长（%d 字，上限 %d 字），请用更短的名称"), what.For(lang), n, maxRunes)
 	}
 	return name, nil
 }
+
+// containerWhat / itemWhat 是上面两句报错里的「哪一种名称」。
+var (
+	containerWhat = prompt.Text("prompt.belongings.what.container", "容器名称")
+	itemWhat      = prompt.Text("prompt.belongings.what.item", "物品名称")
+)

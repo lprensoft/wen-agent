@@ -12,7 +12,7 @@ import (
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(filepath.Join(t.TempDir(), "memories"))
+	return NewStore("", filepath.Join(t.TempDir(), "memories"))
 }
 
 func TestSaveAndGetRoundTrip(t *testing.T) {
@@ -169,7 +169,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestListOnMissingDirIsEmpty(t *testing.T) {
-	s := NewStore(filepath.Join(t.TempDir(), "不存在"))
+	s := NewStore("", filepath.Join(t.TempDir(), "不存在"))
 	got, err := s.List()
 	if err != nil {
 		t.Fatalf("目录不存在不应报错: %v", err)
@@ -195,7 +195,7 @@ func TestSlugify(t *testing.T) {
 		{"comm", "comm"},     // 不是保留名，不加前缀
 	}
 	for _, c := range cases {
-		got, err := slugify(c.in)
+		got, err := slugify("", c.in)
 		if err != nil {
 			t.Errorf("slugify(%q) 报错: %v", c.in, err)
 			continue
@@ -205,14 +205,14 @@ func TestSlugify(t *testing.T) {
 		}
 	}
 
-	if _, err := slugify("///"); err == nil {
+	if _, err := slugify("", "///"); err == nil {
 		t.Error("不含可用字符的标题应报错")
 	}
-	if _, err := slugify(""); err == nil {
+	if _, err := slugify("", ""); err == nil {
 		t.Error("空标题应报错")
 	}
 
-	long, err := slugify(strings.Repeat("长", 200))
+	long, err := slugify("", strings.Repeat("长", 200))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestReadToleratesHandEditedFiles(t *testing.T) {
 	// frontmatter 语法损坏，应退回纯文本而不是丢掉整条
 	write("broken.md", "---\nname: [未闭合\n---\n\n正文\n")
 
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	all, err := s.List()
 	if err != nil {
 		t.Fatal(err)

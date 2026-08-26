@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // reportTool 给出最近几天的文风趋势。它存在是为了让「最近是不是越来越像客服了」
@@ -15,8 +17,9 @@ type reportTool struct{ p *Plugin }
 func (t *reportTool) Name() string { return "style_report" }
 
 func (t *reportTool) Description() string {
-	return "查看最近 7 天回复文风的统计：每天的对话轮数、助手腔命中次数与种类、平均字数、【】演绎占比。" +
-		"只在对方问起回复的文风、长度或是否变得像客服时使用。"
+	return prompt.T(t.p.lang(), "prompt.style_watch.tool.style_report.desc",
+		"查看最近 7 天回复文风的统计：每天的对话轮数、助手腔命中次数与种类、平均字数、【】演绎占比。"+
+			"只在对方问起回复的文风、长度或是否变得像客服时使用。")
 }
 
 func (t *reportTool) Schema() json.RawMessage {
@@ -24,18 +27,18 @@ func (t *reportTool) Schema() json.RawMessage {
 }
 
 func (t *reportTool) Execute(context.Context, json.RawMessage) (string, error) {
-	return t.p.renderReport(7), nil
+	return t.p.renderReport(t.p.lang(), 7), nil
 }
 
 // renderReport 渲染最近 n 天的报告，每天一行，新的在前；末尾汇总按规则的命中。
-func (p *Plugin) renderReport(n int) string {
+func (p *Plugin) renderReport(lang string, n int) string {
 	days := p.recent(n)
 	if len(days) == 0 {
-		return fmt.Sprintf("最近 %d 天没有记录。", n)
+		return prompt.Tf(lang, "prompt.style_watch.report.empty", "最近 %d 天没有记录。", n)
 	}
 	today := dateOf(time.Now())
 	var b strings.Builder
-	fmt.Fprintf(&b, "最近 %d 天的文风（真人对话）：\n", n)
+	fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.header", "最近 %d 天的文风（真人对话）：\n"), n)
 	total := map[string]int{}
 	turns, hits := 0, 0
 	for _, d := range days {
@@ -44,15 +47,15 @@ func (p *Plugin) renderReport(n int) string {
 			label = label[5:]
 		}
 		if d.Date == today {
-			label += "（今天）"
+			label += prompt.T(lang, "prompt.style_watch.report.today", "（今天）")
 		}
 		if d.Interactive.Turns == 0 {
-			fmt.Fprintf(&b, "%s：无真人对话", label)
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.no_human", "%s：无真人对话"), label)
 		} else {
-			fmt.Fprintf(&b, "%s：%s", label, d.Interactive.summary())
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.day", "%s：%s"), label, d.Interactive.summary(lang))
 		}
 		if bg := d.Background; bg.Turns > 0 {
-			fmt.Fprintf(&b, "；后台 %d 轮 %d 次", bg.Turns, bg.totalHits())
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.bg", "；后台 %d 轮 %d 次"), bg.Turns, bg.totalHits())
 		}
 		b.WriteString("\n")
 		for id, c := range d.Interactive.Hits {
@@ -61,10 +64,10 @@ func (p *Plugin) renderReport(n int) string {
 		turns += d.Interactive.Turns
 		hits += d.Interactive.totalHits()
 	}
-	fmt.Fprintf(&b, "合计 %d 轮，助手腔 %d 次", turns, hits)
-	if bd := breakdown(total, 0); bd != "" {
-		b.WriteString("（" + bd + "）")
+	fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.total", "合计 %d 轮，助手腔 %d 次"), turns, hits)
+	if bd := breakdown(lang, total, 0); bd != "" {
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.style_watch.report.paren", "（%s）"), bd)
 	}
-	b.WriteString("。")
+	b.WriteString(prompt.T(lang, "prompt.style_watch.report.period", "。"))
 	return b.String()
 }

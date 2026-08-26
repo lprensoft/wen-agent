@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // 各字段的长度上限。快照随每轮对话注入，单项必须有确定上界。超长时报错让模型压缩后
@@ -65,26 +67,27 @@ type Update struct {
 	TheirNow  *string
 }
 
-// 回显用的字段标签。
-const (
-	labelStage     = "阶段"
-	labelMyCall    = "你对对方的称呼"
-	labelTheirCall = "对方对你的称呼"
-	labelRecent    = "最近变动"
-	labelBonds     = "默契与禁区"
-	labelTheirNow  = "对方近况"
+// 回显用的字段标签。摆成表再按情况取用，故用 Piece 把键与原文绑在声明处。
+var (
+	labelStage     = prompt.Text("prompt.relationship.label.stage", "阶段")
+	labelMyCall    = prompt.Text("prompt.relationship.label.my_call", "你对对方的称呼")
+	labelTheirCall = prompt.Text("prompt.relationship.label.their_call", "对方对你的称呼")
+	labelRecent    = prompt.Text("prompt.relationship.label.recent", "最近变动")
+	labelBonds     = prompt.Text("prompt.relationship.label.bonds", "默契与禁区")
+	labelTheirNow  = prompt.Text("prompt.relationship.label.their_now", "对方近况")
 )
 
 // Store 管理一个可见域的关系快照。单个 JSON 文件，每次操作重新读取不做缓存。
 type Store struct {
 	mu   sync.Mutex
+	lang string
 	dir  string
 	path string
 }
 
-// NewStore 建立指向 <dir>/relationship.json 的快照库。
-func NewStore(dir string) *Store {
-	return &Store{dir: dir, path: filepath.Join(dir, "relationship.json")}
+// NewStore 建立指向 <dir>/relationship.json 的快照库。lang 决定回显标签与报错的语言。
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, dir: dir, path: filepath.Join(dir, "relationship.json")}
 }
 
 // Load 返回当前快照。第二个返回值表示是否有过记录。
@@ -100,7 +103,7 @@ func (s *Store) Load() (Snapshot, bool, error) {
 // recent 只要传了非空值就把时刻记为此刻，文字与上次相同也一样：模型只传变化的字段，
 // 再传一次同样的话就是「又发生了一次」，而不是「没变」。
 func (s *Store) Apply(u Update, now time.Time) (updated, cleared []string, err error) {
-	if err := validate(u); err != nil {
+	if err := validate(s.lang, u); err != nil {
 		return nil, nil, err
 	}
 
@@ -126,19 +129,19 @@ func (s *Store) Apply(u Update, now time.Time) (updated, cleared []string, err e
 			updated = append(updated, label)
 		}
 	}
-	setText(&snap.Stage, u.Stage, labelStage)
-	setText(&snap.MyCall, u.MyCall, labelMyCall)
-	setText(&snap.TheirCall, u.TheirCall, labelTheirCall)
+	setText(&snap.Stage, u.Stage, labelStage.For(s.lang))
+	setText(&snap.MyCall, u.MyCall, labelMyCall.For(s.lang))
+	setText(&snap.TheirCall, u.TheirCall, labelTheirCall.For(s.lang))
 	if u.Recent != nil {
 		text := normalize(*u.Recent)
 		if text == "" {
 			if snap.Recent != "" {
 				snap.Recent, snap.RecentAt = "", time.Time{}
-				cleared = append(cleared, labelRecent)
+				cleared = append(cleared, labelRecent.For(s.lang))
 			}
 		} else {
 			snap.Recent, snap.RecentAt = text, now
-			updated = append(updated, labelRecent)
+			updated = append(updated, labelRecent.For(s.lang))
 		}
 	}
 	if u.Bonds != nil {
@@ -146,13 +149,13 @@ func (s *Store) Apply(u Update, now time.Time) (updated, cleared []string, err e
 		switch {
 		case len(bonds) == 0 && len(snap.Bonds) > 0:
 			snap.Bonds = nil
-			cleared = append(cleared, labelBonds)
+			cleared = append(cleared, labelBonds.For(s.lang))
 		case len(bonds) > 0 && strings.Join(bonds, "\x00") != strings.Join(snap.Bonds, "\x00"):
 			snap.Bonds = bonds
-			updated = append(updated, labelBonds)
+			updated = append(updated, labelBonds.For(s.lang))
 		}
 	}
-	setText(&snap.TheirNow, u.TheirNow, labelTheirNow)
+	setText(&snap.TheirNow, u.TheirNow, labelTheirNow.For(s.lang))
 
 	if len(updated) == 0 && len(cleared) == 0 {
 		return nil, nil, nil // 没有实际变化，不写盘
@@ -177,7 +180,7 @@ func (s *Store) Clear() error {
 
 func (s *Store) remove() error {
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("清除关系状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.clear", "清除关系状态失败: %w"), err)
 	}
 	return nil
 }
@@ -188,11 +191,11 @@ func (s *Store) load() (Snapshot, bool, error) {
 		if os.IsNotExist(err) {
 			return Snapshot{}, false, nil
 		}
-		return Snapshot{}, false, fmt.Errorf("读取关系状态失败: %w", err)
+		return Snapshot{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.read", "读取关系状态失败: %w"), err)
 	}
 	var snap Snapshot
 	if err := json.Unmarshal(raw, &snap); err != nil {
-		return Snapshot{}, false, fmt.Errorf("关系状态文件损坏: %w", err)
+		return Snapshot{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.corrupt", "关系状态文件损坏: %w"), err)
 	}
 	// 手改过的文件不该把长度上限撑破
 	snap.Stage = clip(snap.Stage, maxStageRunes)
@@ -218,59 +221,63 @@ func (s *Store) load() (Snapshot, bool, error) {
 func (s *Store) save(snap Snapshot) error {
 	raw, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存关系状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.save", "保存关系状态失败: %w"), err)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return fmt.Errorf("创建关系状态目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.mkdir", "创建关系状态目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存关系状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.save", "保存关系状态失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存关系状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.save", "保存关系状态失败: %w"), err)
 	}
 	return nil
 }
 
 // validate 校验各字段的长度与条数。
-func validate(u Update) error {
-	if err := checkRunes(u.Stage, "stage", maxStageRunes); err != nil {
+func validate(lang string, u Update) error {
+	if err := checkRunes(lang, u.Stage, "stage", maxStageRunes); err != nil {
 		return err
 	}
-	if err := checkRunes(u.MyCall, "my_call", maxCallRunes); err != nil {
+	if err := checkRunes(lang, u.MyCall, "my_call", maxCallRunes); err != nil {
 		return err
 	}
-	if err := checkRunes(u.TheirCall, "their_call", maxCallRunes); err != nil {
+	if err := checkRunes(lang, u.TheirCall, "their_call", maxCallRunes); err != nil {
 		return err
 	}
-	if err := checkRunes(u.Recent, "recent", maxRecentRunes); err != nil {
+	if err := checkRunes(lang, u.Recent, "recent", maxRecentRunes); err != nil {
 		return err
 	}
-	if err := checkRunes(u.TheirNow, "their_now", maxTheirNowRunes); err != nil {
+	if err := checkRunes(lang, u.TheirNow, "their_now", maxTheirNowRunes); err != nil {
 		return err
 	}
 	if u.Bonds != nil {
 		bonds := normalizeBonds(*u.Bonds)
 		if len(bonds) > maxBonds {
-			return fmt.Errorf("bonds 过多（%d 条，上限 %d 条），请只留最要紧的几条", len(bonds), maxBonds)
+			return fmt.Errorf(prompt.T(lang, "prompt.relationship.err.bonds_many",
+				"bonds 过多（%d 条，上限 %d 条），请只留最要紧的几条"), len(bonds), maxBonds)
 		}
 		for _, b := range bonds {
 			if n := len([]rune(b)); n > maxBondRunes {
-				return fmt.Errorf("bonds 里有一条过长（%d 字，上限 %d 字）：%q，请压缩后重试", n, maxBondRunes, b)
+				return fmt.Errorf(prompt.T(lang, "prompt.relationship.err.bond_long",
+					"bonds 里有一条过长（%d 字，上限 %d 字）：%q，请压缩后重试"), n, maxBondRunes, b)
 			}
 		}
 	}
 	return nil
 }
 
-func checkRunes(v *string, what string, max int) error {
+// checkRunes 的 what 是 JSON 字段名，不翻译——它是标识符，模型要照它改参数。
+func checkRunes(lang string, v *string, what string, max int) error {
 	if v == nil {
 		return nil
 	}
 	if n := len([]rune(normalize(*v))); n > max {
-		return fmt.Errorf("%s 过长（%d 字，上限 %d 字），请压缩后重试", what, n, max)
+		return fmt.Errorf(prompt.T(lang, "prompt.relationship.err.field_long",
+			"%s 过长（%d 字，上限 %d 字），请压缩后重试"), what, n, max)
 	}
 	return nil
 }

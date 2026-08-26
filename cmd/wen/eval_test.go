@@ -81,10 +81,10 @@ func sampleResult() evalResult {
 		Persona:     "小满，二十出头，说话短。",
 		Samples:     "你：累了。\n小满：那就歇着，别硬撑。",
 		Rows: []evalRow{
-			{Kind: rowSay, Index: 1, Say: "晚上好", Reply: reply1, Metrics: stylecheck.Measure(reply1), Hits: stylecheck.Check(reply1)},
+			{Kind: rowSay, Index: 1, Say: "晚上好", Reply: reply1, Metrics: stylecheck.Measure("", reply1), Hits: stylecheck.Check("", reply1)},
 			{Kind: rowCompact},
 			{Kind: rowGap, GapHours: 8},
-			{Kind: rowSay, Index: 2, Say: "醒了吗 | 在吗", Reply: reply2, Metrics: stylecheck.Measure(reply2), Hits: stylecheck.Check(reply2)},
+			{Kind: rowSay, Index: 2, Say: "醒了吗 | 在吗", Reply: reply2, Metrics: stylecheck.Measure("", reply2), Hits: stylecheck.Check("", reply2)},
 			{Kind: rowAutoCompact},
 		},
 		Compactions:     1,
@@ -189,7 +189,7 @@ func TestRenderRowsForJudgeDropsOldest(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		rows = append(rows, evalRow{Kind: rowSay, Index: i, Say: "问", Reply: strings.Repeat("答", 100)})
 	}
-	out := renderRowsForJudge(rows, 1500)
+	out := renderRowsForJudge("", rows, 1500)
 	if !strings.HasPrefix(out, "（更早的 ") {
 		t.Errorf("超出预算应从最早的丢起：%q", out[:40])
 	}
@@ -199,7 +199,7 @@ func TestRenderRowsForJudgeDropsOldest(t *testing.T) {
 }
 
 func TestHumanHours(t *testing.T) {
-	if humanHours(8) != "8 小时" || humanHours(1.5) != "1.5 小时" {
-		t.Error(humanHours(8), humanHours(1.5))
+	if humanHours("", 8) != "8 小时" || humanHours("", 1.5) != "1.5 小时" {
+		t.Error(humanHours("", 8), humanHours("", 1.5))
 	}
 }

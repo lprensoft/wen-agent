@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -34,12 +35,12 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	switch key {
 	case actionReport:
-		p.setAction(key, plugin.ActionState{Status: plugin.ActionDone, Message: p.renderReport(keepDays)})
+		p.setAction(key, plugin.ActionState{Status: plugin.ActionDone, Message: p.renderReport(p.lang(), keepDays)})
 		return nil
 	case actionClear:
 		s := p.snapshot()
 		if s.dir == "" {
-			return fmt.Errorf("文风观察尚未就绪")
+			return fmt.Errorf("%s", i18n.T(p.lang(), "plugin.style_watch.not_ready", "文风观察尚未就绪"))
 		}
 		p.statsMu.Lock()
 		p.st = stats{}
@@ -47,15 +48,15 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 		snap, seq := p.st.clone(), p.seq
 		p.statsMu.Unlock()
 		p.persist(s.dir, snap, seq)
-		p.setAction(key, plugin.ActionState{Status: plugin.ActionDone, Message: "已清空全部统计。"})
+		p.setAction(key, plugin.ActionState{Status: plugin.ActionDone, Message: i18n.T(p.lang(), "plugin.style_watch.cleared", "已清空全部统计。")})
 		return nil
 	}
-	return fmt.Errorf("未知的操作 %q", key)
+	return plugin.UnknownAction(p.lang(), key)
 }
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionReport && key != actionClear {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.lang(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()

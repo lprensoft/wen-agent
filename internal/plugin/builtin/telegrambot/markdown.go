@@ -2,6 +2,8 @@ package telegrambot
 
 import (
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // Telegram 的 MarkdownV2 与通常的 markdown 不是一回事：加粗是单个 *，斜体是单个 _，
@@ -45,7 +47,7 @@ func escapeURL(s string) string {
 const hrLine = "──────────"
 
 // toMarkdownV2 把模型输出的 markdown 翻成 Telegram 的 MarkdownV2。
-func toMarkdownV2(text string) string {
+func toMarkdownV2(lang, text string) string {
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	inCode := false
@@ -69,7 +71,7 @@ func toMarkdownV2(text string) string {
 			continue
 		}
 
-		out = append(out, convertLine(line))
+		out = append(out, convertLine(lang, line))
 	}
 	// 未闭合的代码块自己补上，否则 Telegram 会因为围栏不成对整条拒收
 	if inCode {
@@ -79,7 +81,7 @@ func toMarkdownV2(text string) string {
 }
 
 // convertLine 处理一个非代码块行的行级语法，再把余下内容交给行内转换。
-func convertLine(line string) string {
+func convertLine(lang, line string) string {
 	trimmed := strings.TrimSpace(line)
 
 	// 分隔线
@@ -101,16 +103,16 @@ func convertLine(line string) string {
 	if strings.HasPrefix(trimmed, ">") {
 		body := strings.TrimPrefix(trimmed, ">")
 		body = strings.TrimPrefix(body, " ")
-		return ">" + convertInline(body)
+		return ">" + convertInline(lang, body)
 	}
 
 	// 无序列表：换成不需要转义的圆点，缩进保留
 	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 	if body, ok := splitBullet(trimmed); ok {
-		return indent + "• " + convertInline(body)
+		return indent + "• " + convertInline(lang, body)
 	}
 
-	return indent + convertInline(strings.TrimLeft(line, " \t"))
+	return indent + convertInline(lang, strings.TrimLeft(line, " \t"))
 }
 
 func isHR(s string) bool {
@@ -162,7 +164,7 @@ func stripEmphasis(s string) string {
 //
 // 刻意不认下划线斜体（_x_）：snake_case 的标识符在技术对话里遍地都是，认了以后
 // 半句话会莫名其妙变成斜体，还可能因为找不到配对而破坏整条消息。
-func convertInline(s string) string {
+func convertInline(lang, s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 32)
 	r := []rune(s)
@@ -179,7 +181,7 @@ func convertInline(s string) string {
 			// 图片降级成链接：Telegram 的文本消息不渲染 markdown 图片
 			if text, url, next, ok := matchLink(r, i+1); ok {
 				if text == "" {
-					text = "图片"
+					text = i18n.T(lang, "plugin.telegram_bot.md.image", "图片")
 				}
 				b.WriteString("[" + escapeMDV2(text) + "](" + escapeURL(url) + ")")
 				i = next

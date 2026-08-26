@@ -16,7 +16,9 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 	"wen/internal/skillroots"
 )
 
@@ -33,6 +35,7 @@ type Plugin struct {
 	// mu 保护下面这一组：Init 会在运行时被重复调用（改配置即重新 Init），
 	// 而那时可能有 in-flight 的 Execute 正在读它们。
 	mu       sync.RWMutex
+	lang     string // 进程语言。清单在扫描时就渲染好，语言随之定死
 	dir      string
 	maxList  int
 	maxBytes int
@@ -100,18 +103,21 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if own {
 		// 没有可用的持久化位置时拒绝启用，不退化到写进程当前目录
 		if ictx.StateDir == "" {
-			return fmt.Errorf("没有可用的技能目录，请在配置里指定一个")
+			return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.skills.no_dir",
+				"没有可用的技能目录，请在配置里指定一个"))
 		}
 		dir = ictx.StateDir
 		// 默认目录归本插件所有，先建出来，用户才知道该往哪放文件
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("创建技能目录失败: %w", err)
+			return fmt.Errorf(i18n.T(ictx.Lang, "plugin.skills.err.mkdir",
+				"创建技能目录失败: %w"), err)
 		}
 	}
 	// 用户自己指定的目录不代建：路径打错时「目录不存在」是有用的反馈，
 	// 而默默建一个空目录只会让人对着它纳闷技能为什么没加载。
 
 	p.mu.Lock()
+	p.lang = ictx.Lang
 	p.dir = dir
 	p.maxList = plugin.CfgInt(cfg, "max_list", defaultMaxList)
 	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
@@ -148,7 +154,7 @@ func (p *Plugin) rescan() {
 	defer p.scanMu.Unlock()
 
 	p.mu.RLock()
-	dir, maxList := p.dir, p.maxList
+	lang, dir, maxList := p.lang, p.dir, p.maxList
 	p.mu.RUnlock()
 
 	var merged scanResult
@@ -158,7 +164,8 @@ func (p *Plugin) rescan() {
 		for _, s := range res.skills {
 			if from, dup := seen[s.Name]; dup {
 				merged.problems = append(merged.problems,
-					fmt.Sprintf("%s：与%s里的同名技能重复，已跳过", s.Name, from))
+					i18n.Tf(lang, "plugin.skills.problem.duplicate",
+						"%s：与%s里的同名技能重复，已跳过", s.Name, from))
 				continue
 			}
 			seen[s.Name] = label
@@ -172,27 +179,28 @@ func (p *Plugin) rescan() {
 		}
 	}
 
-	own := scan(dir, maxDescRunes)
+	own := scan(lang, dir, maxDescRunes)
 	merged.missing = own.missing
-	take("技能目录", own)
+	take(i18n.T(lang, "plugin.skills.source.own", "技能目录"), own)
 	for _, r := range skillroots.List() {
-		take("插件包 "+r.Label, scan(r.Dir, maxDescRunes))
+		take(i18n.Tf(lang, "plugin.skills.source.bundle", "插件包 %s", r.Label),
+			scan(lang, r.Dir, maxDescRunes))
 	}
 
 	p.mu.Lock()
-	p.apply(merged, maxList)
+	p.apply(lang, merged, maxList)
 	p.mu.Unlock()
 }
 
 // apply 写入一次扫描结果并重新渲染清单。调用者须持有写锁。
-func (p *Plugin) apply(res scanResult, maxList int) {
+func (p *Plugin) apply(lang string, res scanResult, maxList int) {
 	p.list = res.skills
 	p.problems = res.problems
 	p.index = make(map[string]skill, len(res.skills))
 	for _, s := range res.skills {
 		p.index[s.Name] = s
 	}
-	p.prompt = renderPrompt(res.skills, maxList)
+	p.prompt = renderPrompt(lang, res.skills, maxList)
 }
 
 // SystemPrompt 返回常驻清单。它只读一份渲染好的快照——按契约必须廉价无副作用，
@@ -203,24 +211,37 @@ func (p *Plugin) SystemPrompt() string {
 	return p.prompt
 }
 
-func (p *Plugin) StatusLines() []string {
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
+
+func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.dir == "" {
 		return nil
 	}
-	line := fmt.Sprintf("📚 技能：已加载 %d 个", len(p.list))
+	line := i18n.Tf(lang, "plugin.skills.status.loaded", "📚 技能：已加载 %d 个", len(p.list))
 	if n := len(skillroots.List()); n > 0 {
-		line += fmt.Sprintf("（含 %d 个插件包）", n)
+		line += i18n.Tf(lang, "plugin.skills.status.bundles", "（含 %d 个插件包）", n)
 	}
 	if n := len(p.problems); n > 0 {
-		line += fmt.Sprintf("，%d 个未能加载", n)
+		line += i18n.Tf(lang, "plugin.skills.status.failed", "，%d 个未能加载", n)
 	}
 	return []string{line + "（" + p.dir + "）"}
 }
 
+// listHeaderZH 领起常驻清单。整段一个键：抬头与那句用法说明是一体的，
+// 拆开翻译容易出现「抬头译了、说明没译」的半截状态。
+const listHeaderZH = `[可用技能]
+以下是已安装的技能手册，每条只给出名称与用途。着手一件事之前先扫一眼这份清单：与某条用途相符时，用 read_skill 读出它的完整步骤再动手，不要凭名称猜里面写了什么；都不相符就照常处理，不必读取。
+`
+
 // renderPrompt 渲染常驻清单；一个技能都没有时返回空串，不注入任何东西。
-func renderPrompt(list []skill, maxList int) string {
+func renderPrompt(lang string, list []skill, maxList int) string {
 	if len(list) == 0 {
 		return ""
 	}
@@ -229,16 +250,14 @@ func renderPrompt(list []skill, maxList int) string {
 		shown = shown[:maxList]
 	}
 	var b strings.Builder
-	b.WriteString("[可用技能]\n")
-	b.WriteString("以下是已安装的技能手册，每条只给出名称与用途。着手一件事之前先扫一眼这份清单：" +
-		"与某条用途相符时，用 read_skill 读出它的完整步骤再动手，不要凭名称猜里面写了什么；" +
-		"都不相符就照常处理，不必读取。\n")
+	b.WriteString(prompt.T(lang, "prompt.skills.list_header", listHeaderZH))
 	for _, s := range shown {
 		fmt.Fprintf(&b, "- %s：%s\n", s.Name, s.Desc)
 	}
 	// 超限时降级要保住「还有东西存在」这个信息，而不是让它们静默消失
 	if n := len(list) - len(shown); n > 0 {
-		fmt.Fprintf(&b, "另有 %d 个技能未在此列出，用 list_skills 可看到完整清单。\n", n)
+		b.WriteString(prompt.Tf(lang, "prompt.skills.list_more",
+			"另有 %d 个技能未在此列出，用 list_skills 可看到完整清单。\n", n))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // ManifestFile 是插件包根目录下那份必需的清单。
@@ -66,31 +68,32 @@ var validPluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*[a-z0-9]$|^[a-z0-9
 // 返回的 warnings 是「不影响加载但该让人知道」的事（未知字段、extensions 不是
 // 对象）；返回 error 才表示这个插件包不能用。两者的界线由标准划定，不是本实现
 // 的取舍：schema 不认识、name 不合法是致命的，其余一律往下走。
-func ParseManifest(data []byte) (Manifest, []string, error) {
+func ParseManifest(lang string, data []byte) (Manifest, []string, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return Manifest{}, nil, fmt.Errorf("%s 不是合法的 JSON：%w", ManifestFile, err)
+		return Manifest{}, nil, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.manifest_json", "%s 不是合法的 JSON：%w"), ManifestFile, err)
 	}
 
 	var warnings []string
 	for k := range raw {
 		if !knownFields[k] {
-			warnings = append(warnings, fmt.Sprintf("%s 里有标准未定义的字段 %q，已忽略", ManifestFile, k))
+			warnings = append(warnings, i18n.Tf(lang, "plugin.bundle.warn.unknown_field",
+				"%s 里有标准未定义的字段 %q，已忽略", ManifestFile, k))
 		}
 	}
 
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return Manifest{}, warnings, fmt.Errorf("%s 的字段类型不对：%w", ManifestFile, err)
+		return Manifest{}, warnings, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.manifest_types", "%s 的字段类型不对：%w"), ManifestFile, err)
 	}
 
 	if m.Schema == "" {
-		return Manifest{}, warnings, fmt.Errorf("%s 里缺少 $schema", ManifestFile)
+		return Manifest{}, warnings, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.no_schema", "%s 里缺少 $schema"), ManifestFile)
 	}
 	if m.Schema != SchemaURL {
-		return Manifest{}, warnings, fmt.Errorf("不支持的 $schema %q（本程序支持 %s）", m.Schema, SchemaURL)
+		return Manifest{}, warnings, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.bad_schema", "不支持的 $schema %q（本程序支持 %s）"), m.Schema, SchemaURL)
 	}
-	if err := checkName(m.Name); err != nil {
+	if err := checkName(lang, m.Name); err != nil {
 		return Manifest{}, warnings, err
 	}
 
@@ -99,7 +102,7 @@ func ParseManifest(data []byte) (Manifest, []string, error) {
 	if len(m.Extensions) > 0 {
 		var probe map[string]json.RawMessage
 		if json.Unmarshal(m.Extensions, &probe) != nil {
-			warnings = append(warnings, "extensions 不是对象，已忽略")
+			warnings = append(warnings, i18n.T(lang, "plugin.bundle.warn.bad_extensions", "extensions 不是对象，已忽略"))
 			m.Extensions = nil
 		}
 	}
@@ -107,12 +110,12 @@ func ParseManifest(data []byte) (Manifest, []string, error) {
 }
 
 // checkName 按标准校验插件名。
-func checkName(name string) error {
+func checkName(lang, name string) error {
 	switch {
 	case name == "":
-		return fmt.Errorf("%s 里缺少 name", ManifestFile)
+		return fmt.Errorf(i18n.T(lang, "plugin.bundle.err.no_name", "%s 里缺少 name"), ManifestFile)
 	case len(name) > 64:
-		return fmt.Errorf("插件名 %q 超过 64 个字符", name)
+		return fmt.Errorf(i18n.T(lang, "plugin.bundle.err.name_long", "插件名 %q 超过 64 个字符"), name)
 	case !validPluginName.MatchString(name):
 		return fmt.Errorf("插件名 %q 不合法（只允许小写字母、数字、连字符与点，且首尾必须是字母或数字）", name)
 	case strings.Contains(name, "--"), strings.Contains(name, ".."):

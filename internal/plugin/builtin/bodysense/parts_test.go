@@ -6,7 +6,7 @@ import (
 )
 
 func TestParsePartsDefaults(t *testing.T) {
-	parts, err := parseParts(defaultPartsDaily, defaultPartsClose, defaultPartsIntimate, defaultPartsPrivate)
+	parts, err := parseParts("", defaultPartsDaily, defaultPartsClose, defaultPartsIntimate, defaultPartsPrivate)
 	if err != nil {
 		t.Fatalf("默认部位表应当合法: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestParsePartsDefaults(t *testing.T) {
 }
 
 func TestParsePartsSkipsBlankLines(t *testing.T) {
-	parts, err := parseParts("手\n\n  \n肩\r\n", "", "", "")
+	parts, err := parseParts("", "手\n\n  \n肩\r\n", "", "", "")
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestParsePartsRejects(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := parseParts(c.daily, c.close, c.intimate, c.private)
+			_, err := parseParts("", c.daily, c.close, c.intimate, c.private)
 			if err == nil {
 				t.Fatalf("期望报错，实际通过")
 			}
@@ -66,7 +66,7 @@ func TestParsePartsRejects(t *testing.T) {
 // 校验失败必须是 error 而不是「跳过并记日志」：SetConfig 会把 Init 的错误回给设置页，
 // 只记日志的话用户会以为那一行生效了。
 func TestParsePartsErrorNamesTheOffendingGroup(t *testing.T) {
-	_, err := parseParts("", "", "腰", "腰")
+	_, err := parseParts("", "", "", "腰", "腰")
 	if err == nil {
 		t.Fatal("期望报错")
 	}

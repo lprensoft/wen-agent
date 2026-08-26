@@ -2,12 +2,12 @@ package roleplay
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 失败转译：模型调用失败（最常见的是内容被提供商安全策略拦截）时，不把厂商的
@@ -25,7 +25,7 @@ const (
 	failureLineMaxRunes = 120
 )
 
-const failurePrompt = `下面是一段角色设定：
+const failurePromptZH = `下面是一段角色设定：
 
 %s
 
@@ -47,7 +47,7 @@ func (p *Plugin) TranslateFailure(ctx context.Context, ev plugin.TurnFailure) (s
 		cctx, cancel := context.WithTimeout(ctx, failureCompleteTimeout)
 		defer cancel()
 		// 失败原因刻意不进提示词：拦截类失败把原文回传给同一个后端只会再被拦一次。
-		out, err := s.complete(cctx, fmt.Sprintf(failurePrompt, s.persona))
+		out, err := s.complete(cctx, prompt.Tf(s.lang, "prompt.roleplay.failure_prompt", failurePromptZH, s.persona))
 		if err == nil {
 			if line := clipLine(out); line != "" {
 				return line, true

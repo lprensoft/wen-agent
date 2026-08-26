@@ -16,14 +16,19 @@ import (
 const StoreDirName = "bundles"
 
 // Store 是已安装插件包的存放处。
-type Store struct{ dir string }
+// Store 是插件包的存放处。lang 决定它产生的报错与提示用哪门语言——装包与列表
+// 都会说话，而这些话最终出现在 wen plugins 的输出与设置页的安装窗里。
+type Store struct {
+	lang string
+	dir  string
+}
 
 // NewStore 按配置目录定位存放处。目录可能不存在，由写入方按需创建。
-func NewStore(baseDir string) *Store {
+func NewStore(lang, baseDir string) *Store {
 	if baseDir == "" {
-		return &Store{}
+		return &Store{lang: lang}
 	}
-	return &Store{dir: filepath.Join(baseDir, StoreDirName)}
+	return &Store{lang: lang, dir: filepath.Join(baseDir, StoreDirName)}
 }
 
 // Dir 返回存放目录；为空表示当前没有可用的位置（没有配置目录）。
@@ -54,13 +59,14 @@ func (s *Store) List() ([]*Bundle, []string) {
 		return nil, []string{fmt.Sprintf("读取插件包目录失败：%v", err)}
 	}
 
+	lang := s.lang
 	var bundles []*Bundle
 	var problems []string
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue // 点开头的是我们自己的东西（工具清单缓存）与版本控制目录，不是插件包
 		}
-		b, err := Load(filepath.Join(s.dir, e.Name()))
+		b, err := Load(lang, filepath.Join(s.dir, e.Name()))
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s：%v", e.Name(), err))
 			continue
@@ -77,7 +83,7 @@ func (s *Store) List() ([]*Bundle, []string) {
 
 // Remove 删除一个已安装的插件包。
 func (s *Store) Remove(name string) error {
-	if err := checkName(name); err != nil {
+	if err := checkName(s.lang, name); err != nil {
 		return err
 	}
 	path := s.Path(name)

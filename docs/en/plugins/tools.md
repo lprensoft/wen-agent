@@ -4,7 +4,7 @@
 
 ## Basic tools (read_file / web_fetch plugins)
 
-Two plugins with little to say about them, listed here only for completeness. Both are enabled by default.
+Two plugins with little to say about them, listed here only for completeness. `web_fetch` is on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it.
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
 - **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size.
@@ -17,7 +17,7 @@ Two plugins with little to say about them, listed here only for completeness. Bo
 
 ## How command execution is kept safe (exec_command plugin)
 
-This tool hands an arbitrary string to `cmd /C` or `sh -c`, which makes it the one place in the system capable of irreversible damage. The approach taken here is **intercept before executing and ask a human**, not a sandbox.
+This tool hands an arbitrary string to `cmd /C` or `sh -c`, which makes it the one place in the system capable of irreversible damage. **It is off by default** — you want it when you are using this as an agent that does work for you, which is not what it should be out of the box; turn it on from the settings page, where it is a visible choice. Once on, the approach taken is **intercept before executing and ask a human**, not a sandbox.
 
 **Why not a sandbox.** A shell has `&&`, `|`, variable expansion, `for /f`, base64 decoding, UNC paths, `..\..` — working out "which files will this touch" by analysing the command text simply cannot be done. A path restriction that can be trivially bypassed is worse than none, because people trust it. Real isolation has to come from the operating system (containers / seccomp / AppContainer), and that conflicts with the whole point of this tool — running builds, tests and git in a real working directory. You would have to put the toolchain, the network and your git credentials inside, and once you have, nothing is isolated any more. What actually prevents an accidental deletion is **a human looking at the `rm -rf` before it runs**, and only a human can judge intent.
 

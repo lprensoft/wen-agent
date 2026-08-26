@@ -147,7 +147,7 @@ func TestCountsInteractiveAndBackgroundSeparately(t *testing.T) {
 		}
 	}
 
-	line := p.StatusLines()[0]
+	line := p.StatusLines("")[0]
 	for _, want := range []string{"✍️ 文风：今日 2 轮", "助手腔 2 次", "客套开场 1", "客套收尾 1", "均长", "演绎占", "后台 1 轮 2 次"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("状态行缺 %q：%s", want, line)
@@ -157,7 +157,7 @@ func TestCountsInteractiveAndBackgroundSeparately(t *testing.T) {
 
 func TestStatusLineWithoutData(t *testing.T) {
 	p := newTestPlugin(t, t.TempDir(), nil, nil)
-	if got := p.StatusLines(); len(got) != 1 || got[0] != "✍️ 文风：今日尚无数据" {
+	if got := p.StatusLines(""); len(got) != 1 || got[0] != "✍️ 文风：今日尚无数据" {
 		t.Errorf("状态行 = %v", got)
 	}
 }
@@ -202,7 +202,7 @@ func TestNoticeCarriesScopeAndIsClipped(t *testing.T) {
 }
 
 func TestRenderNoticeMergesByRule(t *testing.T) {
-	got := renderNotice([]stylecheck.Hit{
+	got := renderNotice("", []stylecheck.Hit{
 		{Rule: "emoji", Label: "emoji", Snippet: "😊"},
 		{Rule: "md_bold", Label: "加粗", Snippet: "**重点**"},
 		{Rule: "emoji", Label: "emoji", Snippet: "😂"},
@@ -266,7 +266,7 @@ func TestReportAndActions(t *testing.T) {
 	if err := p.StartAction(context.Background(), actionClear); err != nil {
 		t.Fatal(err)
 	}
-	if got := p.StatusLines()[0]; got != "✍️ 文风：今日尚无数据" {
+	if got := p.StatusLines("")[0]; got != "✍️ 文风：今日尚无数据" {
 		t.Errorf("清空后状态行 = %q", got)
 	}
 	if fresh := newTestPlugin(t, dir, nil, nil); len(fresh.st.Days) != 0 {
@@ -286,7 +286,7 @@ func TestConfigFieldListsRules(t *testing.T) {
 		}
 	}
 	for _, r := range stylecheck.Rules() {
-		if !strings.Contains(desc, r.ID+"（"+r.Label+"）") {
+		if !strings.Contains(desc, r.ID+"（"+r.Label.ZH()+"）") {
 			t.Errorf("配置说明缺规则 %s", r.ID)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 //
 // Go 给自己打开的每个文件描述符都置了 CLOEXEC，监听套接字因此在 exec 的瞬间自动关闭；
 // 但调用方仍应先做完优雅关闭——不然正在处理的请求会被硬断。
-func Relaunch(exe string, args []string) error {
+func Relaunch(lang, exe string, args []string) error {
 	argv := append([]string{exe}, args...)
 	return syscall.Exec(exe, argv, os.Environ())
 }

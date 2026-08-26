@@ -5,6 +5,8 @@ package updater
 import (
 	"fmt"
 	"os"
+
+	"wen/internal/i18n"
 )
 
 // Apply 把新二进制换到 exe 的位置。
@@ -14,14 +16,14 @@ import (
 // rename 本身是原子的，因此不需要先备份再回滚——它要么成了，要么原样没动。
 //
 // 权限沿用原文件：包里出来的是 0755，而用户可能特意收窄过（比如 0750）。
-func Apply(newBin, exe string) error {
+func Apply(lang, newBin, exe string) error {
 	if fi, err := os.Stat(exe); err == nil {
 		if err := os.Chmod(newBin, fi.Mode().Perm()); err != nil {
-			return fmt.Errorf("设置权限失败: %w", err)
+			return fmt.Errorf(i18n.T(lang, "updater.err.chmod", "设置权限失败: %w"), err)
 		}
 	}
 	if err := os.Rename(newBin, exe); err != nil {
-		return fmt.Errorf("替换程序文件失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.replace", "替换程序文件失败: %w"), err)
 	}
 	return nil
 }

@@ -2,9 +2,11 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
+	"wen/internal/prompt"
 )
 
 // 工具循环护栏。
@@ -26,8 +28,36 @@ const (
 	maxGuardHits = 3
 )
 
-// errToolLoop 是护栏最终放弃时的错误。措辞面向日志与注记，不面向模型。
-var errToolLoop = fmt.Errorf("同一工具反复调用且不收尾，已结束本轮")
+// errToolLoopZH 是护栏最终放弃时那句话的中文原文。措辞面向日志与注记，不面向模型。
+const errToolLoopZH = "同一工具反复调用且不收尾，已结束本轮"
+
+// errToolLoop 用中文原文建，身份用它比对；给人看的那一份在 toolLoopError 里按语言取。
+var errToolLoop = errors.New(errToolLoopZH)
+
+// toolLoopError 是同一件事按语言说出来的版本，写进会话注记与日志。
+//
+// 它必须仍然能被 errors.Is(err, errToolLoop) 认出来：哨兵存在的意义就是被比对，
+// 换一门语言把它换成一个新错误，比对就静默失效了——那是翻译不该造成的回归。
+func toolLoopError(lang string) error {
+	return &localizedErr{msg: i18n.T(lang, "agent.tool_guard.loop", errToolLoopZH), is: errToolLoop}
+}
+
+// localizedErr 把「给人看的那句话」与「用来比对的身份」分开拿着。
+type localizedErr struct {
+	msg string
+	is  error
+}
+
+func (e *localizedErr) Error() string        { return e.msg }
+func (e *localizedErr) Is(target error) bool { return target == e.is }
+func (e *localizedErr) Unwrap() error        { return e.is }
+
+// 两条拦截回执的中文原文。它们作为工具结果交回模型，因此归提示词语言包。
+const guardDuplicateZH = "这次调用与本轮之前的某一次完全相同，没有执行——同样的参数得到同样的结果。" +
+	"已经做成的事不必重复提交：要改就改不一样的地方，没有要改的就直接给出回复结束本轮。"
+
+const guardTooManyZH = "本轮已经调用过 %s %d 次，这次没有执行。请不要再调用它，" +
+	"直接给出回复结束本轮。"
 
 // toolGuard 是一轮之内的调用记账。零值可用，非并发（工具循环是同步的）。
 type toolGuard struct {
@@ -38,7 +68,7 @@ type toolGuard struct {
 
 // check 判断这次调用要不要拦。返回的字符串非空时表示拦下，它会作为工具结果
 // 交回模型——工具协议要求每个 tool_call 都有对应的结果，拦下也不例外。
-func (g *toolGuard) check(call llm.ToolCall) string {
+func (g *toolGuard) check(lang string, call llm.ToolCall) string {
 	if g.seen == nil {
 		g.seen, g.counts = map[string]bool{}, map[string]int{}
 	}
@@ -46,12 +76,11 @@ func (g *toolGuard) check(call llm.ToolCall) string {
 	switch {
 	case g.seen[key]:
 		g.hits++
-		return "这次调用与本轮之前的某一次完全相同，没有执行——同样的参数得到同样的结果。" +
-			"已经做成的事不必重复提交：要改就改不一样的地方，没有要改的就直接给出回复结束本轮。"
+		return prompt.T(lang, "prompt.core.tool_guard.duplicate", guardDuplicateZH)
 	case g.counts[call.Name] >= maxSameTool:
 		g.hits++
-		return fmt.Sprintf("本轮已经调用过 %s %d 次，这次没有执行。请不要再调用它，"+
-			"直接给出回复结束本轮。", call.Name, g.counts[call.Name])
+		return prompt.Tf(lang, "prompt.core.tool_guard.too_many", guardTooManyZH,
+			call.Name, g.counts[call.Name])
 	}
 	g.seen[key] = true
 	g.counts[call.Name]++

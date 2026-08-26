@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -17,19 +18,19 @@ import (
 //
 // 版面刻意压得紧：模型与思考深度同行，上下文窗口并进会话那一行——
 // 窗口大小单独占一行时，读的人还得自己拿它和用量做除法，而占用比例本来就在旁边。
-func Render(info plugin.StatusInfo, sessionID string) string {
+func Render(lang string, info plugin.StatusInfo, sessionID string) string {
 	lines := []string{
-		header(info.Version),
-		fmt.Sprintf("模型：%s / %s · 思考深度 %s", info.Provider, info.Model, info.Thinking),
-		sessionLine(info),
+		header(lang, info.Version),
+		i18n.Tf(lang, "status.model", "模型：%s / %s · 思考深度 %s", info.Provider, info.Model, info.Thinking),
+		sessionLine(lang, info),
 	}
 	if info.HasSession {
-		if line := CacheLine(info); line != "" {
+		if line := CacheLine(lang, info); line != "" {
 			lines = append(lines, line)
 		}
 		if sessionID != "" {
 			// 会话 ID 便于用 read_session / read_archive 定位这次对话
-			lines = append(lines, "会话 ID："+sessionID)
+			lines = append(lines, i18n.Tf(lang, "status.session_id", "会话 ID：%s", sessionID))
 		}
 	}
 	lines = append(lines, info.PluginLines...) // 插件贡献的状态行，按注册顺序
@@ -37,40 +38,40 @@ func Render(info plugin.StatusInfo, sessionID string) string {
 }
 
 // header 是首行：带上程序版本号。
-func header(version string) string {
+func header(lang, version string) string {
 	if version == "" {
-		return "📊 Agent 状态"
+		return i18n.T(lang, "status.header.plain", "📊 Agent 状态")
 	}
-	return "📊 Wen Agent " + version
+	return i18n.Tf(lang, "status.header", "📊 Wen Agent %s", version)
 }
 
 // sessionLine 把「用了多少 / 一共多少 / 占多少」放进一行。
 // 实测值不加标注，估算值前缀「约」——区别只在这一个字上，不必再写「（估算）」。
-func sessionLine(info plugin.StatusInfo) string {
+func sessionLine(lang string, info plugin.StatusInfo) string {
 	if !info.HasSession {
-		return fmt.Sprintf("当前会话：无（上下文窗口 %s tokens）", Comma(info.ContextLength))
+		return i18n.Tf(lang, "status.session.none", "当前会话：无（上下文窗口 %s tokens）", Comma(info.ContextLength))
 	}
 	used, prefix := info.MeasuredTokens, ""
 	if used < 0 {
-		used, prefix = info.EstTokens, "约 "
+		used, prefix = info.EstTokens, i18n.T(lang, "status.approx", "约 ")
 	}
-	return fmt.Sprintf("当前会话：%d 条消息，%s%s / %s tokens（占用 %s%%）",
+	return i18n.Tf(lang, "status.session", "当前会话：%d 条消息，%s%s / %s tokens（占用 %s%%）",
 		info.MessageCount, prefix, Comma(used), Comma(info.ContextLength), Pct(used, info.ContextLength))
 }
 
 // CacheLine 给出提示词缓存那一行，本轮没用上缓存时返回空串。
-func CacheLine(info plugin.StatusInfo) string {
+func CacheLine(lang string, info plugin.StatusInfo) string {
 	if info.CachedTokens <= 0 && info.CacheWriteTokens <= 0 {
 		return ""
 	}
-	s := "提示词缓存：命中 " + Comma(info.CachedTokens)
+	s := i18n.Tf(lang, "status.cache", "提示词缓存：命中 %s", Comma(info.CachedTokens))
 	if info.CacheWriteTokens > 0 {
-		s += " / 写入 " + Comma(info.CacheWriteTokens)
+		s += i18n.Tf(lang, "status.cache.write", " / 写入 %s", Comma(info.CacheWriteTokens))
 	}
 	s += " tokens"
 	if info.PromptTokens > 0 {
 		// MeasuredTokens 含输出，不能拿来当分母
-		s += "（占本轮输入 " + Pct(info.CachedTokens, info.PromptTokens) + "%）"
+		s += i18n.Tf(lang, "status.cache.share", "（占本轮输入 %s%%）", Pct(info.CachedTokens, info.PromptTokens))
 	}
 	return s
 }

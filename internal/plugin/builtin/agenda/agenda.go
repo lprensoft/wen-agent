@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/people"
 )
@@ -33,6 +34,8 @@ const (
 // 保护，重入时先停掉上一轮时钟再起新的。
 type Plugin struct {
 	mu sync.RWMutex
+
+	lang string // 进程语言，注入片段、工具文本与状态行据此取用
 
 	lookup people.Lookup // 人物库的只读查询，经构造函数注入，不走任何核心机制
 
@@ -155,10 +158,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 应用配置，重建忙碌状态并（重）启动时钟。可重入：先停掉上一轮。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存日程")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.agenda.no_state_dir",
+			"没有可用的持久化目录，无法保存日程"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("当前环境不支持会话查询")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.agenda.no_sessions", "当前环境不支持会话查询"))
 	}
 
 	p.Stop() // 重入：先停上一轮时钟，避免两套并行
@@ -169,6 +173,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "agenda")
 	p.autoPlan = plugin.CfgBool(cfg, "auto_plan", true)
 	p.runActivities = plugin.CfgBool(cfg, "run_activities", true)
@@ -238,10 +243,19 @@ func (p *Plugin) Tools() []plugin.Tool {
 }
 
 // SystemPrompt 注入维护判据，全部为静态内容；表与约定本体走 TurnPrompt。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
+
+// langOf 取进程语言。SystemPrompt 与 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // settings 是一次调用期间使用的配置快照：SetConfig 会在运行时重新 Init，而工具可能正在执行。
 type settings struct {
+	lang            string
 	base            string
 	autoPlan        bool
 	runActivities   bool
@@ -260,6 +274,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:            p.lang,
 		base:            p.base,
 		autoPlan:        p.autoPlan,
 		runActivities:   p.runActivities,
@@ -300,7 +315,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -385,7 +400,7 @@ func (p *Plugin) rebuildAvailabilityLocked() {
 	var best *Item
 	var bestLvl availability.Level
 	for _, tag := range plugin.ReadDomains(p.base, plugin.Scope{}) {
-		pl, err := NewStore(plugin.DomainDir(p.base, tag)).LoadPlan()
+		pl, err := NewStore(p.lang, plugin.DomainDir(p.base, tag)).LoadPlan()
 		if err != nil || pl.Date != day.Format(dateLayout) {
 			continue
 		}
@@ -413,7 +428,7 @@ func (p *Plugin) rebuildAvailabilityLocked() {
 
 // StatusLines 报一行今天的进度。共享域的表带活动名；只有按人格分开的表时只报条数——
 // 状态输出会被转发到各条消息通道，哪一面的活动名都不该出现在另一面的窗口里。
-func (p *Plugin) StatusLines() []string {
+func (p *Plugin) StatusLines(lang string) []string {
 	s := p.snapshot()
 	if s.base == "" {
 		return nil
@@ -423,7 +438,8 @@ func (p *Plugin) StatusLines() []string {
 	today := day.Format(dateLayout)
 
 	if pl, err := p.storeFor("").LoadPlan(); err == nil && pl.Date == today {
-		return []string{"📅 日程：" + statusText(pl, day, now, s.dayStartHour)}
+		return []string{i18n.Tf(lang, "plugin.agenda.status.line", "📅 日程：%s",
+			statusText(lang, pl, day, now, s.dayStartHour))}
 	}
 	total, done := 0, 0
 	for _, tag := range p.allDomains() {
@@ -445,13 +461,14 @@ func (p *Plugin) StatusLines() []string {
 		}
 	}
 	if total > 0 {
-		return []string{fmt.Sprintf("📅 日程：今天 %d 项，已完成 %d（按人格分开的表）", total, done)}
+		return []string{i18n.Tf(lang, "plugin.agenda.status.split",
+			"📅 日程：今天 %d 项，已完成 %d（按人格分开的表）", total, done)}
 	}
-	return []string{"📅 日程：今天尚未排表"}
+	return []string{i18n.T(lang, "plugin.agenda.status.unplanned", "📅 日程：今天尚未排表")}
 }
 
 // statusText 写一张表的进度：`此刻 和林舟在图书馆查资料（到 16:30）；今天 3 项，已完成 1`。
-func statusText(pl Plan, day, now time.Time, dayStartHour int) string {
+func statusText(lang string, pl Plan, day, now time.Time, dayStartHour int) string {
 	total, done := 0, 0
 	var cur, next *Item
 	for i := range pl.Items {
@@ -472,14 +489,14 @@ func statusText(pl Plan, day, now time.Time, dayStartHour int) string {
 		}
 	}
 	if total == 0 {
-		return "今天没有安排"
+		return i18n.T(lang, "plugin.agenda.status.nothing", "今天没有安排")
 	}
-	head := "空闲"
+	head := i18n.T(lang, "plugin.agenda.status.free", "空闲")
 	switch {
 	case cur != nil:
-		head = fmt.Sprintf("此刻 %s（到 %s）", cur.Title, cur.End)
+		head = i18n.Tf(lang, "plugin.agenda.status.now", "此刻 %s（到 %s）", cur.Title, cur.End)
 	case next != nil:
-		head = fmt.Sprintf("空闲，下一项 %s", next.Start)
+		head = i18n.Tf(lang, "plugin.agenda.status.free_next", "空闲，下一项 %s", next.Start)
 	}
-	return fmt.Sprintf("%s；今天 %d 项，已完成 %d", head, total, done)
+	return i18n.Tf(lang, "plugin.agenda.status.progress", "%s；今天 %d 项，已完成 %d", head, total, done)
 }

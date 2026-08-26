@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // maxActRunes 限制「方式」的长度。这个字段由模型写入，又逐轮进 system 消息，
@@ -36,14 +38,16 @@ type Touch struct {
 // 跨进程并发（两个实例指向同一配置目录）会丢更新，与 scene / memory 一样，
 // 不为此自造文件锁。
 type Store struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
 	dir  string
 	path string
 }
 
 // NewStore 建立指向 <dir>/body.json 的记录库。
-func NewStore(dir string) *Store {
-	return &Store{dir: dir, path: filepath.Join(dir, "body.json")}
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, dir: dir, path: filepath.Join(dir, "body.json")}
 }
 
 // List 返回全部有记录的部位，按首次记录的顺序。文件不存在时返回空列表。
@@ -59,11 +63,11 @@ func (s *Store) load() ([]PartState, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("读取接触记录失败: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.read_failed", "读取接触记录失败: %w"), err)
 	}
 	var states []PartState
 	if err := json.Unmarshal(raw, &states); err != nil {
-		return nil, fmt.Errorf("接触记录文件损坏: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.corrupt", "接触记录文件损坏: %w"), err)
 	}
 	return states, nil
 }
@@ -118,7 +122,7 @@ func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("清空接触记录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.clear_failed", "清空接触记录失败: %w"), err)
 	}
 	return nil
 }
@@ -132,18 +136,18 @@ func (s *Store) save(states []PartState) error {
 	}
 	raw, err := json.MarshalIndent(states, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存接触记录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.save_failed", "保存接触记录失败: %w"), err)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return fmt.Errorf("创建接触记录目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.mkdir_failed", "创建接触记录目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存接触记录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.save_failed", "保存接触记录失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存接触记录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.save_failed", "保存接触记录失败: %w"), err)
 	}
 	return nil
 }

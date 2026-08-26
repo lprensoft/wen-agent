@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang         string // 进程语言，注入片段与工具文本据此取用
 	base         string // 基准心情库目录（= 共享域）
 	decayPerHour int
 	maxDelta     int
@@ -71,7 +74,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把心情散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存心情")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.mood.no_state_dir",
+			"没有可用的持久化目录，无法保存心情"))
 	}
 
 	p.storesMu.Lock()
@@ -80,6 +84,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "mood")
 	p.decayPerHour = plugin.CfgInt(cfg, "decay_per_hour", defaultDecayPerHour)
 	p.maxDelta = plugin.CfgInt(cfg, "max_delta_per_call", defaultMaxDelta)
@@ -92,6 +97,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang         string
 	base         string
 	decayPerHour int
 	maxDelta     int
@@ -101,14 +107,23 @@ type settings struct {
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{base: p.base, decayPerHour: p.decayPerHour, maxDelta: p.maxDelta}
+	return settings{lang: p.lang, base: p.base, decayPerHour: p.decayPerHour, maxDelta: p.maxDelta}
 }
 
 // SystemPrompt 注入调整判据与心情的作用，均为静态内容。
 // 当前心情改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘，
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
 func (p *Plugin) SystemPrompt() string {
-	return guidePrompt + "\n\n" + effectPrompt
+	lang := p.langOf()
+	return guideFor(lang) + "\n\n" + effectFor(lang)
+}
+
+// langOf 取进程语言。SystemPrompt 与 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 // TurnPrompt 注入本轮的当前心情。没有过记录时不注入：提示词里已经写了按平静起算。
@@ -122,7 +137,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	return stateHeader + "\n" + renderState(st), nil
+	return stateHeaderFor(s.lang) + "\n" + renderState(s.lang, st), nil
 }
 
 // ---------- 按可见域分库 ----------
@@ -144,7 +159,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -158,35 +173,36 @@ func (p *Plugin) storeFor(tag string) *Store {
 // ---------- 注入渲染 ----------
 
 // band 按数值给出心情词。分档取绝对值 15 / 40 / 70 三道线，两侧对称。
-func band(v int) string {
+func band(lang string, v int) string {
 	switch {
 	case v <= -70:
-		return "消沉"
+		return prompt.T(lang, "prompt.mood.band.despondent", "消沉")
 	case v <= -40:
-		return "难过"
+		return prompt.T(lang, "prompt.mood.band.sad", "难过")
 	case v <= -15:
-		return "低落"
+		return prompt.T(lang, "prompt.mood.band.down", "低落")
 	case v < 15:
-		return "平静"
+		return prompt.T(lang, "prompt.mood.band.calm", "平静")
 	case v < 40:
-		return "愉快"
+		return prompt.T(lang, "prompt.mood.band.pleased", "愉快")
 	case v < 70:
-		return "开心"
+		return prompt.T(lang, "prompt.mood.band.happy", "开心")
 	default:
-		return "雀跃"
+		return prompt.T(lang, "prompt.mood.band.elated", "雀跃")
 	}
 }
 
 // renderState 渲染一行当前心情。体量固定，不需要预算与降级。
 //
 // 不注入「距上次多久」：回落速率已经把时间编码进数值本身，再报一次间隔是重复的。
-func renderState(st State) string {
+func renderState(lang string, st State) string {
 	if st.Value == 0 {
-		return "此刻：平静。"
+		return prompt.Tf(lang, "prompt.mood.render.now_calm", "此刻：%s。",
+			prompt.T(lang, "prompt.mood.band.calm", "平静"))
 	}
-	out := fmt.Sprintf("此刻：%s（%+d）。", band(st.Value), st.Value)
+	out := prompt.Tf(lang, "prompt.mood.render.now", "此刻：%s（%+d）。", band(lang, st.Value), st.Value)
 	if st.Reason != "" {
-		out += "起因：" + st.Reason + "。"
+		out += prompt.Tf(lang, "prompt.mood.render.cause", "起因：%s。", st.Reason)
 	}
 	return out
 }

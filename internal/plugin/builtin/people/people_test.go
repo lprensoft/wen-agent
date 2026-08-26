@@ -15,7 +15,7 @@ func str(s string) *string { return &s }
 func testLimits() Limits { return Limits{MaxPeople: 3} }
 
 func TestStoreUpsertCreateAndUpdate(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 
 	// 新建必须有关系
@@ -62,7 +62,7 @@ func TestStoreUpsertCreateAndUpdate(t *testing.T) {
 }
 
 func TestStoreErrors(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 	cases := map[string]Update{
 		"空名字":   {Name: "  ", Relation: str("x")},
@@ -93,7 +93,7 @@ func TestStoreErrors(t *testing.T) {
 }
 
 func TestStoreRemove(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	s.Upsert(Update{Name: "林舟", Relation: str("同学")}, time.Now(), testLimits())
 	if _, err := s.Remove("不存在"); err == nil || !strings.Contains(err.Error(), "林舟") {
 		t.Errorf("移除不存在的人应报错并列候选: %v", err)
@@ -118,7 +118,7 @@ func TestAgoText(t *testing.T) {
 		"倒流不标":  now.Add(24 * time.Hour),
 	}
 	for want, at := range cases {
-		got := agoText(at, now)
+		got := agoText("", at, now)
 		if want == "倒流不标" {
 			want = ""
 		}
@@ -134,15 +134,15 @@ func TestRenderDegrade(t *testing.T) {
 		{Name: "林舟", Relation: "大学同学", Closeness: "熟", LastMet: now.AddDate(0, 0, -3), LastNote: "一起吃了晚饭"},
 		{Name: "母亲", Relation: "家人", Closeness: "亲近"},
 	}
-	full := renderPeople(ps, 0, now)
+	full := renderPeople("", ps, 0, now)
 	if !strings.Contains(full, "林舟（大学同学，熟）上次来往 3 天前：一起吃了晚饭") || !strings.HasSuffix(full, "母亲（家人，亲近）") {
 		t.Errorf("全量渲染不对:\n%s", full)
 	}
-	compact := renderPeople(ps, len(full)-1, now)
+	compact := renderPeople("", ps, len(full)-1, now)
 	if compact != "林舟（熟）\n母亲（亲近）" {
 		t.Errorf("第一级降级应只留名字与亲近度: %q", compact)
 	}
-	count := renderPeople(ps, 10, now)
+	count := renderPeople("", ps, 10, now)
 	if !strings.Contains(count, "共 2 人") || !strings.Contains(count, "list_people") {
 		t.Errorf("第二级降级应只报人数: %q", count)
 	}
@@ -194,7 +194,7 @@ func TestToolsRoundTrip(t *testing.T) {
 	}
 
 	tp, err := p.TurnPrompt(ctx, plugin.TurnEvent{})
-	if err != nil || !strings.HasPrefix(tp, stateHeader) || !strings.Contains(tp, "林舟（大学同学，熟）上次来往 今天：一起看了展") {
+	if err != nil || !strings.HasPrefix(tp, stateHeaderFor("")) || !strings.Contains(tp, "林舟（大学同学，熟）上次来往 今天：一起看了展") {
 		t.Errorf("注入块不对: %q, %v", tp, err)
 	}
 	out, _ = call(t, p, ctx, "list_people", `{}`)

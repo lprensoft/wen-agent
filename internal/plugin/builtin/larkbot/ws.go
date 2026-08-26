@@ -3,7 +3,6 @@ package larkbot
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"regexp"
 	"strings"
 
@@ -13,6 +12,8 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
 	"wen/internal/imbot"
+
+	"wen/internal/i18n"
 )
 
 // runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出。
@@ -41,9 +42,9 @@ func (p *Plugin) runWS(ctx context.Context, appID, appSecret, base string) {
 
 	go func() {
 		defer p.wg.Done()
-		log.Printf("%s: 正在建立长连接（%s）", p.Name(), base)
+		i18n.Logf(p.langOf(), "log.lark.connecting", "%s: 正在建立长连接（%s）", p.Name(), base)
 		if err := cli.Start(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
+			i18n.Logf(p.langOf(), "log.lark.disconnected", "%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
 				"并订阅了「接收消息」事件、开通了 im:message 与 im:message:send_as_bot 权限",
 				p.Name(), err)
 		}
@@ -73,11 +74,11 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		return
 	}
 	if ct := deref(msg.ChatType); ct != "p2p" {
-		log.Printf("%s: 忽略非单聊消息（chat_type=%s，仅支持单聊）", p.Name(), ct)
+		i18n.Logf(p.langOf(), "log.lark.group_ignored", "%s: 忽略非单聊消息（chat_type=%s，仅支持单聊）", p.Name(), ct)
 		return
 	}
 
-	text, note := parseContent(deref(msg.MessageType), deref(msg.Content))
+	text, note := parseContent(p.langOf(), deref(msg.MessageType), deref(msg.Content))
 
 	p.mu.Lock()
 	core, ctx := p.core, p.ctx
@@ -97,22 +98,22 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 
 // parseContent 从事件的 content（JSON 字符串）里取出正文。
 // 只认文本与富文本的纯文字部分，其余类型回一句暂不支持。
-func parseContent(msgType, content string) (text, note string) {
+func parseContent(lang, msgType, content string) (text, note string) {
 	switch msgType {
 	case "text":
 		var c struct {
 			Text string `json:"text"`
 		}
 		if err := json.Unmarshal([]byte(content), &c); err != nil {
-			return "", "消息内容解析失败，请重发。"
+			return "", i18n.T(lang, "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。")
 		}
 		text = strings.TrimSpace(mentionRe.ReplaceAllString(c.Text, ""))
 		if text == "" {
-			return "", "没有收到文字内容。"
+			return "", i18n.T(lang, "plugin.lark_bot.msg.no_text", "没有收到文字内容。")
 		}
 		return text, ""
 	default:
-		return "", "暂不支持该消息类型，请发文字。"
+		return "", i18n.T(lang, "plugin.lark_bot.msg.unsupported", "暂不支持该消息类型，请发文字。")
 	}
 }
 

@@ -40,8 +40,8 @@ func runEval(args []string) error {
 		script, args = args[0], args[1:]
 	}
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-	out := fs.String("o", "", "报告写入的文件（默认打到标准输出）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
+	out := fs.String("o", "", tr("cli.eval.flag.out", "报告写入的文件（默认打到标准输出）"))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,16 +49,16 @@ func runEval(args []string) error {
 		script = fs.Arg(0)
 	}
 	if script == "" {
-		return fmt.Errorf("用法: %s", lookup("eval").usage)
+		return fmt.Errorf(tr("cli.eval.usage", "用法: %s"), lookup("eval").usage)
 	}
 
 	raw, err := os.ReadFile(script)
 	if err != nil {
-		return fmt.Errorf("读取脚本失败: %w", err)
+		return fmt.Errorf(tr("cli.eval.err.read_script", "读取脚本失败: %w"), err)
 	}
 	sc, err := parseScript(raw)
 	if err != nil {
-		return fmt.Errorf("脚本 %s: %w", script, err)
+		return fmt.Errorf(tr("cli.eval.err.script", "脚本 %s: %w"), script, err)
 	}
 	if sc.Name == "" {
 		sc.Name = strings.TrimSuffix(filepath.Base(script), filepath.Ext(script))
@@ -66,14 +66,15 @@ func runEval(args []string) error {
 
 	cfg, err := config.Load(config.ResolvePath(*configPath))
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
+	adoptLang(cfg)
 
 	// 一切落盘都进临时目录：会话、记忆库、心情、统计……评测不该在真实数据里留下
 	// 任何痕迹，也不该读到真实的记忆（那会让两次评测的条件不同）。
 	tmp, err := os.MkdirTemp("", "wen-eval-*")
 	if err != nil {
-		return fmt.Errorf("创建临时目录失败: %w", err)
+		return fmt.Errorf(tr("cli.eval.err.tmpdir", "创建临时目录失败: %w"), err)
 	}
 	defer os.RemoveAll(tmp)
 
@@ -96,14 +97,14 @@ func runEval(args []string) error {
 	report := renderEvalReport(res)
 	if *out != "" {
 		if err := os.WriteFile(*out, []byte(report), 0o644); err != nil {
-			return fmt.Errorf("写报告失败: %w", err)
+			return fmt.Errorf(tr("cli.eval.err.write_report", "写报告失败: %w"), err)
 		}
-		fmt.Fprintf(os.Stderr, "报告已写入 %s\n", *out)
+		fmt.Fprint(os.Stderr, trf("cli.eval.report_written", "报告已写入 %s\n", *out))
 	} else {
 		fmt.Print(report)
 	}
 	if res.failed() {
-		return fmt.Errorf("有轮次失败，见报告")
+		return fmt.Errorf("%s", tr("cli.eval.err.had_failure", "有轮次失败，见报告"))
 	}
 	return nil
 }
@@ -137,7 +138,7 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.Fil
 
 	meta, err := rt.store.Create()
 	if err != nil {
-		res.SetupErr = "新建会话失败: " + err.Error()
+		res.SetupErr = trf("cli.eval.err.new_session", "新建会话失败: %s", err.Error())
 		return res
 	}
 	sessionID := meta.ID
@@ -145,22 +146,22 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.Fil
 	turnNo := 0
 	for _, step := range sc.Turns {
 		if ctx.Err() != nil {
-			res.Rows = append(res.Rows, evalRow{Kind: rowSay, Index: turnNo + 1, Err: "已中断"})
+			res.Rows = append(res.Rows, evalRow{Kind: rowSay, Index: turnNo + 1, Err: tr("cli.eval.aborted", "已中断")})
 			break
 		}
 		switch {
 		case step.Say != "":
 			turnNo++
-			say("第 %d 轮：%s", turnNo, clipLine(step.Say, 30))
+			say(tr("cli.eval.say.turn", "第 %d 轮：%s"), turnNo, clipLine(step.Say, 30))
 			row := runSayTurn(plugin.WithInteractive(ctx), rt.agent, sessionID, turnNo, step.Say)
 			res.Rows = append(res.Rows, row.rows...)
 			res.AutoCompactions += row.autoCompactions
 			if row.failed {
-				say("  失败：%s", row.rows[0].Err)
+				say(tr("cli.eval.say.failed", "  失败：%s"), row.rows[0].Err)
 				return res // 后面的轮次建立在这一轮之上，失败了再跑没有意义
 			}
 		case step.Compact:
-			say("压缩…")
+			say("%s", tr("cli.eval.say.compacting", "压缩…"))
 			row := evalRow{Kind: rowCompact}
 			rt.agent.Compact(ctx, sessionID, func(ev agent.Event) {
 				if ev.Type == agent.EventError {
@@ -178,10 +179,10 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.Fil
 	res.Duration = time.Since(res.StartedAt)
 
 	if ctx.Err() != nil {
-		res.Judge.Err = "已中断，未评判"
+		res.Judge.Err = tr("cli.eval.aborted_judge", "已中断，未评判")
 		return res
 	}
-	say("评判中…")
+	say("%s", tr("cli.eval.say.judging", "评判中…"))
 	jctx, cancel := context.WithTimeout(ctx, judgeTimeout)
 	defer cancel()
 	prompt := buildJudgePrompt(res.Persona, res.Samples, res.Rows, sc.JudgePoints)
@@ -231,8 +232,8 @@ func runSayTurn(ctx context.Context, ag *agent.Agent, sessionID string, index in
 	if errText != "" {
 		return sayOutcome{rows: []evalRow{row}, failed: true}
 	}
-	row.Metrics = stylecheck.Measure(row.Reply)
-	row.Hits = stylecheck.Check(row.Reply)
+	row.Metrics = stylecheck.Measure(uiLang, row.Reply)
+	row.Hits = stylecheck.Check(uiLang, row.Reply)
 	out := sayOutcome{rows: []evalRow{row}}
 	if compact {
 		out.rows = append(out.rows, evalRow{Kind: rowAutoCompact})
@@ -285,10 +286,10 @@ func parseScript(raw []byte) (evalScript, error) {
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&sc); err != nil {
-		return sc, fmt.Errorf("不是合法的脚本 JSON: %w", err)
+		return sc, fmt.Errorf(tr("cli.eval.err.bad_json", "不是合法的脚本 JSON: %w"), err)
 	}
 	if len(sc.Turns) == 0 {
-		return sc, fmt.Errorf("turns 为空")
+		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_turns", "turns 为空"))
 	}
 	says := 0
 	for i, st := range sc.Turns {
@@ -302,17 +303,17 @@ func parseScript(raw []byte) (evalScript, error) {
 		}
 		if st.GapHours != 0 {
 			if st.GapHours < 0 {
-				return sc, fmt.Errorf("turns[%d]: gap_hours 不能为负", i)
+				return sc, fmt.Errorf(tr("cli.eval.err.neg_gap", "turns[%d]: gap_hours 不能为负"), i)
 			}
 			n++
 		}
 		if n != 1 {
-			return sc, fmt.Errorf("turns[%d]: 每步只能是 say、compact、gap_hours 之一", i)
+			return sc, fmt.Errorf(tr("cli.eval.err.bad_step", "turns[%d]: 每步只能是 say、compact、gap_hours 之一"), i)
 		}
 		sc.Turns[i].Say = strings.TrimSpace(st.Say)
 	}
 	if says == 0 {
-		return sc, fmt.Errorf("脚本里没有任何一句 say")
+		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_say", "脚本里没有任何一句 say"))
 	}
 	return sc, nil
 }

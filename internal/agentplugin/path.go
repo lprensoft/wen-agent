@@ -17,7 +17,7 @@ import (
 type Root struct{ path string }
 
 // NewRoot 解析插件包根目录。目录不存在时报错。
-func NewRoot(dir string) (Root, error) {
+func NewRoot(lang, dir string) (Root, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return Root{}, err

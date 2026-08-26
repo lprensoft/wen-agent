@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/mdtext"
 )
@@ -34,21 +35,21 @@ func (p *Plugin) send(ctx context.Context, openID, text, _ string) {
 		if total > 1 {
 			chunk = fmt.Sprintf("(%d/%d) %s", i+1, total, chunk)
 		}
-		msgType, content := buildPayload(format, chunk)
+		msgType, content := buildPayload(p.langOf(), format, chunk)
 		if err := p.sendMessage(ctx, openID, msgType, content); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("%s: 发送失败: %v", p.Name(), err)
+			i18n.Logf(p.langOf(), "log.lark.send_failed", "%s: 发送失败: %v", p.Name(), err)
 		}
 	}
 }
 
 // buildPayload 按格式产出 msg_type 与 content。
 // content 是「JSON 序列化后的字符串」——这是飞书接口的形状，不是普通的嵌套对象。
-func buildPayload(format, text string) (string, string) {
+func buildPayload(lang, format, text string) (string, string) {
 	if format == formatPlain {
-		raw, _ := json.Marshal(map[string]string{"text": mdtext.ToPlainText(text)})
+		raw, _ := json.Marshal(map[string]string{"text": mdtext.ToPlainText(lang, text)})
 		return "text", string(raw)
 	}
 	card := map[string]any{

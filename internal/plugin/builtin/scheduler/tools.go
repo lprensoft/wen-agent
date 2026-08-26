@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // scheduleTool 创建定时任务。
@@ -14,13 +17,18 @@ type scheduleTool struct{ p *Plugin }
 func (t *scheduleTool) Name() string { return "schedule_task" }
 
 func (t *scheduleTool) Description() string {
-	return "创建一个定时任务，到点后系统会以任务内容自动发起一轮对话并执行。" +
-		"支持三种类型：once（指定时刻执行一次）、interval（每隔 N 分钟）、daily（每天定点）。" +
-		"任务内容应写成给助手的完整指令，因为执行时没有当前对话的上下文。"
+	return prompt.T(t.p.langOf(), "prompt.scheduler.tool.schedule_task.desc", scheduleDescZH)
 }
 
+const scheduleDescZH = "创建一个定时任务，到点后系统会以任务内容自动发起一轮对话并执行。" +
+	"支持三种类型：once（指定时刻执行一次）、interval（每隔 N 分钟）、daily（每天定点）。" +
+	"任务内容应写成给助手的完整指令，因为执行时没有当前对话的上下文。"
+
 func (t *scheduleTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.scheduler.tool.schedule_task.schema", scheduleSchemaZH))
+}
+
+const scheduleSchemaZH = `{
   "type": "object",
   "properties": {
     "content": {"type": "string", "description": "到点后要执行的指令内容，需自包含、不依赖当前对话上下文"},
@@ -30,8 +38,7 @@ func (t *scheduleTool) Schema() json.RawMessage {
     "daily_time": {"type": "string", "description": "daily 必填：每天的执行时间，格式 \"HH:MM\"（本地时区）"}
   },
   "required": ["content", "schedule_type"]
-}`)
-}
+}`
 
 func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	var req struct {
@@ -41,11 +48,12 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 		IntervalMinutes int    `json:"interval_minutes"`
 		DailyTime       string `json:"daily_time"`
 	}
+	lang := t.p.langOf()
 	if err := json.Unmarshal(args, &req); err != nil {
-		return "", fmt.Errorf("参数解析失败: %w", err)
+		return "", plugin.BadArgs(lang, err)
 	}
 	if strings.TrimSpace(req.Content) == "" {
-		return "", fmt.Errorf("任务内容不能为空")
+		return "", fmt.Errorf("%s", prompt.T(lang, "prompt.scheduler.err.empty_content", "任务内容不能为空"))
 	}
 
 	task := &Task{
@@ -56,26 +64,26 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 	}
 	switch req.ScheduleType {
 	case typeOnce:
-		at, err := parseAt(req.At)
+		at, err := parseAt(lang, req.At)
 		if err != nil {
 			return "", err
 		}
 		if !at.After(time.Now()) {
-			return "", fmt.Errorf("执行时刻 %s 已经过去", at.Format("2006-01-02 15:04"))
+			return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.past", "执行时刻 %s 已经过去"), at.Format("2006-01-02 15:04"))
 		}
 		task.At = at
 	case typeInterval:
 		if req.IntervalMinutes < 1 {
-			return "", fmt.Errorf("interval 类型需要 interval_minutes ≥ 1")
+			return "", fmt.Errorf("%s", prompt.T(lang, "prompt.scheduler.err.bad_interval", "interval 类型需要 interval_minutes ≥ 1"))
 		}
 		task.IntervalMin = req.IntervalMinutes
 	case typeDaily:
-		if _, _, err := parseDaily(req.DailyTime); err != nil {
+		if _, _, err := parseDaily(lang, req.DailyTime); err != nil {
 			return "", err
 		}
 		task.DailyTime = strings.TrimSpace(req.DailyTime)
 	default:
-		return "", fmt.Errorf("未知任务类型 %q，可选 once / interval / daily", req.ScheduleType)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.bad_type", "未知任务类型 %q，可选 once / interval / daily"), req.ScheduleType)
 	}
 
 	p := t.p
@@ -88,18 +96,18 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 	}
 	if active >= maxTasks {
 		p.mu.Unlock()
-		return "", fmt.Errorf("未完成任务已达上限 %d，请先取消一些", maxTasks)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.too_many", "未完成任务已达上限 %d，请先取消一些"), maxTasks)
 	}
 	p.tasks = append(p.tasks, task)
 	err := p.saveLocked()
 	p.mu.Unlock()
 	if err != nil {
-		return "", fmt.Errorf("保存任务失败: %w", err)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.save", "保存任务失败: %w"), err)
 	}
 	p.wakeup()
 
 	next := task.nextRun(time.Now())
-	return fmt.Sprintf("已创建定时任务 %s，下次执行：%s", task.describe(), next.Format("2006-01-02 15:04")), nil
+	return prompt.Tf(lang, "prompt.scheduler.result.created", "已创建定时任务 %s，下次执行：%s", task.describe(lang), next.Format("2006-01-02 15:04")), nil
 }
 
 // listTool 列出任务。
@@ -108,7 +116,8 @@ type listTool struct{ p *Plugin }
 func (t *listTool) Name() string { return "list_tasks" }
 
 func (t *listTool) Description() string {
-	return "列出全部定时任务，包括待执行的与最近 24 小时内结束的。"
+	return prompt.T(t.p.langOf(), "prompt.scheduler.tool.list_tasks.desc",
+		"列出全部定时任务，包括待执行的与最近 24 小时内结束的。")
 }
 
 func (t *listTool) Schema() json.RawMessage {
@@ -119,15 +128,17 @@ func (t *listTool) Execute(context.Context, json.RawMessage) (string, error) {
 	p := t.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	lang := p.lang
 	if len(p.tasks) == 0 {
-		return "当前没有定时任务。", nil
+		return prompt.T(lang, "prompt.scheduler.result.no_tasks", "当前没有定时任务。"), nil
 	}
 	now := time.Now()
 	var b strings.Builder
 	for _, task := range p.tasks {
-		b.WriteString("- " + task.describe())
+		b.WriteString("- " + task.describe(lang))
 		if next := task.nextRun(now); !next.IsZero() {
-			b.WriteString("，下次执行 " + next.Format("2006-01-02 15:04"))
+			b.WriteString(prompt.Tf(lang, "prompt.scheduler.result.next_run", "，下次执行 %s",
+				next.Format("2006-01-02 15:04")))
 		}
 		b.WriteString("\n")
 	}
@@ -140,23 +151,27 @@ type cancelTool struct{ p *Plugin }
 func (t *cancelTool) Name() string { return "cancel_task" }
 
 func (t *cancelTool) Description() string {
-	return "按任务 ID 取消一个定时任务（ID 可用 list_tasks 查到）。"
+	return prompt.T(t.p.langOf(), "prompt.scheduler.tool.cancel_task.desc",
+		"按任务 ID 取消一个定时任务（ID 可用 list_tasks 查到）。")
 }
 
 func (t *cancelTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.scheduler.tool.cancel_task.schema", cancelSchemaZH))
+}
+
+const cancelSchemaZH = `{
   "type": "object",
   "properties": {"id": {"type": "string", "description": "要取消的任务 ID"}},
   "required": ["id"]
-}`)
-}
+}`
 
 func (t *cancelTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	var req struct {
 		ID string `json:"id"`
 	}
+	lang := t.p.langOf()
 	if err := json.Unmarshal(args, &req); err != nil {
-		return "", fmt.Errorf("参数解析失败: %w", err)
+		return "", plugin.BadArgs(lang, err)
 	}
 	p := t.p
 	p.mu.Lock()
@@ -164,16 +179,16 @@ func (t *cancelTool) Execute(_ context.Context, args json.RawMessage) (string, e
 	for _, task := range p.tasks {
 		if task.ID == req.ID {
 			if task.Done {
-				return fmt.Sprintf("任务 %s 已经结束，无需取消。", task.ID), nil
+				return prompt.Tf(lang, "prompt.scheduler.result.already_done", "任务 %s 已经结束，无需取消。", task.ID), nil
 			}
 			task.Done = true
 			task.DoneAt = time.Now()
-			task.Note = "已取消"
+			task.Note = prompt.T(lang, "prompt.scheduler.note.cancelled", "已取消")
 			if err := p.saveLocked(); err != nil {
-				return "", fmt.Errorf("保存失败: %w", err)
+				return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.save_short", "保存失败: %w"), err)
 			}
-			return fmt.Sprintf("已取消任务 %s。", task.ID), nil
+			return prompt.Tf(lang, "prompt.scheduler.result.cancelled", "已取消任务 %s。", task.ID), nil
 		}
 	}
-	return "", fmt.Errorf("找不到任务 %q", req.ID)
+	return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.not_found", "找不到任务 %q"), req.ID)
 }

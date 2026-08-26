@@ -217,17 +217,17 @@ func TestParseArchiveRefRejectsTraversal(t *testing.T) {
 		"../../etc/passwd", "..\\..\\secret.md", "../x.md",
 		"Inner/x.md", "in-ner/x.md", "1abc/x.md", "", "   ",
 	} {
-		if tag, name, err := parseArchiveRef(bad); err == nil && (tag != "" || strings.Contains(name, "..")) {
+		if tag, name, err := parseArchiveRef("", bad); err == nil && (tag != "" || strings.Contains(name, "..")) {
 			t.Errorf("%q 应被拒绝，得到 tag=%q name=%q", bad, tag, name)
 		}
 	}
 	// 合法形式
-	tag, name, err := parseArchiveRef("inner/s1-20260817-101010.md")
+	tag, name, err := parseArchiveRef("", "inner/s1-20260817-101010.md")
 	if err != nil || tag != "inner" || name != "s1-20260817-101010.md" {
 		t.Errorf("parseArchiveRef 合法输入失败: tag=%q name=%q err=%v", tag, name, err)
 	}
 	// 共享域的裸文件名，缺后缀时补上
-	tag, name, err = parseArchiveRef("s1-20260817-101010")
+	tag, name, err = parseArchiveRef("", "s1-20260817-101010")
 	if err != nil || tag != "" || name != "s1-20260817-101010.md" {
 		t.Errorf("共享域标识解析失败: tag=%q name=%q err=%v", tag, name, err)
 	}

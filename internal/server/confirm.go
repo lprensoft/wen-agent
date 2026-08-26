@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"wen/internal/plugin"
+
+	"wen/internal/i18n"
 )
 
 // confirmBroker 把「工具想问用户」与「用户在界面上点了按钮」这两件事对上。
@@ -105,7 +107,7 @@ func (s *Server) confirmResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.confirms.resolve(id, req.Approved) {
 		// 已超时或已回答过。不是服务端错误，但要让界面知道这次点击没生效
-		writeError(w, http.StatusConflict, "该确认请求已失效（超时或已处理）")
+		writeError(w, http.StatusConflict, i18n.T(reqLang(r), "server.err.confirm_gone", "该确认请求已失效（超时或已处理）"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -12,9 +12,9 @@ const maxSceneRunes = 300
 
 // clipTriple 让三段文本共用一个字节预算，截断顺序为 设定 > 我的信息 > 样例。
 // 样例排最末，因为它最可降级——没有它角色仍然成立，只是味道淡。
-func clipTriple(first, second, samples string, limit int) (string, string, string) {
-	first, second = textclip.ClipPair(first, second, limit)
-	return first, second, textclip.ClipSegments(samples, limit-len(first)-len(second))
+func clipTriple(lang, first, second, samples string, limit int) (string, string, string) {
+	first, second = textclip.ClipPair(lang, first, second, limit)
+	return first, second, textclip.ClipSegments(lang, samples, limit-len(first)-len(second))
 }
 
 // lastScene 从历史中取出最后一处【】里的内容（不含括号本身）。

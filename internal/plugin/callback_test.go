@@ -14,7 +14,7 @@ type reentrantReporter struct {
 	release chan struct{}
 }
 
-func (p *reentrantReporter) StatusLines() []string {
+func (p *reentrantReporter) StatusLines(string) []string {
 	close(p.entered)
 	<-p.release
 	return p.m.SystemPrompts() // 反向调用：回调若在读锁内进行，这里会永久卡住
@@ -41,7 +41,7 @@ func TestPluginCallbacksRunOutsideLock(t *testing.T) {
 	}
 
 	done := make(chan []string, 1)
-	go func() { done <- m.StatusLines() }()
+	go func() { done <- m.StatusLines("") }()
 
 	<-rp.entered // 已经进到插件回调里
 
@@ -82,7 +82,7 @@ func (p *panicPlugin) Tools() []Tool {
 	panic("工具列表炸了")
 }
 
-func (p *panicPlugin) StatusLines() []string { panic("状态行炸了") }
+func (p *panicPlugin) StatusLines(string) []string { panic("状态行炸了") }
 func (p *panicPlugin) OnCompact(context.Context, CompactEvent) (string, error) {
 	panic("压缩钩子炸了")
 }
@@ -116,7 +116,7 @@ func TestPluginPanicDoesNotPropagate(t *testing.T) {
 	if _, ok := m.FindTool("tool_good"); !ok {
 		t.Error("FindTool 没找到好插件的工具")
 	}
-	if got := m.StatusLines(); len(got) != 0 {
+	if got := m.StatusLines(""); len(got) != 0 {
 		t.Errorf("StatusLines = %v", got)
 	}
 	if got := m.NotifyCompact(ctx, CompactEvent{}); len(got) != 0 {

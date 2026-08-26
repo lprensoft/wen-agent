@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"wen/internal/imbot"
+
+	"wen/internal/i18n"
 )
 
 // getUpdates 长轮询主循环。
@@ -43,9 +44,9 @@ func loadOffset(stateDir string) int64 {
 	return n
 }
 
-func saveOffset(stateDir string, offset int64) {
+func saveOffset(lang, stateDir string, offset int64) {
 	if err := os.WriteFile(offsetPath(stateDir), []byte(strconv.FormatInt(offset, 10)), 0o644); err != nil {
-		log.Printf("telegram_bot: 保存收信游标失败: %v", err)
+		i18n.Logf(lang, "log.telegram.save_cursor_failed", "telegram_bot: 保存收信游标失败: %v", err)
 	}
 }
 
@@ -58,7 +59,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 
 	offset := loadOffset(stateDir)
 	fails := 0
-	log.Printf("telegram_bot: 开始收信（游标 %d）", offset)
+	i18n.Logf(p.langOf(), "log.telegram.polling", "telegram_bot: 开始收信（游标 %d）", offset)
 
 	for ctx.Err() == nil {
 		updates, err := p.getUpdates(ctx, client, offset)
@@ -68,7 +69,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 			}
 			var ae *apiError
 			if errors.As(err, &ae) && ae.isConflict() {
-				log.Printf("telegram_bot: 该机器人已设置 webhook，与长轮询互斥，收不到任何消息。"+
+				i18n.Logf(p.langOf(), "log.telegram.webhook_conflict", "telegram_bot: 该机器人已设置 webhook，与长轮询互斥，收不到任何消息。"+
 					"请先调用 deleteWebhook 取消，%v 后重试", conflictRetry)
 				sleepCtx(ctx, conflictRetry)
 				continue
@@ -81,7 +82,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 				continue
 			}
 			fails++
-			log.Printf("telegram_bot: 收信失败（%d/%d）: %v", fails, maxConsecutiveFails, err)
+			i18n.Logf(p.langOf(), "log.telegram.poll_failed", "telegram_bot: 收信失败（%d/%d）: %v", fails, maxConsecutiveFails, err)
 			if fails >= maxConsecutiveFails {
 				fails = 0
 				sleepCtx(ctx, failBackoff)
@@ -95,7 +96,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 			// 先推进游标再处理：处理里可能跑一整轮对话，中途重启不该让这条重来
 			if u.UpdateID >= offset {
 				offset = u.UpdateID + 1
-				saveOffset(stateDir, offset)
+				saveOffset(p.langOf(), stateDir, offset)
 			}
 			p.dispatch(ctx, u)
 		}
@@ -129,7 +130,7 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 	m := u.Message
 	chatID := strconv.FormatInt(m.Chat.ID, 10)
 	if m.Chat.Type != "private" {
-		log.Printf("telegram_bot: 忽略非私聊消息（chat_id=%s type=%s，仅支持私聊）", chatID, m.Chat.Type)
+		i18n.Logf(p.langOf(), "log.telegram.group_ignored", "telegram_bot: 忽略非私聊消息（chat_id=%s type=%s，仅支持私聊）", chatID, m.Chat.Type)
 		return
 	}
 
@@ -139,7 +140,8 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 		if c := strings.TrimSpace(m.Caption); c != "" {
 			text = c
 		} else {
-			note = "暂不支持该消息类型，请发文字。"
+			note = i18n.T(p.langOf(), "plugin.telegram_bot.msg.unsupported",
+				"暂不支持该消息类型，请发文字。")
 		}
 	}
 

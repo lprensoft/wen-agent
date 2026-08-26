@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -58,8 +59,9 @@ func (c *Core) confirmerFor(msg Message) plugin.ConfirmFunc {
 	return func(ctx context.Context, req plugin.ConfirmRequest) (bool, error) {
 		timeout := c.cfg.ConfirmTimeout
 
+		lang := c.cfg.Lang
 		var b strings.Builder
-		b.WriteString("⚠️ 有操作需要你确认\n")
+		b.WriteString(i18n.T(lang, "imbot.confirm.head", "⚠️ 有操作需要你确认\n"))
 		if req.Title != "" {
 			b.WriteString(req.Title + "\n")
 		}
@@ -67,9 +69,11 @@ func (c *Core) confirmerFor(msg Message) plugin.ConfirmFunc {
 			b.WriteString(req.Detail + "\n")
 		}
 		if req.Reason != "" {
-			b.WriteString("原因：" + req.Reason + "\n")
+			b.WriteString(i18n.Tf(lang, "imbot.confirm.reason", "原因：%s\n", req.Reason))
 		}
-		fmt.Fprintf(&b, "回复 /apply 允许，/deny 拒绝（%s 内未回复按拒绝处理）", timeout)
+		// /apply 与 /deny 是要照着打进去的字面量，不翻译
+		b.WriteString(i18n.Tf(lang, "imbot.confirm.how",
+			"回复 /apply 允许，/deny 拒绝（%s 内未回复按拒绝处理）", timeout))
 
 		ch := c.broker.register(msg.UserID)
 		defer c.broker.release(msg.UserID)
@@ -81,7 +85,8 @@ func (c *Core) confirmerFor(msg Message) plugin.ConfirmFunc {
 		case approved := <-ch:
 			return approved, nil
 		case <-wctx.Done():
-			return false, fmt.Errorf("等待确认超时或连接中断")
+			return false, fmt.Errorf("%s", i18n.T(lang, "imbot.confirm.timeout",
+				"等待确认超时或连接中断"))
 		}
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+
+	"wen/internal/i18n"
 
 	"wen/internal/mdtext"
 )
@@ -19,16 +20,16 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 	format := p.format
 	p.mu.Unlock()
 	if !creds.valid() {
-		log.Printf("wechat_bot: 未绑定，丢弃待发消息")
+		i18n.Logf(p.langOf(), "log.wechat.not_bound", "wechat_bot: 未绑定，丢弃待发消息")
 		return
 	}
 	if contextToken == "" {
-		log.Printf("wechat_bot: 缺少 context_token，无法回复 %s", userID)
+		i18n.Logf(p.langOf(), "log.wechat.reply_no_token", "wechat_bot: 缺少 context_token，无法回复 %s", userID)
 		return
 	}
 
 	if format == formatPlain {
-		text = mdtext.ToPlainText(text)
+		text = mdtext.ToPlainText(p.langOf(), text)
 	}
 	chunks := mdtext.ChunkMarkdown(text, chunkLimit)
 	total := len(chunks)
@@ -40,7 +41,7 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("wechat_bot: 发送失败: %v", err)
+			i18n.Logf(p.langOf(), "log.wechat.send_failed", "wechat_bot: 发送失败: %v", err)
 		}
 	}
 }

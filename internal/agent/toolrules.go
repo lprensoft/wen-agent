@@ -1,6 +1,14 @@
 package agent
 
-// toolRules 是关于「工具结果意味着什么」的约定，与环境块同层注入 system 开头。
+import "wen/internal/prompt"
+
+// toolRulesFor 按语言取一份工具约定。整轮之间逐字节不变——语言是进程级的，
+// 启动时定死，因此它仍是提示词缓存前缀的一部分。
+func toolRulesFor(lang string) string {
+	return prompt.T(lang, "prompt.core.tool_rules", toolRulesZH)
+}
+
+// toolRulesZH 是关于「工具结果意味着什么」的约定，与环境块同层注入 system 开头。
 //
 // 它存在的理由是一次真实事故：模型在一轮里调完工具后被要求再生成一次，而上下文里
 // 既没有新的用户消息，也没有任何一句话交代工具结果是什么。它于是自己找了个解释——
@@ -13,7 +21,7 @@ package agent
 // 放在 system 而不是每轮状态块里：这段整轮之间逐字节不变，是提示词缓存前缀的一部分
 // （见「上下文分层约定」）。措辞用「用户」而不是「对方」——核心不知道有角色这回事，
 // 扮演角色时模型自然会把它读成对方。
-const toolRules = `[工具与回复]
+const toolRulesZH = `[工具与回复]
 工具结果是你自己那次调用的回执，不是用户说的话。看到结果之后只有两条路：接着调用
 下一个工具，或者给出这一轮唯一的回复。
 - 一轮只回一次。需要调用工具就先调完，要说的话放在最后一次输出里；工具跑完了不是

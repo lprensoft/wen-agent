@@ -227,7 +227,7 @@ func TestParseContent(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			text, note := parseContent(c.msgType, c.content)
+			text, note := parseContent("", c.msgType, c.content)
 			if text != c.wantText {
 				t.Errorf("正文 = %q，想要 %q", text, c.wantText)
 			}
@@ -243,7 +243,7 @@ func TestParseContent(t *testing.T) {
 
 // content 是「JSON 序列化后的字符串」，不是嵌套对象——这是飞书接口的形状。
 func TestBuildPayload(t *testing.T) {
-	typ, content := buildPayload(formatPlain, "**重点**")
+	typ, content := buildPayload("", formatPlain, "**重点**")
 	if typ != "text" {
 		t.Fatalf("纯文本模式的 msg_type = %q", typ)
 	}
@@ -257,7 +257,7 @@ func TestBuildPayload(t *testing.T) {
 		t.Errorf("纯文本模式应剥掉 markdown 标记: %q", tc.Text)
 	}
 
-	typ, content = buildPayload(formatCard, "**重点**")
+	typ, content = buildPayload("", formatCard, "**重点**")
 	if typ != "interactive" {
 		t.Fatalf("卡片模式的 msg_type = %q", typ)
 	}

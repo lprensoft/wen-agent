@@ -10,11 +10,13 @@ import (
 	"wen/internal/agent"
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
+
+	"wen/internal/i18n"
 )
 
 // listModels 返回提供商与模型的全量配置（API Key 只给掩码）。
-func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.modelsView())
+func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // saveModels 整档保存配置：校验通过后落盘，并让当前选中的模型立即生效。
@@ -24,15 +26,15 @@ func (s *Server) saveModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if _, err := s.models.Save(req); err != nil {
+	if _, err := s.models.Save(reqLang(r), req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.applyCurrentModel(); err != nil {
+	if err := s.applyCurrentModel(reqLang(r)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.modelsView())
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // setCurrentModel 切换当前使用的提供商与模型。
@@ -42,15 +44,15 @@ func (s *Server) setCurrentModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if _, err := s.models.SetCurrent(sel); err != nil {
+	if _, err := s.models.SetCurrent(reqLang(r), sel); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.applyCurrentModel(); err != nil {
+	if err := s.applyCurrentModel(reqLang(r)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.modelsView())
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // testModel 用极小的一次真实请求验证 base_url / API Key / 模型 id 是否可用。
@@ -70,7 +72,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, "请先为该提供商添加模型后再测试")
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.no_model_to_test", "请先为该提供商添加模型后再测试"))
 		return
 	}
 	// 密钥留空表示沿用已保存的值（界面上只拿得到掩码）
@@ -80,27 +82,28 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.APIKey == "" {
-		writeError(w, http.StatusBadRequest, "请填写 API Key")
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.need_api_key", "请填写 API Key"))
 		return
 	}
 
 	provider, err := llm.New(llm.Config{
 		Type: req.Type, BaseURL: req.BaseURL, APIKey: req.APIKey, Dialect: req.Dialect,
 		PromptCache: req.PromptCache == nil || *req.PromptCache,
+		Lang:        s.lang,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := probe(r.Context(), provider, req.Model); err != nil {
-		writeError(w, http.StatusBadRequest, "连接失败："+err.Error())
+	if err := probe(r.Context(), reqLang(r), provider, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, i18n.Tf(reqLang(r), "server.err.probe_failed", "连接失败：%s", err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // probe 发起一次最小请求，收到首个事件即视为连通。
-func probe(ctx context.Context, provider llm.Provider, model string) error {
+func probe(ctx context.Context, lang string, provider llm.Provider, model string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -116,7 +119,7 @@ func probe(ctx context.Context, provider llm.Provider, model string) error {
 	// 收到首个事件即视为连通，随后 cancel 关闭剩余的流
 	ev, ok := <-events
 	if !ok {
-		return fmt.Errorf("模型没有返回任何内容")
+		return fmt.Errorf("%s", i18n.T(lang, "server.err.empty_reply", "模型没有返回任何内容"))
 	}
 	if ev.Type == llm.EventError {
 		return ev.Err
@@ -125,14 +128,15 @@ func probe(ctx context.Context, provider llm.Provider, model string) error {
 }
 
 // applyCurrentModel 按当前选中项重建 provider 并热切换到 Agent。
-func (s *Server) applyCurrentModel() error {
-	cur, err := s.models.Resolve()
+func (s *Server) applyCurrentModel(lang string) error {
+	cur, err := s.models.Resolve(lang)
 	if err != nil {
 		return err
 	}
 	provider, err := llm.New(llm.Config{
 		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
 		PromptCache: cur.PromptCache,
+		Lang:        s.lang,
 	})
 	if err != nil {
 		return err
@@ -148,7 +152,7 @@ func (s *Server) applyCurrentModel() error {
 }
 
 // modelsView 组装响应：api_key 一律不出现，只给掩码与「是否已配置」。
-func (s *Server) modelsView() map[string]any {
+func (s *Server) modelsView(lang string) map[string]any {
 	view := s.models.Snapshot()
 	def := s.models.Defaults()
 
@@ -175,8 +179,8 @@ func (s *Server) modelsView() map[string]any {
 	return map[string]any{
 		"providers": providers,
 		"current":   view.Current,
-		"types":     modelcfg.TypeOptions(),
-		"dialects":  modelcfg.DialectOptions(),
+		"types":     modelcfg.TypeOptions(lang),
+		"dialects":  modelcfg.DialectOptions(lang),
 		"defaults": map[string]any{
 			"temperature":    def.Temperature,
 			"max_tokens":     def.MaxTokens,

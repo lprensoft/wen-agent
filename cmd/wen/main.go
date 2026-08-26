@@ -58,25 +58,27 @@ import (
 // runServe 启动服务。这是没有子命令时的默认动作，也是 wen serve 的实现。
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-	port := fs.Int("p", 0, "监听端口（覆盖配置文件）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
+	port := fs.Int("p", 0, tr("cli.serve.flag.port", "监听端口（覆盖配置文件）"))
 	_ = fs.Parse(args)
 
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
-		log.Fatalf("加载配置失败: %v", err)
+		fatalf("log.serve.config_failed", "加载配置失败: %v", err)
 	}
 	if *port != 0 {
 		cfg.Server.Port = *port
 	}
+	// 语言要在第一行日志之前定下——启动日志本身就是要跟着它走的东西之一
+	adoptLang(cfg)
 
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
-	exePath, exeErr := updater.ExePath()
+	exePath, exeErr := updater.ExePath(uiLang)
 	if exeErr != nil {
-		log.Printf("提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
+		logf("log.serve.no_exe_path", "提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
 	}
 
 	// restartCh 传「换好新版了，可以重启」。缓冲 1 且非阻塞投递：重启只需要发生一次。
@@ -94,13 +96,13 @@ func runServe(args []string) {
 
 	rt, err := buildRuntime(cfg, runtimeOverrides{Restart: requestRestart})
 	if err != nil {
-		log.Fatalf("%v", err)
+		log.Fatal(err)
 	}
 	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
-	auth, err := server.NewAuthStore(cfg.BaseDir)
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
 	if err != nil {
-		log.Fatalf("加载访问口令失败: %v", err)
+		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
 	}
 
 	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
@@ -108,9 +110,9 @@ func runServe(args []string) {
 	// 降级同样一次都没暴露过，且 SSH 隧道进来就能把口令补上。
 	exposed := !server.IsLoopbackHost(cfg.Server.Host)
 	if exposed && !auth.HasPassword() {
-		log.Printf("⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
-		log.Printf("  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
-		log.Printf("  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
+		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
+		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
+		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
 			cfg.Server.Port, cfg.Server.Port)
 		cfg.Server.Host = "127.0.0.1"
 		exposed = false
@@ -120,32 +122,35 @@ func runServe(args []string) {
 		Auth:          auth,
 		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
 		Exposed:       exposed,
+		Lang:          uiLang,
 	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	log.Printf("配置文件: %s", path)
-	log.Printf("模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
-	for _, st := range plugins.List() {
-		state := "禁用"
+	logf("log.serve.config_file", "配置文件: %s", path)
+	logf("log.serve.language", "语言: %s", langSummary(cfg))
+	logf("log.serve.model", "模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
+	// 插件说明按语言取一次再打：日志与设置页看到的该是同一句话
+	for _, st := range plugin.Localize(uiLang, plugins.List()) {
+		state := tr("log.serve.plugin.off", "禁用")
 		if st.Enabled {
-			state = "启用"
+			state = tr("log.serve.plugin.on", "启用")
 		}
-		log.Printf("插件: %-12s [%s] %s", st.Name, state, st.Description)
+		logf("log.serve.plugin", "插件: %-12s [%s] %s", st.Name, state, st.Description)
 	}
-	log.Printf("访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
-	log.Printf("Wen Agent %s 已启动: http://%s", version.Version, addr)
+	logf("log.serve.access", "访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
+	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
 	// 失败只是让配置工具退回离线模式，不该拦住服务启动。
 	if prev, ok := runlock.Read(cfg.BaseDir); ok && reachable(prev.Addr) {
-		log.Printf("警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
+		logf("log.serve.another_instance", "警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
 	}
 	releaseLock, err := runlock.Acquire(cfg.BaseDir, runlock.Info{
 		PID: os.Getpid(), Addr: addr, Version: version.Version,
 		Started: time.Now().Format(time.RFC3339),
 	})
 	if err != nil {
-		log.Printf("提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
+		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
 	}
 	defer releaseLock()
 
@@ -166,9 +171,9 @@ func runServe(args []string) {
 	var restartReason string
 	select {
 	case <-rootCtx.Done():
-		log.Printf("收到退出信号，正在关闭…")
+		logf("log.serve.shutdown_signal", "收到退出信号，正在关闭…")
 	case restartReason = <-restartCh:
-		log.Printf("%s：正在关闭当前实例…", restartReason)
+		logf("log.serve.restarting", "%s：正在关闭当前实例…", restartReason)
 	}
 	// 先停插件、再关 HTTP：反过来的话，插件的后台轮次要等 HTTP 那边最多 5 秒的
 	// 等待走完才被取消，于是「收到退出信号」之后还会有工具调用继续落盘——实际见过。
@@ -195,16 +200,16 @@ func runServe(args []string) {
 // 程序文件已经是新版，人工启动一次就行，所以这里只报告，让日志说清现状。
 func relaunch(exePath string) {
 	if exePath == "" {
-		log.Printf("无法定位当前程序，未能自动重启。程序文件已是新版，手工启动即可。")
+		logf("log.serve.relaunch_no_path", "无法定位当前程序，未能自动重启。程序文件已是新版，手工启动即可。")
 		return
 	}
-	log.Printf("正在用新版程序重启：%s", exePath)
-	if err := updater.Relaunch(exePath, os.Args[1:]); err != nil {
-		log.Printf("自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
+	logf("log.serve.relaunching", "正在用新版程序重启：%s", exePath)
+	if err := updater.Relaunch(uiLang, exePath, os.Args[1:]); err != nil {
+		logf("log.serve.relaunch_failed", "自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
 		return
 	}
 	if updater.RelaunchExits {
-		log.Printf("新版程序已启动，本进程退出。")
+		logf("log.serve.relaunched", "新版程序已启动，本进程退出。")
 	}
 }
 
@@ -214,40 +219,42 @@ func relaunch(exePath string) {
 func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
 	switch {
 	case !auth.HasPassword():
-		return "未设置口令，仅本机可访问"
+		return tr("log.serve.auth.none", "未设置口令，仅本机可访问")
 	case !trustLoopback:
-		return "已设置口令，所有来源（含本机）都需登录"
+		return tr("log.serve.auth.all", "已设置口令，所有来源（含本机）都需登录")
 	case exposed:
-		return "已设置口令，本机免登录、其它来源需登录"
+		return tr("log.serve.auth.exposed", "已设置口令，本机免登录、其它来源需登录")
 	default:
-		return "已设置口令，但当前只监听本机，不会被外部访问"
+		return tr("log.serve.auth.local", "已设置口令，但当前只监听本机，不会被外部访问")
 	}
 }
 
-// needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定
-// 就不成其为角色扮演，dual_persona 没有触发词就永远切不过去。默认打开一个空壳只会让人
-// 以为功能坏了，所以留给用户配好再开。heartbeat 属于另一类理由：无人值守持续消耗模型
-// 额度的功能应当由用户显式打开，而不是装上就开始花钱。
+// defaultOffPlugins 是默认不启用的插件。三类理由，各自成立：
 //
-// 其余插件用声明的默认参数就能直接工作，因此默认启用。
-var needsSetupPlugins = map[string]bool{
-	"roleplay":     true,
-	"dual_persona": true,
-	"scene":        true, // 不配置也能工作，但它依赖默认关闭的 roleplay，默认启用只会在启动时被强制关闭
-	"body_sense":   true, // 同上：自带默认部位表，开箱即用，进这张表只因为它依赖默认关闭的 roleplay
-	"mood":         true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"health":       true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"presence":     true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
-	"belongings":   true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"people":       true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"relationship": true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
-	"unspoken":     true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
-	"agenda":       true, // 两个理由都占：依赖默认关闭的 roleplay 与 people，且到点自动跑轮次是无人值守消耗额度的功能
-	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
-	"style_watch":  true, // 同上：无需配置就能工作，进这张表只因为它依赖默认关闭的 roleplay
+//  1. 不配置就没法工作：不填触发词、城市、凭据，插件就是个空壳，默认打开只会让人
+//     以为功能坏了。
+//  2. 权限过大：read_file 能读任意文件、exec_command 能执行任意命令。这两样是
+//     「拿它当干活的 Agent」时才要的东西，不该是开箱默认——尤其它们能绕过可见域
+//     直接读到会话文件与记忆目录（dual_persona 正是为此把它们声明为冲突）。
+//     要用就去设置页打开，那是个看得见的选择。
+//  3. 空目录：skills 的技能目录是空的，开着只多两个用不上的工具。
+//
+// 其余插件用声明的默认参数就能直接工作，因此默认启用——**包括整个角色演绎组**。
+// 它们从前全在这张表里，理由是「依赖默认关闭的 roleplay」，而 roleplay 关着的理由
+// 是「没有角色设定就不成其为角色扮演」。那条理由成立，但结论下反了：该做的是给一个
+// 默认角色设定（见 roleplay 的 defaultPersona），不是把这一组功能整个关掉。
+//
+// heartbeat 与 agenda 会在无人值守时消耗模型额度，这一点写在文档里而不是靠默认
+// 关闭来表达：它们是这个项目的招牌功能（角色会主动开口、有自己的一天），关着的话
+// 开箱就演示不出来。要停就去设置页关掉，或把心跳间隔调长。
+var defaultOffPlugins = map[string]bool{
+	"read_file":    true, // 能读任意文件
+	"exec_command": true, // 能执行任意命令
 
-	"heartbeat":    true,
+	"dual_persona": true, // 不填触发词就永远切不过去
+	"weather":      true, // 不填城市就查不了天气，且开箱即联网
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
+
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot":   true, // 不扫码绑定没法工作
 	"feishu_bot":   true, // 不填 App ID/Secret 没法工作
@@ -262,15 +269,15 @@ var needsSetupPlugins = map[string]bool{
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdate.RestartFunc, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
-	builtins := builtinPlugins(cfg, restart)
+	builtins := builtinPlugins(ictx.Lang, cfg, restart)
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
-		init := plugin.PluginConfig{Enabled: !needsSetupPlugins[p.Name()]}
+		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
 		if err := m.Register(p, init); err != nil {
-			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
+			logf("log.serve.register_failed", "警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
-	registerBundles(m, cfg.BaseDir)
+	registerBundles(m, ictx.Lang, cfg.BaseDir)
 	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
 	m.Resolve()
 	return m
@@ -283,16 +290,16 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 // 或在设置页上关掉（关掉的状态记在 plugins.state.json 里，与内置插件同一套）。
 //
 // 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
-func registerBundles(m *plugin.Manager, baseDir string) {
-	store := agentplugin.NewStore(baseDir)
+func registerBundles(m *plugin.Manager, lang, baseDir string) {
+	store := agentplugin.NewStore(lang, baseDir)
 	bundles, problems := store.List()
 	for _, p := range problems {
-		log.Printf("警告: 插件包 %s", p)
+		logf("log.serve.bundle_warning", "警告: 插件包 %s", p)
 	}
 	for _, b := range bundles {
-		p := agentplugin.NewPlugin(b, store)
+		p := agentplugin.NewPlugin(lang, b, store)
 		if err := m.RegisterExternal(p, plugin.PluginConfig{Enabled: true}); err != nil {
-			log.Printf("警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
+			logf("log.serve.bundle_register_failed", "警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
 			continue
 		}
 		// 包自己的提醒（未知字段之类）不在这里打：buildPlugins 也被 wen config 与
@@ -305,7 +312,7 @@ func registerBundles(m *plugin.Manager, baseDir string) {
 // 与 buildPlugins 分开，是为了让检查工具能拿到插件实例本身而不只是注册后的状态：
 // 操作（Actions）只在插件启用且初始化之后才经 Manager 暴露出来，而漏译的检查不该
 // 要求把消息通道、心跳与定时任务真的跑起来。
-func builtinPlugins(cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
+func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
 	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
@@ -349,6 +356,6 @@ func builtinPlugins(cfg *config.Config, restart selfupdate.RestartFunc) []plugin
 		// bundles 排在 self_update 旁边，理由相同：它不注入任何提示词，注册顺序对它
 		// 只剩展示含义。它得排在下面 registerBundles 注册的那些包**之前**，设置页上
 		// 「外源插件」这一节才会以「装一个新的」开头，而不是把入口埋在一堆卡片后面。
-		bundles.New(cfg.BaseDir),
+		bundles.New(lang, cfg.BaseDir),
 	}
 }

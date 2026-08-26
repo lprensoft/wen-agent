@@ -1,12 +1,29 @@
 package bodysense
 
-// guidePrompt 是上报判据。写得短而具体是有原因的：模型漏调工具是这个功能最实际的
+import "wen/internal/prompt"
+
+// 五段注入片段各按语言取一次。
+func guideFor(lang string) string { return prompt.T(lang, "prompt.body_sense.guide", guidePromptZH) }
+func stageRulesFor(lang string) string {
+	return prompt.T(lang, "prompt.body_sense.stage_rules", stageRulesZH)
+}
+func stateGuideFor(lang string) string {
+	return prompt.T(lang, "prompt.body_sense.state_guide", stateGuideZH)
+}
+func bodyStateHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.body_sense.body_state_header", bodyStateHeaderZH)
+}
+func statesHeaderFor(lang string) string {
+	return prompt.T(lang, "prompt.body_sense.states_header", statesHeaderZH)
+}
+
+// guidePromptZH 是上报判据。写得短而具体是有原因的：模型漏调工具是这个功能最实际的
 // 风险，而产品上已经排除了「扫描文本兜底」这条路，只能靠判据本身足够好记。
 //
 // 「先上报、再演绎」这一条不能省：注入发生在轮次开始，工具回显要到模型写完反应
 // 才到达，不先调工具的话，本轮的反应用的永远是上一轮的计数——「第一次被碰到会
 // 僵住」就要迟一拍才出现。
-const guidePrompt = `[身体感知]
+const guidePromptZH = `[身体感知]
 演绎中出现对角色身体的接触时——牵、碰、握、抚、靠、抱、吻等——先用 record_touch
 记下这次接触，拿到回显的累计次数与阶段，再写这一处的反应。
 - 一轮里发生的多处接触合并成一次调用，不要每碰一下调一次。
@@ -14,9 +31,9 @@ const guidePrompt = `[身体感知]
 - 只记真正发生的接触：想到、提到、看着不算；伸手被躲开、隔着东西没碰到也不算。
 - 只记这次互动里当场发生的接触，不为过去的事补记。`
 
-// stageRules 是反应准则。插件只说「不同阶段该是什么取向」，具体措辞由角色设定决定，
+// stageRulesZH 是反应准则。插件只说「不同阶段该是什么取向」，具体措辞由角色设定决定，
 // 这里不写台词。
-const stageRules = `[接触的反应]
+const stageRulesZH = `[接触的反应]
 同一处接触在第一次与第二十次不该是同样的反应。按该部位的累计阶段来写：
 - 初次：反应最真切——僵一下、下意识躲、屏住呼吸、耳根发热，话说不完整。这一档
   不要写出从容与熟练。
@@ -32,9 +49,9 @@ const stageRules = `[接触的反应]
 - 某处的熟悉阶段同样决定角色主动去触碰对方对应部位时的自然程度：那一处对角色
   越陌生，角色自己伸手时越迟疑。`
 
-// stateGuide 是即时身体状态的调整判据。与 mood 同一套「先调整、再演绎」的理由：
+// stateGuideZH 是即时身体状态的调整判据。与 mood 同一套「先调整、再演绎」的理由：
 // 注入发生在轮次开始，不先调工具，本轮的反应用的还是上一轮的状态。
-const stateGuide = `[身体状态]
+const stateGuideZH = `[身体状态]
 角色的身体另有两个即时状态量，范围 0-100，随时间自然向 0 回落：
 - 唤起：亲密互动推高；平复要一段时间，回落的过程就是余韵。
 - 疲劳：劳累、熬夜、剧烈的活动推高；歇着自然消退。
@@ -45,9 +62,9 @@ const stateGuide = `[身体状态]
 - 没有给出当前状态时按两项都为 0 起算。
 - 不把数值当结论说出来，让它体现在呼吸、动作、反应的速度上。`
 
-// bodyStateHeader 领起本轮注入的即时身体状态。
-const bodyStateHeader = "[当前身体状态]"
+// bodyStateHeaderZH 领起本轮注入的即时身体状态。
+const bodyStateHeaderZH = "[当前身体状态]"
 
-// statesHeader 领起本轮可读的累计记录。
-const statesHeader = `[身体接触记录]
+// statesHeaderZH 领起本轮可读的累计记录。
+const statesHeaderZH = `[身体接触记录]
 以下是各部位此前被触碰的累计情况，未列出的部位都还没有被触碰过：`

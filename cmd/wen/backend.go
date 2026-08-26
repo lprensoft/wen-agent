@@ -154,13 +154,13 @@ type offlineBackend struct {
 // 插件用 WithoutInit 注册：读配置项声明、改开关与参数都不需要它们真的跑起来，
 // 而照常初始化会把 QQ 的长连接、心跳与定时任务一并拉起来。
 func newOfflineBackend(cfg *config.Config) (*offlineBackend, error) {
-	models, err := modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
+	models, err := modelcfg.NewStore(uiLang, filepath.Join(cfg.BaseDir, "models.json"), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("加载模型配置失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
-	auth, err := server.NewAuthStore(cfg.BaseDir)
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
 	if err != nil {
-		return nil, fmt.Errorf("加载访问口令失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.load_auth", "加载访问口令失败: %w"), err)
 	}
 	plugins := buildPlugins(cfg, plugin.InitContext{
 		Workdir:    cfg.Agent.Workdir,
@@ -193,11 +193,11 @@ func (b *offlineBackend) setPluginConfig(name string, cfg map[string]any) error 
 }
 
 func (b *offlineBackend) startPluginAction(string, string) error {
-	return fmt.Errorf("插件操作需要服务在运行，请先启动 wen")
+	return fmt.Errorf("%s", tr("cli.err.action_needs_server", "插件操作需要服务在运行，请先启动 wen"))
 }
 
 func (b *offlineBackend) pluginActionState(string, string) (plugin.ActionState, error) {
-	return plugin.ActionState{}, fmt.Errorf("插件操作需要服务在运行，请先启动 wen")
+	return plugin.ActionState{}, fmt.Errorf("%s", tr("cli.err.action_needs_server", "插件操作需要服务在运行，请先启动 wen"))
 }
 
 func (b *offlineBackend) loadModels() (modelsDoc, error) {
@@ -218,12 +218,12 @@ func (b *offlineBackend) loadModels() (modelsDoc, error) {
 }
 
 func (b *offlineBackend) saveModels(f modelcfg.File) error {
-	_, err := b.models.Save(f)
+	_, err := b.models.Save(uiLang, f)
 	return err
 }
 
 func (b *offlineBackend) setCurrentModel(sel modelcfg.Selection) error {
-	_, err := b.models.SetCurrent(sel)
+	_, err := b.models.SetCurrent(uiLang, sel)
 	return err
 }
 

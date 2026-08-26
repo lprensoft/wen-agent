@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"wen/internal/i18n"
 )
 
 // SkillsDirName 与 MCPFile 是标准规定的固定位置。它们不可配置，也不接受清单里的
@@ -38,29 +40,29 @@ type Bundle struct {
 // 失败的边界按标准划：清单读不出来或不合法 → 整个包不可用（返回 error）；
 // 某个组件缺失或有问题 → 记一条 problem 继续走。缺 skills/ 与缺 mcp.json 都不是
 // 问题，只是这个包没有那种组件。
-func Load(dir string) (*Bundle, error) {
-	root, err := NewRoot(dir)
+func Load(lang, dir string) (*Bundle, error) {
+	root, err := NewRoot(lang, dir)
 	if err != nil {
-		return nil, fmt.Errorf("打不开插件包目录：%w", err)
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.open_dir", "打不开插件包目录：%w"), err)
 	}
 
-	f, manifestPath, err := detect(root)
+	f, manifestPath, err := detect(lang, root)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := root.Contains(manifestPath); err != nil {
-		return nil, fmt.Errorf("清单不可用：%w", err)
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.manifest_unusable", "清单不可用：%w"), err)
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取清单失败：%w", err)
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.bundle.err.read_manifest", "读取清单失败：%w"), err)
 	}
 	var m Manifest
 	var warnings []string
 	if f.Strict {
-		m, warnings, err = ParseManifest(data)
+		m, warnings, err = ParseManifest(lang, data)
 	} else {
-		m, warnings, err = parseLoose(data, f.Name)
+		m, warnings, err = parseLoose(lang, data, f.Name)
 	}
 	if err != nil {
 		return nil, err
@@ -72,7 +74,8 @@ func Load(dir string) (*Bundle, error) {
 	skillsDir := root.Join(SkillsDirName)
 	if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
 		if real, err := root.Contains(skillsDir); err != nil {
-			b.Problems = append(b.Problems, SkillsDirName+"/ 指向插件包之外，已忽略整个技能组件")
+			b.Problems = append(b.Problems, i18n.Tf(lang, "plugin.bundle.warn.skills_escape",
+				"%s/ 指向插件包之外，已忽略整个技能组件", SkillsDirName))
 		} else {
 			b.SkillsDir = real
 		}
@@ -83,18 +86,20 @@ func Load(dir string) (*Bundle, error) {
 		b.HasMCP = true
 		switch data, err := os.ReadFile(mcpPath); {
 		case err != nil:
-			b.Problems = append(b.Problems, "读取 "+filepath.Base(mcpPath)+" 失败："+err.Error())
+			b.Problems = append(b.Problems, i18n.Tf(lang, "plugin.bundle.warn.read_mcp",
+				"读取 %s 失败：%s", filepath.Base(mcpPath), err.Error()))
 		default:
 			var servers []MCPServer
 			var warnings []string
 			if f.Strict {
-				servers, warnings, err = ParseMCP(data)
+				servers, warnings, err = ParseMCP(lang, data)
 			} else {
-				servers, warnings, err = ParseMCPLoose(data)
+				servers, warnings, err = ParseMCPLoose(lang, data)
 			}
 			b.Problems = append(b.Problems, warnings...)
 			if err != nil {
-				b.Problems = append(b.Problems, err.Error()+"，这个包的 MCP 组件整个不可用")
+				b.Problems = append(b.Problems, i18n.Tf(lang, "plugin.bundle.warn.mcp_unusable",
+					"%s，这个包的 MCP 组件整个不可用", err.Error()))
 			} else {
 				b.Servers = servers
 			}

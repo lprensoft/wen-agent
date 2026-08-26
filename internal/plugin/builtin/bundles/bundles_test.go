@@ -46,7 +46,7 @@ func writeBundle(t *testing.T, dir string) string {
 
 func newAt(t *testing.T, baseDir string) *Plugin {
 	t.Helper()
-	p := New(baseDir)
+	p := New("", baseDir)
 	if err := p.Init(plugin.InitContext{}, nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestInstallFromDraftValue(t *testing.T) {
 	if !strings.Contains(st.Message, "重启") {
 		t.Errorf("该说清要重启: %q", st.Message)
 	}
-	if lines := p.StatusLines(); len(lines) != 1 || !strings.Contains(lines[0], "1 个") {
+	if lines := p.StatusLines(""); len(lines) != 1 || !strings.Contains(lines[0], "1 个") {
 		t.Errorf("状态行不对: %v", lines)
 	}
 }
@@ -123,7 +123,7 @@ func TestRefreshWithNothingInstalled(t *testing.T) {
 
 // 没有可用的配置目录时拒绝启用，而不是退化到往进程当前目录里写。
 func TestInitWithoutBaseDir(t *testing.T) {
-	if err := New("").Init(plugin.InitContext{}, nil); err == nil {
+	if err := New("", "").Init(plugin.InitContext{}, nil); err == nil {
 		t.Fatal("没有配置目录却启用成功了")
 	}
 }

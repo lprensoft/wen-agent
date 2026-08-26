@@ -8,13 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // Plugin 是 relationship 系统插件。
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang string // 进程语言，注入片段与工具文本据此取用
 	base string // 基准快照库目录（= 共享域）
 
 	// 按可见域分出的库，惰性创建。单独一把锁：这张表的生命周期与配置无关。
@@ -42,7 +45,8 @@ func (p *Plugin) Requires() []string { return []string{"roleplay"} }
 // Init 需要一个可写目录；没有则拒绝启用，避免把快照散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存关系状态")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.relationship.no_state_dir",
+			"没有可用的持久化目录，无法保存关系状态"))
 	}
 
 	p.storesMu.Lock()
@@ -51,6 +55,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "relationship")
 	return nil
 }
@@ -61,10 +66,19 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // SystemPrompt 注入维护判据，全部为静态内容。
 // 快照本体改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
+
+// langOf 取进程语言。未初始化时是空串，prompt.T 据此回中文——Manager.List 会对
+// 未启用的插件调 SystemPrompt，走的正是这一档。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // TurnPrompt 注入本轮的关系快照。没有记录、或只剩一条已过期的「最近」时不注入。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+	lang := p.langOf()
 	store := p.storeFor(plugin.ScopeFrom(ctx).Write)
 	if store == nil {
 		return "", nil
@@ -73,17 +87,17 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	body := renderSnapshot(snap, time.Now())
+	body := renderSnapshot(lang, snap, time.Now())
 	if body == "" {
 		return "", nil
 	}
-	return stateHeader + "\n" + body, nil
+	return stateHeaderFor(lang) + "\n" + body, nil
 }
 
 // storeFor 返回某个可见域的快照库（惰性创建）。未初始化时返回 nil。
 func (p *Plugin) storeFor(tag string) *Store {
 	p.mu.RLock()
-	base := p.base
+	base, lang := p.base, p.lang
 	p.mu.RUnlock()
 	if base == "" {
 		return nil
@@ -97,7 +111,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(lang, plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -115,52 +129,58 @@ func (p *Plugin) storeFor(tag string) *Store {
 //	最近：3 天前为对方忘了纪念日吵过一架，昨天和好了。
 //	默契与禁区：对方不爱被催；晚安一定要说；别提前任。
 //	对方近况：项目上线前在赶工。
-func renderSnapshot(snap Snapshot, now time.Time) string {
+func renderSnapshot(lang string, snap Snapshot, now time.Time) string {
 	var lines []string
-	if head := renderHead(snap); head != "" {
+	if head := renderHead(lang, snap); head != "" {
 		lines = append(lines, head)
 	}
 	if snap.Recent != "" {
-		if prefix, ok := recentPrefix(snap.RecentAt, now); ok {
-			lines = append(lines, "最近："+prefix+sentence(snap.Recent))
+		if prefix, ok := recentPrefix(lang, snap.RecentAt, now); ok {
+			lines = append(lines, prompt.Tf(lang, "prompt.relationship.render.recent", "最近：%s%s",
+				prefix, sentence(snap.Recent)))
 		}
 	}
 	if len(snap.Bonds) > 0 {
-		lines = append(lines, "默契与禁区："+strings.Join(snap.Bonds, "；")+"。")
+		lines = append(lines, prompt.Tf(lang, "prompt.relationship.render.bonds", "默契与禁区：%s。",
+			strings.Join(snap.Bonds, prompt.T(lang, "prompt.relationship.render.bond_sep", "；"))))
 	}
 	if snap.TheirNow != "" {
-		lines = append(lines, "对方近况："+sentence(snap.TheirNow))
+		lines = append(lines, prompt.Tf(lang, "prompt.relationship.render.their_now", "对方近况：%s",
+			sentence(snap.TheirNow)))
 	}
 	return strings.Join(lines, "\n")
 }
 
 // renderHead 渲染第一行：阶段与称呼。三项都可缺，缺哪项省哪句。
-func renderHead(snap Snapshot) string {
+func renderHead(lang string, snap Snapshot) string {
 	var parts []string
 	if snap.Stage != "" {
-		parts = append(parts, "阶段："+snap.Stage+"。")
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.stage", "阶段：%s。", snap.Stage))
 	}
 	switch {
 	case snap.MyCall != "" && snap.TheirCall != "":
-		parts = append(parts, "你叫对方「"+snap.MyCall+"」，对方叫你「"+snap.TheirCall+"」。")
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.calls_both",
+			"你叫对方「%s」，对方叫你「%s」。", snap.MyCall, snap.TheirCall))
 	case snap.MyCall != "":
-		parts = append(parts, "你叫对方「"+snap.MyCall+"」。")
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.call_mine",
+			"你叫对方「%s」。", snap.MyCall))
 	case snap.TheirCall != "":
-		parts = append(parts, "对方叫你「"+snap.TheirCall+"」。")
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.call_theirs",
+			"对方叫你「%s」。", snap.TheirCall))
 	}
 	return strings.Join(parts, "")
 }
 
 // recentPrefix 给「最近」配上时间前缀。过了有效期返回 false，整行不注入——过期的
 // 「最近」不是最近。没有时刻（手改过的文件）或时钟倒流时不标前缀但仍注入。
-func recentPrefix(at, now time.Time) (string, bool) {
+func recentPrefix(lang string, at, now time.Time) (string, bool) {
 	if at.IsZero() {
 		return "", true
 	}
 	if now.Sub(at) > recentTTL {
 		return "", false
 	}
-	return agoText(at, now), true
+	return agoText(lang, at, now), true
 }
 
 // sentence 给一句话补上句号，已有终结标点的不重复加。
@@ -177,7 +197,7 @@ func sentence(s string) string {
 
 // agoText 把时刻化成「今天 / 昨天 / N 天前」，按日历日算而不是按 24 小时——昨晚的事
 // 今天凌晨不该说「今天」。零值或倒流（改过系统时钟）时不标。口径与人物库一致。
-func agoText(t, now time.Time) string {
+func agoText(lang string, t, now time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
@@ -190,10 +210,10 @@ func agoText(t, now time.Time) string {
 	case days < 0:
 		return ""
 	case days == 0:
-		return "今天"
+		return prompt.T(lang, "prompt.relationship.ago.today", "今天")
 	case days == 1:
-		return "昨天"
+		return prompt.T(lang, "prompt.relationship.ago.yesterday", "昨天")
 	default:
-		return fmt.Sprintf("%d 天前", days)
+		return prompt.Tf(lang, "prompt.relationship.ago.days", "%d 天前", days)
 	}
 }

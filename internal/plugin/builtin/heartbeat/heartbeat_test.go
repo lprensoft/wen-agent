@@ -532,10 +532,10 @@ func TestGapNote(t *testing.T) {
 		{"未知不附", time.Time{}, "提示词"},
 		{"不足一分钟不附", now.Add(-30 * time.Second), "提示词"},
 		{"分钟", now.Add(-20 * time.Minute), "提示词\n\n【距上次对话】20 分钟"},
-		{"跨天附冷唤醒提示", now.Add(-30 * time.Hour), "提示词\n\n【距上次对话】1 天 6 小时\n" + coldWakeNote},
+		{"跨天附冷唤醒提示", now.Add(-30 * time.Hour), "提示词\n\n【距上次对话】1 天 6 小时\n" + coldWakeNoteZH},
 	}
 	for _, c := range cases {
-		if got := gapNote("提示词", c.lastActive, now, 30*time.Minute); got != c.want {
+		if got := gapNote("", "提示词", c.lastActive, now, 30*time.Minute); got != c.want {
 			t.Errorf("%s: gapNote = %q，期望 %q", c.name, got, c.want)
 		}
 	}

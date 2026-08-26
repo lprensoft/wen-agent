@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang              string
 	persona           string
 	userProfile       string
 	voiceSamples      string
@@ -77,7 +79,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		{
 			Key: "persona", Label: "角色设定", Type: plugin.FieldText,
 			Description: "扮演谁、什么性格、什么处境、怎么说话。作为最高优先级提示词每轮注入。留空则不注入设定，只保留表达规则。",
-			Default:     "",
+			Default:     defaultPersona,
 		},
 		{
 			// 标签用「我的信息」：填的人就是你自己。注入给模型的那一段仍写作
@@ -92,7 +94,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 				"每段一来一回（你说什么、角色怎么答），段与段之间空一行；覆盖不同情绪的场合" +
 				"（高兴时、被烦到时、认真说事时），开了【】演绎就在样例里也带上【】。" +
 				"样例里的人和事只是示范，不会被角色当成真实经历。",
-			Default: "",
+			Default: defaultVoiceSamples,
 		},
 		{
 			Key: "interaction", Label: "启用【】互动演绎", Type: plugin.FieldBool,
@@ -152,9 +154,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	// 三段共享一个预算，截断顺序 设定 > 我的信息 > 样例：设定是这个插件存在的
 	// 理由，样例没了角色仍然成立，只是味道淡
-	p.persona, p.userProfile, p.voiceSamples = clipTriple(persona, profile, samples, limit)
+	p.persona, p.userProfile, p.voiceSamples = clipTriple(ictx.Lang, persona, profile, samples, limit)
 	p.interaction = plugin.CfgBool(cfg, "interaction", defaultInteraction)
 	p.humanize = plugin.CfgBool(cfg, "humanize", defaultHumanize)
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)
@@ -171,6 +174,7 @@ func (p *Plugin) Tools() []plugin.Tool { return nil }
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang              string
 	persona           string
 	userProfile       string
 	voiceSamples      string
@@ -189,6 +193,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:              p.lang,
 		persona:           p.persona,
 		userProfile:       p.userProfile,
 		voiceSamples:      p.voiceSamples,
@@ -209,34 +214,34 @@ func (p *Plugin) SystemPrompt() string {
 	s := p.snapshot()
 	var parts []string
 	if s.persona != "" {
-		parts = append(parts, personaHeader+"\n\n"+s.persona)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.persona_header", personaHeaderZH)+"\n\n"+s.persona)
 	}
 	// 紧跟角色设定：样例是「这个角色是谁」的延伸。不设 persona 非空的门槛——
 	// 只填样例不填设定时，样例本身就是最小的角色设定
 	if s.voiceSamples != "" {
-		parts = append(parts, samplesHeader+"\n\n"+s.voiceSamples)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.samples_header", samplesHeaderZH)+"\n\n"+s.voiceSamples)
 	}
 	if s.userProfile != "" {
-		parts = append(parts, userHeader+"\n\n"+s.userProfile)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.user_header", userHeaderZH)+"\n\n"+s.userProfile)
 	}
 	if s.interaction {
-		parts = append(parts, interactionRules)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.interaction", interactionRulesZH))
 		// 身高规则依附于动作描写，不做演绎时它没有作用对象
 		if s.persona != "" && s.userProfile != "" {
-			parts = append(parts, heightRules)
+			parts = append(parts, prompt.T(s.lang, "prompt.roleplay.height", heightRulesZH))
 		}
 	}
 	if s.boundaries {
-		parts = append(parts, boundaryRules)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.boundary", boundaryRulesZH))
 	}
 	if s.humanize {
-		parts = append(parts, humanizeRules)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.humanize", humanizeRulesZH))
 	}
 	if s.timeRules {
-		parts = append(parts, timeRules)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.time", timeRulesZH))
 	}
 	if s.memoryRules {
-		parts = append(parts, memoryRules)
+		parts = append(parts, prompt.T(s.lang, "prompt.roleplay.memory", memoryRulesZH))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -254,7 +259,7 @@ func (p *Plugin) CompactPrompt(context.Context) string {
 	if !p.snapshot().hasCharacter() {
 		return ""
 	}
-	return compactRequirements
+	return prompt.T(p.snapshot().lang, "prompt.roleplay.compact", compactRequirementsZH)
 }
 
 // OnCompact 在历史被物理删除前抽出两样摘要保不住的东西，作为注记留在摘要末尾：

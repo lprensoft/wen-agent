@@ -256,7 +256,7 @@ func TestTrimToBudgetPinsSummary(t *testing.T) {
 	}
 	// 摘要代表一大段已被物理删除的历史，丢掉它等于永久失忆
 	if !strings.HasPrefix(got[1].Content, "摘要：") {
-		t.Errorf("被钉住的摘要不应被裁掉: %q", truncateRunes(got[1].Content, 12))
+		t.Errorf("被钉住的摘要不应被裁掉: %q", truncateRunes("", got[1].Content, 12))
 	}
 	if got[len(got)-1].Content != "最新问题" {
 		t.Error("最近一轮必须保留")

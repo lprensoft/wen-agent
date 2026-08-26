@@ -12,12 +12,12 @@ package stylewatch
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/stylecheck"
 )
@@ -35,12 +35,13 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
-	dir    string
-	notify bool
-	ignore map[string]bool
-	notice plugin.NoticeFunc
-	ctx    context.Context // 后台 goroutine 用的 ctx：广播进来的那个在轮次结束时就被取消
-	cancel context.CancelFunc
+	langCode string
+	dir      string
+	notify   bool
+	ignore   map[string]bool
+	notice   plugin.NoticeFunc
+	ctx      context.Context // 后台 goroutine 用的 ctx：广播进来的那个在轮次结束时就被取消
+	cancel   context.CancelFunc
 
 	// 统计状态。stopped 让 wg.Add 与 wg.Wait 有明确的先后：两者都在 statsMu 内决定。
 	statsMu sync.Mutex
@@ -90,12 +91,23 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	}
 }
 
+// lang 取进程语言。加锁是因为 Init 可重入，而统计与注记可能正在渲染。
+func (p *Plugin) lang() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.langCode
+}
+
 // ruleCatalog 把规则表渲染成「id（标签）」的顿号列表，给配置项说明用。
+//
+// 它进的是 ConfigField 的说明，而那句说明按请求语言翻译（走 i18n），这里拿不到
+// 请求——所以标签一律用中文原文，与说明的中文原文同语言；英文那份说明在语言包里
+// 自带英文的标签列表。
 func ruleCatalog() string {
 	rs := stylecheck.Rules()
 	parts := make([]string, 0, len(rs))
 	for _, r := range rs {
-		parts = append(parts, r.ID+"（"+r.Label+"）")
+		parts = append(parts, r.ID+"（"+r.Label.ZH()+"）")
 	}
 	return strings.Join(parts, "、")
 }
@@ -105,7 +117,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录，无法保存统计")
 	}
-	ignore, err := parseIgnore(plugin.CfgString(cfg, "ignore_rules", ""))
+	ignore, err := parseIgnore(ictx.Lang, plugin.CfgString(cfg, "ignore_rules", ""))
 	if err != nil {
 		return err
 	}
@@ -113,6 +125,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.stopWorkers()
 
 	p.mu.Lock()
+	p.langCode = ictx.Lang
 	p.dir = ictx.StateDir
 	p.notify = plugin.CfgBool(cfg, "notify", defaultNotify)
 	p.ignore = ignore
@@ -129,7 +142,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 // parseIgnore 解析一行一个的规则 id。未知的 id 当作错误报出：配置是在设置页保存时
 // 校验的，一个拼错的 id 静默忽略掉，用户会以为它生效了。
-func parseIgnore(text string) (map[string]bool, error) {
+func parseIgnore(lang, text string) (map[string]bool, error) {
 	out := map[string]bool{}
 	var unknown []string
 	for _, line := range strings.Split(text, "\n") {
@@ -144,7 +157,8 @@ func parseIgnore(text string) (map[string]bool, error) {
 		out[id] = true
 	}
 	if len(unknown) > 0 {
-		return nil, fmt.Errorf("未知的规则 id：%s；可用的规则：%s", strings.Join(unknown, "、"), ruleCatalog())
+		return nil, fmt.Errorf(i18n.T(lang, "plugin.style_watch.unknown_rule",
+			"未知的规则 id：%s；可用的规则：%s"), strings.Join(unknown, "、"), ruleCatalog())
 	}
 	return out, nil
 }
@@ -156,6 +170,7 @@ func (p *Plugin) Tools() []plugin.Tool { return []plugin.Tool{&reportTool{p: p}}
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang   string
 	dir    string
 	notify bool
 	ignore map[string]bool
@@ -166,7 +181,7 @@ type settings struct {
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{dir: p.dir, notify: p.notify, ignore: p.ignore, notice: p.notice, ctx: p.ctx}
+	return settings{lang: p.langCode, dir: p.dir, notify: p.notify, ignore: p.ignore, notice: p.notice, ctx: p.ctx}
 }
 
 // OnTurnEnd 把本轮的检测结果计入当天的统计。在轮次收尾的同步路径上被调用，
@@ -199,8 +214,8 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 
 // record 跑检测、计入统计、落盘，命中时留注记。在后台 goroutine 中执行。
 func (p *Plugin) record(s settings, scope plugin.Scope, ev plugin.TurnEndEvent, text string) {
-	hits := filterHits(stylecheck.Check(text), s.ignore)
-	m := stylecheck.Measure(text)
+	hits := filterHits(stylecheck.Check(s.lang, text), s.ignore)
+	m := stylecheck.Measure(s.lang, text)
 
 	p.statsMu.Lock()
 	day := p.st.day(dateOf(ev.EndedAt))
@@ -216,8 +231,8 @@ func (p *Plugin) record(s settings, scope plugin.Scope, ev plugin.TurnEndEvent, 
 	p.persist(s.dir, snap, seq)
 
 	if s.notify && len(hits) > 0 && s.notice != nil && ev.SessionID != "" {
-		if err := s.notice(plugin.WithScope(s.ctx, scope), ev.SessionID, renderNotice(hits)); err != nil {
-			log.Printf("文风观察：注记写入失败：%v", err)
+		if err := s.notice(plugin.WithScope(s.ctx, scope), ev.SessionID, renderNotice(s.lang, hits)); err != nil {
+			i18n.Logf(s.lang, "log.stylewatch.notice_failed", "文风观察：注记写入失败：%v", err)
 		}
 	}
 }
@@ -231,7 +246,7 @@ func (p *Plugin) persist(dir string, snap stats, seq uint64) {
 	}
 	p.savedSeq = seq
 	if err := saveStats(dir, snap); err != nil {
-		log.Printf("文风观察：统计写入失败：%v", err)
+		i18n.Logf(p.lang(), "log.stylewatch.stats_write_failed", "文风观察：统计写入失败：%v", err)
 	}
 }
 
@@ -250,7 +265,7 @@ func filterHits(hits []stylecheck.Hit, ignore map[string]bool) []stylecheck.Hit 
 }
 
 // renderNotice 把一轮的命中合并成一条注记：同一规则只举一处片段，多处带次数。
-func renderNotice(hits []stylecheck.Hit) string {
+func renderNotice(lang string, hits []stylecheck.Hit) string {
 	type agg struct {
 		label, snippet string
 		n              int
@@ -274,11 +289,12 @@ func renderNotice(hits []stylecheck.Hit) string {
 			s += fmt.Sprintf(" ×%d", a.n)
 		}
 		if a.snippet != "" {
-			s += "「" + a.snippet + "」"
+			s += i18n.Tf(lang, "plugin.style_watch.snippet", "「%s」", a.snippet)
 		}
 		parts = append(parts, s)
 	}
-	return clipRunes("✍️ 文风提醒："+strings.Join(parts, "、"), noticeMaxRunes)
+	return clipRunes(i18n.Tf(lang, "plugin.style_watch.notice", "✍️ 文风提醒：%s",
+		strings.Join(parts, i18n.T(lang, "plugin.style_watch.sep", "、"))), noticeMaxRunes)
 }
 
 func clipRunes(s string, max int) string {

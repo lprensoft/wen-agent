@@ -55,7 +55,7 @@ func TestThinkingEnabledRequest(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{
 		Model:       "deepseek-v4-flash",
 		Messages:    testMessages("hi"),
@@ -87,7 +87,7 @@ func TestThinkingOffRequest(t *testing.T) {
 	srv := sseServer(t, []string{`{"choices":[{"delta":{"content":"ok"}}]}`}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{
 		Model: "deepseek-chat", Messages: testMessages("hi"), Temperature: 0.7, Thinking: "off",
 	})
@@ -116,7 +116,7 @@ func TestToolCallChunkAssembly(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestReasoningContentSentBack(t *testing.T) {
 	srv := sseServer(t, []string{`{"choices":[{"delta":{"content":"ok"}}]}`}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	msgs := []Message{
 		{Role: RoleUser, Content: "hi"},
 		{Role: RoleAssistant, Content: "", Reasoning: "之前的思考", ToolCalls: []ToolCall{
@@ -165,7 +165,7 @@ func TestUsageParsedAndStreamOptionsSent(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestAPIErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-bad", "")
+	p := NewOpenAICompat("", srv.URL, "sk-bad", "")
 	if _, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")}); err == nil {
 		t.Fatal("expected error on 401")
 	}

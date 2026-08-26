@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -21,6 +23,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang           string // 进程语言，注入片段与工具文本据此取用
 	base           string // 基准清单库目录（= 共享域）
 	maxContainers  int
 	maxItems       int
@@ -80,7 +83,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把清单散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存持有物清单")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.belongings.no_state_dir",
+			"没有可用的持久化目录，无法保存持有物清单"))
 	}
 
 	p.storesMu.Lock()
@@ -89,6 +93,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "belongings")
 	p.maxContainers = plugin.CfgInt(cfg, "max_containers", defaultMaxContainers)
 	p.maxItems = plugin.CfgInt(cfg, "max_items", defaultMaxItems)
@@ -103,8 +108,17 @@ func (p *Plugin) Tools() []plugin.Tool {
 	}
 }
 
+// langOf 取进程语言。SystemPrompt 与 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
+
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang           string
 	base           string
 	maxContainers  int
 	maxItems       int
@@ -116,6 +130,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:           p.lang,
 		base:           p.base,
 		maxContainers:  p.maxContainers,
 		maxItems:       p.maxItems,
@@ -125,7 +140,7 @@ func (p *Plugin) snapshot() settings {
 
 // SystemPrompt 注入维护判据，全部为静态内容。
 // 清单本体改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
 
 // TurnPrompt 注入本轮可读的清单。一个容器都没有时不注入：判据已在 SystemPrompt 里。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
@@ -137,7 +152,8 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || len(cs) == 0 {
 		return "", err
 	}
-	return stateHeader + "\n" + renderContainers(cs, s.maxInjectBytes, time.Now()), nil
+	return stateHeaderFor(s.lang) + "\n" +
+		renderContainers(s.lang, cs, s.maxInjectBytes, time.Now()), nil
 }
 
 // ---------- 按可见域分库 ----------
@@ -159,7 +175,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -202,7 +218,8 @@ func (p *Plugin) visibleContainers(ctx context.Context) ([]Container, error) {
 		}
 	}
 	if out == nil && len(errs) > 0 {
-		return nil, fmt.Errorf("读取持有物清单失败: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf(prompt.T(p.langOf(), "prompt.belongings.store.read_failed",
+			"读取持有物清单失败: %s"), strings.Join(errs, "; "))
 	}
 	return out, nil
 }
@@ -212,33 +229,35 @@ func (p *Plugin) visibleContainers(ctx context.Context) ([]Container, error) {
 // renderContainers 按预算渲染清单，分三级降级：
 // 全列（物品 + 备注 + 入库时间）→ 每容器只报件数 → 只注明容器数。
 // 降级保住存在性：容器名在，模型才知道那处清单存在，不会凭空另起一份。
-func renderContainers(cs []Container, maxBytes int, now time.Time) string {
-	if out, ok := renderLines(cs, maxBytes, now, true); ok {
+func renderContainers(lang string, cs []Container, maxBytes int, now time.Time) string {
+	if out, ok := renderLines(lang, cs, maxBytes, now, true); ok {
 		return out
 	}
-	if out, ok := renderLines(cs, maxBytes, now, false); ok {
+	if out, ok := renderLines(lang, cs, maxBytes, now, false); ok {
 		return out
 	}
-	return fmt.Sprintf("（共 %d 个容器，注入预算不足以列出，可用 list_items 查看）", len(cs))
+	return prompt.Tf(lang, "prompt.belongings.render.budget_short",
+		"（共 %d 个容器，注入预算不足以列出，可用 list_items 查看）", len(cs))
 }
 
-func renderLines(cs []Container, maxBytes int, now time.Time, withItems bool) (string, bool) {
+func renderLines(lang string, cs []Container, maxBytes int, now time.Time, withItems bool) (string, bool) {
 	var b strings.Builder
 	for _, c := range cs {
 		b.WriteString(c.Name)
-		b.WriteString("：")
+		b.WriteString(prompt.T(lang, "prompt.belongings.render.colon", "："))
 		switch {
 		case len(c.Items) == 0:
-			b.WriteString("（空）")
+			b.WriteString(prompt.T(lang, "prompt.belongings.render.empty", "（空）"))
 		case withItems:
 			for i, it := range c.Items {
 				if i > 0 {
-					b.WriteString("、")
+					b.WriteString(prompt.T(lang, "prompt.belongings.render.sep", "、"))
 				}
-				b.WriteString(renderItem(it, now))
+				b.WriteString(renderItem(lang, it, now))
 			}
 		default:
-			fmt.Fprintf(&b, "（%d 项，可用 list_items 查看）", len(c.Items))
+			b.WriteString(prompt.Tf(lang, "prompt.belongings.render.count_only",
+				"（%d 项，可用 list_items 查看）", len(c.Items)))
 		}
 		b.WriteString("\n")
 	}
@@ -251,7 +270,7 @@ func renderLines(cs []Container, maxBytes int, now time.Time, withItems bool) (s
 
 // renderItem 渲染单件物品：名称、数量、备注与入库时间。
 // 不满一天的不标时间——今天放进去的默认就是新的，标了只是噪声。
-func renderItem(it Item, now time.Time) string {
+func renderItem(lang string, it Item, now time.Time) string {
 	s := it.Name
 	if it.Qty > 0 {
 		s += fmt.Sprintf("×%d", it.Qty)
@@ -260,30 +279,27 @@ func renderItem(it Item, now time.Time) string {
 	if it.Note != "" {
 		extras = append(extras, it.Note)
 	}
-	if a := ageNote(it.Added, now); a != "" {
+	if a := ageNote(lang, it.Added, now); a != "" {
 		extras = append(extras, a)
 	}
 	if len(extras) > 0 {
-		s += "（" + strings.Join(extras, "；") + "）"
+		s += prompt.T(lang, "prompt.belongings.render.extras_open", "（") +
+			strings.Join(extras, prompt.T(lang, "prompt.belongings.render.extras_sep", "；")) +
+			prompt.T(lang, "prompt.belongings.render.extras_close", "）")
 	}
 	return s
 }
 
-// ageNote 把入库时刻化成「N 天前放入」（与 presence 的时长口径一致，粒度到天）。
-// 时刻缺失或倒流（改过系统时钟）时不标，不猜。
-func ageNote(added, now time.Time) string {
+// ageNote 把入库时刻化成「N 天前放入」。时长的说法走全程序共用的那一份
+// （prompt.Duration），因此这里只判「够不够一天」——不满一天的不标，今天放进去的
+// 默认就是新的，标了只是噪声。时刻缺失或倒流（改过系统时钟）时不标，不猜。
+func ageNote(lang string, added, now time.Time) string {
 	if added.IsZero() {
 		return ""
 	}
 	gap := now.Sub(added)
-	switch {
-	case gap < 24*time.Hour:
+	if gap < 24*time.Hour {
 		return ""
-	case gap < 30*24*time.Hour:
-		return fmt.Sprintf("%d 天前放入", int(gap.Hours()/24))
-	case gap < 365*24*time.Hour:
-		return fmt.Sprintf("%d 个月前放入", int(gap.Hours()/24/30))
-	default:
-		return fmt.Sprintf("%d 年前放入", int(gap.Hours()/24/365))
 	}
+	return prompt.Tf(lang, "prompt.belongings.item.age", "%s前放入", prompt.Duration(lang, gap))
 }

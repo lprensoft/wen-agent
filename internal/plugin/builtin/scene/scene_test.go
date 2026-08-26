@@ -33,7 +33,7 @@ func TestRequiresRoleplay(t *testing.T) {
 }
 
 func TestStoreSaveDupAndReplace(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, err := s.Save(Scene{Name: "老宅阁楼", Detail: "堆满旧木箱，天窗漏光"}, false); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestStoreSaveDupAndReplace(t *testing.T) {
 }
 
 func TestStoreValidation(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, err := s.Save(Scene{Name: "", Detail: "x"}, false); err == nil {
 		t.Fatal("空名称应当报错")
 	}
@@ -190,7 +190,7 @@ func TestDomainIsolation(t *testing.T) {
 	}
 
 	// 域 a 落在独立目录
-	if _, err := NewStore(filepath.Join(dir, "scenes-a")).List(); err != nil {
+	if _, err := NewStore("", filepath.Join(dir, "scenes-a")).List(); err != nil {
 		t.Fatalf("读取域 a 的库: %v", err)
 	}
 
@@ -224,24 +224,24 @@ func TestRenderScenesDegrade(t *testing.T) {
 		{Name: "凉亭", Detail: strings.Repeat("长描述", 20)},
 	}
 	// 预算充足：全列
-	full := renderScenes(scenes, 0, 4096)
+	full := renderScenes("", scenes, 0, 4096)
 	if !strings.Contains(full, "阁楼：") || !strings.Contains(full, "长描述") {
 		t.Fatalf("全列不对: %q", full)
 	}
 	// 预算收紧：省略描述只留名称
-	names := renderScenes(scenes, 0, 60)
+	names := renderScenes("", scenes, 0, 60)
 	if strings.Contains(names, "长描述") || !strings.Contains(names, "凉亭") {
 		t.Fatalf("降级到名称: %q", names)
 	}
 	// 预算极小：只注明条数
-	count := renderScenes(scenes, 0, 10)
+	count := renderScenes("", scenes, 0, 10)
 	if !strings.Contains(count, "共 3 处场景") {
 		t.Fatalf("最终降级: %q", count)
 	}
 	// 条数上限：保留最近更新的，注明另有几处
 	scenes[0].Updated = scenes[0].Updated.AddDate(0, 0, 1)
 	scenes[2].Updated = scenes[2].Updated.AddDate(0, 0, 2)
-	limited := renderScenes(scenes, 2, 4096)
+	limited := renderScenes("", scenes, 2, 4096)
 	if strings.Contains(limited, "面馆") || !strings.Contains(limited, "另有 1 处未列出") {
 		t.Fatalf("条数上限: %q", limited)
 	}

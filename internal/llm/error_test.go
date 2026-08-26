@@ -65,7 +65,7 @@ func TestOpenAICompatNon200IsTypedError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-bad", "")
+	p := NewOpenAICompat("", srv.URL, "sk-bad", "")
 	_, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Status != 401 {
@@ -83,7 +83,7 @@ func TestOpenAICompatStreamErrorFrame(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestOpenAICompatStreamErrorFrameNumericCode(t *testing.T) {
 	srv := sseServer(t, []string{`{"error":{"code":20015,"message":"内容不合规"}}`}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestOpenAICompatContentFilterFinish(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestOpenAICompatNormalFinishReason(t *testing.T) {
 	}, &got)
 	defer srv.Close()
 
-	p := NewOpenAICompat(srv.URL, "sk-test", "")
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
 	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
 	if err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ package mdtext
 import (
 	"regexp"
 	"strings"
+	"wen/internal/i18n"
 )
 
 var (
@@ -28,7 +29,7 @@ var (
 // 加「」、标题加【】、列表换 •、引用换 ｜、链接展开为「文字（URL）」、代码块
 // 围栏换分隔线且内容全程保护不参与行内替换。表格不在此处理——各通道对表格的
 // 降级策略不同（QQ 有专门的键值行降级），调用方自行前置。
-func ToPlainText(text string) string {
+func ToPlainText(lang, text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	inCode := false
@@ -42,7 +43,7 @@ func ToPlainText(text string) string {
 			out = append(out, line)
 			continue
 		}
-		line = imageRe.ReplaceAllString(line, "[图片] $2")
+		line = imageRe.ReplaceAllString(line, i18n.T(lang, "mdtext.image", "[图片]")+" $2")
 		line = linkRe.ReplaceAllStringFunc(line, func(m string) string {
 			sub := linkRe.FindStringSubmatch(m)
 			if sub[1] == "" || sub[1] == sub[2] {

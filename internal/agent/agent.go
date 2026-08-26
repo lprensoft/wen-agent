@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
@@ -45,10 +45,13 @@ type Event struct {
 }
 
 type Options struct {
-	Model         string
-	Temperature   float64
-	MaxTokens     int
-	SystemPrompt  string
+	Model        string
+	Temperature  float64
+	MaxTokens    int
+	SystemPrompt string
+	// Lang 是这个进程发给模型的文本用哪门语言（zh / en / …）。空串按中文处理。
+	// 启动时定死、整轮之间不变，因此 system 前缀仍是逐字节稳定的缓存前缀。
+	Lang          string
 	MaxTurns      int
 	Workdir       string // 工具的工作目录，写入环境块
 	Thinking      string // 思考模式：off 或强度档位
@@ -233,7 +236,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
 	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(opts.Workdir), toolRules, historyRules}
+	parts := []string{envContext(opts.Lang, opts.Workdir), toolRulesFor(opts.Lang), historyRulesFor(opts.Lang)}
 	parts = append(parts, a.plugins.SystemPrompts()...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
@@ -263,10 +266,10 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		if !h.TS.IsZero() {
 			if d := h.TS.Format("2006-01-02"); d != markedDay {
 				markedDay = d
-				note += dayMark(h.TS) + "\n"
+				note += dayMark(opts.Lang, h.TS) + "\n"
 			}
 		}
-		note += gapNote(lastTS, h.TS)
+		note += gapNote(opts.Lang, lastTS, h.TS)
 		if !h.TS.IsZero() {
 			lastTS = h.TS
 		}
@@ -290,7 +293,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	if !lastTS.IsZero() {
 		sinceLast = startedAt.Sub(lastTS)
 	}
-	wireUser.Content = turnStateBlock(startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
+	wireUser.Content = turnStateBlock(opts.Lang, startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
 		"\n\n" + userMsg.Content
 	msgs = append(msgs, wireUser)
 	pinned = append(pinned, false)
@@ -374,11 +377,11 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		for _, call := range r.toolCalls {
 			emit(Event{Type: EventToolStart, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 			// 护栏先看一眼：重复的调用不执行，把「已经做完了」当场告诉模型
-			result := guard.check(call)
+			result := guard.check(a.opts.Lang, call)
 			if result == "" {
 				result = a.execute(ctx, call)
 			} else {
-				log.Printf("agent: 拦下重复的工具调用 %s（本轮第 %d 次拦截）", call.Name, guard.hits)
+				i18n.Logf(a.opts.Lang, "log.agent.tool_blocked", "agent: 拦下重复的工具调用 %s（本轮第 %d 次拦截）", call.Name, guard.hits)
 			}
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
@@ -394,8 +397,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		// 「就地收尾」——前台由 FailureTranslator 演成一句走神，后台的发起方（心跳、
 		// 日程）据此记一次失败并按自己的节奏重来，两边都比返回一句空话强。
 		if guard.exhausted() {
-			log.Printf("agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
-			return "", errToolLoop
+			i18n.Logf(a.opts.Lang, "log.agent.tool_loop_abort", "agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
+			return "", toolLoopError(a.opts.Lang)
 		}
 	}
 	return "", fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
@@ -487,8 +490,10 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 		// 但那是磁盘故障级别的场景，一致性让位于把问题报出来。
 		return "", false
 	}
-	if err := a.AppendNotice(ctx, sessionID, "本轮模型调用失败，回复由插件转译生成。原始错误："+cause.Error()); err != nil {
-		log.Printf("写失败转译注记失败: %v", err)
+	note := i18n.Tf(a.opts.Lang, "agent.notice.failure_translated",
+		"本轮模型调用失败，回复由插件转译生成。原始错误：%s", cause.Error())
+	if err := a.AppendNotice(ctx, sessionID, note); err != nil {
+		i18n.Logf(a.opts.Lang, "log.agent.notice_failed", "写失败转译注记失败: %v", err)
 	}
 	return text, true
 }

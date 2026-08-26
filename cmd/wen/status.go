@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"strings"
 
 	"wen/internal/config"
 	"wen/internal/runlock"
@@ -13,35 +12,37 @@ import (
 // runStatus 打印当前配置与运行状态。不进交互，便于 ssh 一条命令看清楚现状。
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
 	_ = fs.Parse(args)
 
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
+	adoptLang(cfg)
 	b, err := openBackend(cfg)
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("Wen Agent %s\n", version.Version)
-	fmt.Printf("配置文件  %s\n", path)
-	fmt.Printf("配置目录  %s\n", cfg.BaseDir)
+	fmt.Print(trf("cli.status.config_file", "配置文件  %s\n", path))
+	fmt.Print(trf("cli.status.config_dir", "配置目录  %s\n", cfg.BaseDir))
+	fmt.Print(trf("cli.status.lang", "界面语言  %s\n", langSummary(cfg)))
 
 	if info, ok := runlock.Read(cfg.BaseDir); ok && reachable(info.Addr) {
-		fmt.Printf("运行状态  运行中 · 监听 %s · PID %d · 版本 %s\n", info.Addr, info.PID, info.Version)
+		fmt.Print(trf("cli.status.running", "运行状态  运行中 · 监听 %s · PID %d · 版本 %s\n", info.Addr, info.PID, info.Version))
 	} else {
-		fmt.Printf("运行状态  未运行（配置里的监听地址为 %s:%d）\n", cfg.Server.Host, cfg.Server.Port)
+		fmt.Print(trf("cli.status.stopped", "运行状态  未运行（配置里的监听地址为 %s:%d）\n", cfg.Server.Host, cfg.Server.Port))
 	}
 
 	if auth, err := b.loadAuth(); err == nil {
-		fmt.Printf("访问控制  %s\n", describeAuth(auth))
+		fmt.Print(trf("cli.status.auth", "访问控制  %s\n", describeAuth(auth)))
 	}
 
 	if doc, err := b.loadModels(); err == nil {
-		fmt.Printf("当前模型  %s / %s\n", doc.Current.Provider, doc.Current.Model)
+		fmt.Print(trf("cli.status.model", "当前模型  %s / %s\n", doc.Current.Provider, doc.Current.Model))
 	}
 
 	list, err := b.listPlugins()
@@ -56,17 +57,17 @@ func runStatus(args []string) error {
 			off = append(off, p.Name)
 		}
 	}
-	fmt.Printf("已启用插件（%d）%s\n", len(on), wrapNames(on))
-	fmt.Printf("已禁用插件（%d）%s\n", len(off), wrapNames(off))
-	fmt.Printf("\n数据来源  %s\n", b.mode())
+	fmt.Print(trf("cli.status.enabled", "已启用插件（%d）%s\n", len(on), wrapNames(on)))
+	fmt.Print(trf("cli.status.disabled", "已禁用插件（%d）%s\n", len(off), wrapNames(off)))
+	fmt.Print(trf("cli.status.source", "\n数据来源  %s\n", b.mode()))
 	return nil
 }
 
 func wrapNames(names []string) string {
 	if len(names) == 0 {
-		return "  （无）"
+		return tr("cli.status.none", "  （无）")
 	}
-	return "\n  " + strings.Join(names, "、")
+	return "\n  " + joinList(names)
 }
 
 // describeAuth 与服务端启动日志的 authSummary 说的是同一件事，

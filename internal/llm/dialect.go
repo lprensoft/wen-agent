@@ -1,5 +1,7 @@
 package llm
 
+import "wen/internal/i18n"
+
 import "slices"
 
 // 思考参数方言：OpenAI 兼容协议只统一了 messages/tools/stream 这一层，
@@ -16,18 +18,18 @@ const (
 var KnownDialects = []string{DialectDeepSeek, DialectMiniMax, DialectQwen, DialectEffort, DialectNone}
 
 // DialectLabel 返回方言的中文显示名。
-func DialectLabel(d string) string {
+func DialectLabel(lang, d string) string {
 	switch d {
 	case DialectDeepSeek:
-		return "DeepSeek（thinking + reasoning_effort）"
+		return i18n.T(lang, "llm.dialect.deepseek", "DeepSeek（thinking + reasoning_effort）")
 	case DialectMiniMax:
-		return "MiniMax（adaptive + reasoning_split）"
+		return i18n.T(lang, "llm.dialect.minimax", "MiniMax（adaptive + reasoning_split）")
 	case DialectQwen:
-		return "Qwen（enable_thinking）"
+		return i18n.T(lang, "llm.dialect.qwen", "Qwen（enable_thinking）")
 	case DialectEffort:
-		return "OpenAI / Kimi（reasoning_effort）"
+		return i18n.T(lang, "llm.dialect.effort", "OpenAI / Kimi（reasoning_effort）")
 	case DialectNone:
-		return "不发送思考参数"
+		return i18n.T(lang, "llm.dialect.none", "不发送思考参数")
 	}
 	return d
 }

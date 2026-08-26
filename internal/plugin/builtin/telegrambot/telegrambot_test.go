@@ -222,7 +222,7 @@ func TestToMarkdownV2(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := toMarkdownV2(c.in); got != c.want {
+			if got := toMarkdownV2("", c.in); got != c.want {
 				t.Errorf("toMarkdownV2(%q)\n= %q\n想要 %q", c.in, got, c.want)
 			}
 		})
@@ -230,7 +230,7 @@ func TestToMarkdownV2(t *testing.T) {
 }
 
 func TestToMarkdownV2CodeBlock(t *testing.T) {
-	got := toMarkdownV2("说明：\n```go\na := b-c\n```\n完")
+	got := toMarkdownV2("", "说明：\n```go\na := b-c\n```\n完")
 	want := "说明：\n```go\na := b-c\n```\n完"
 	if got != want {
 		t.Errorf("代码块内容不该被转义\n= %q\n想要 %q", got, want)
@@ -239,7 +239,7 @@ func TestToMarkdownV2CodeBlock(t *testing.T) {
 
 // 围栏不成对会让 Telegram 整条拒收，得自己补上。
 func TestToMarkdownV2ClosesUnterminatedFence(t *testing.T) {
-	got := toMarkdownV2("```\nfoo")
+	got := toMarkdownV2("", "```\nfoo")
 	if strings.Count(got, "```") != 2 {
 		t.Errorf("未闭合的代码块应补上围栏: %q", got)
 	}
@@ -248,16 +248,16 @@ func TestToMarkdownV2ClosesUnterminatedFence(t *testing.T) {
 // ---------- 代理 ----------
 
 func TestBuildTransport(t *testing.T) {
-	if tr, err := buildTransport(""); err != nil || tr != nil {
+	if tr, err := buildTransport("", ""); err != nil || tr != nil {
 		t.Errorf("留空应直连: %v %v", tr, err)
 	}
 	for _, ok := range []string{"http://127.0.0.1:7890", "https://127.0.0.1:7890", "socks5://127.0.0.1:1080"} {
-		if _, err := buildTransport(ok); err != nil {
+		if _, err := buildTransport("", ok); err != nil {
 			t.Errorf("%s 应被接受: %v", ok, err)
 		}
 	}
 	for _, bad := range []string{"127.0.0.1:1080", "ftp://x:1", "socks5://"} {
-		if _, err := buildTransport(bad); err == nil {
+		if _, err := buildTransport("", bad); err == nil {
 			t.Errorf("%q 应被拒绝", bad)
 		}
 	}

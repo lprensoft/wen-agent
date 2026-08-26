@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // staleAfter 是字段「注明多久前更新」的门槛：新鲜的字段不标时间，隔久了的才标——
@@ -19,6 +20,7 @@ const staleAfter = 30 * time.Minute
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang string
 	base string // 基准快照库目录（= 共享域）
 
 	// 按可见域分出的库，惰性创建。单独一把锁：这张表的生命周期与配置无关。
@@ -55,6 +57,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "presence")
 	return nil
 }
@@ -65,7 +68,16 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // SystemPrompt 注入维护判据，全部为静态内容。
 // 快照本体改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string {
+	return prompt.T(p.snapshotLang(), "prompt.presence.guide", guidePromptZH)
+}
+
+// snapshotLang 取进程语言。加锁是因为 Init 可重入，而提示词可能正在生成。
+func (p *Plugin) snapshotLang() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // TurnPrompt 注入本轮的现场快照。没有记录时不注入。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
@@ -77,7 +89,9 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	return stateHeader + "\n" + renderSnapshot(snap, time.Now()), nil
+	lang := p.snapshotLang()
+	return prompt.T(lang, "prompt.presence.state_header", stateHeaderZH) + "\n" +
+		renderSnapshot(lang, snap, time.Now()), nil
 }
 
 // storeFor 返回某个可见域的快照库（惰性创建）。未初始化时返回 nil。
@@ -97,7 +111,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.snapshotLang(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -111,36 +125,20 @@ func (p *Plugin) storeFor(tag string) *Store {
 // renderSnapshot 按 fieldDefs 的顺序渲染快照。字段长度都有硬上限，整块体量
 // 有界（全字段填满约七百字），不需要预算与降级。
 // 隔了超过 staleAfter 才更新过的字段附上「N 前」，给模型判断时效的线索。
-func renderSnapshot(snap Snapshot, now time.Time) string {
+func renderSnapshot(lang string, snap Snapshot, now time.Time) string {
 	var b strings.Builder
 	for _, d := range fieldDefs {
 		f, ok := snap[d.key]
 		if !ok || f.Text == "" {
 			continue
 		}
-		line := d.label + "：" + f.Text
+		line := d.label.For(lang) + prompt.T(lang, "prompt.presence.field_sep", "：") + f.Text
 		if !f.Updated.IsZero() {
 			if gap := now.Sub(f.Updated); gap >= staleAfter {
-				line += "（" + humanizeGap(gap) + "前记下）"
+				line += prompt.Tf(lang, "prompt.presence.noted_ago", "（%s前记下）", prompt.Duration(lang, gap))
 			}
 		}
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// humanizeGap 把时长化成中文说法（与 body_sense 的口径一致）。
-func humanizeGap(d time.Duration) string {
-	switch {
-	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%d 小时", int(d.Hours()))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%d 天", int(d.Hours()/24))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%d 个月", int(d.Hours()/24/30))
-	default:
-		return fmt.Sprintf("%d 年", int(d.Hours()/24/365))
-	}
 }

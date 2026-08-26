@@ -28,7 +28,7 @@ func mcpJSON(body string) string {
 }
 
 func TestParseMCPGood(t *testing.T) {
-	servers, warnings, err := ParseMCP([]byte(mcpJSON(`{
+	servers, warnings, err := ParseMCP("", []byte(mcpJSON(`{
 		"b": {"type": "stdio", "command": "second"},
 		"a": {"type": "stdio", "command": "first", "args": ["--root", "${PLUGIN_ROOT}"]}
 	}`)))
@@ -46,14 +46,14 @@ func TestParseMCPGood(t *testing.T) {
 
 // 整份文件坏掉与单台 server 坏掉是两档：前者作废整个 MCP 组件，后者只跳过那一台。
 func TestParseMCPFailureBoundaries(t *testing.T) {
-	if _, _, err := ParseMCP([]byte(`{"mcpServers": {}}`)); err == nil {
+	if _, _, err := ParseMCP("", []byte(`{"mcpServers": {}}`)); err == nil {
 		t.Error("缺 $schema 应当整份作废")
 	}
-	if _, _, err := ParseMCP([]byte(`{"$schema": "https://agent-plugins.org/schemas/9.9/mcp.schema.json"}`)); err == nil {
+	if _, _, err := ParseMCP("", []byte(`{"$schema": "https://agent-plugins.org/schemas/9.9/mcp.schema.json"}`)); err == nil {
 		t.Error("schema 版本不认识应当整份作废")
 	}
 
-	servers, warnings, err := ParseMCP([]byte(mcpJSON(`{
+	servers, warnings, err := ParseMCP("", []byte(mcpJSON(`{
 		"good": {"type": "stdio", "command": "ok"},
 		"nocmd": {"type": "stdio"},
 		"weird": {"type": "carrier-pigeon"},
@@ -75,7 +75,7 @@ func TestParseMCPFailureBoundaries(t *testing.T) {
 
 // 回环地址允许明文：本机上的 server 没有中间人，而要求它配证书等于没法用。
 func TestParseMCPLoopbackHTTPAllowed(t *testing.T) {
-	servers, _, err := ParseMCP([]byte(mcpJSON(`{
+	servers, _, err := ParseMCP("", []byte(mcpJSON(`{
 		"local": {"type": "streamable-http", "url": "http://127.0.0.1:3000/mcp"}
 	}`)))
 	if err != nil || len(servers) != 1 {
@@ -85,7 +85,7 @@ func TestParseMCPLoopbackHTTPAllowed(t *testing.T) {
 
 func TestResolveExpansion(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir)
+	root, err := NewRoot("", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestResolveExpansion(t *testing.T) {
 // 包内的可执行文件不得指到包外。
 func TestResolveCommandContainment(t *testing.T) {
 	dir := t.TempDir()
-	root, err := NewRoot(dir)
+	root, err := NewRoot("", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLocalToolName(t *testing.T) {
 }
 
 func TestToolCacheRoundTrip(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := NewStore("", t.TempDir())
 	want := []ToolInfo{{Server: "fs", Remote: "read", Local: "demo_fs_read", Description: "d"}}
 	if err := store.SaveTools("demo", want); err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestToolCacheRoundTrip(t *testing.T) {
 
 // 没握过手不是故障，只是清单还空着——M1 装的包、手工拷进来的包都是这样。
 func TestLoadToolsMissingIsNotAnError(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := NewStore("", t.TempDir())
 	got, err := store.LoadTools("never-installed")
 	if err != nil || got != nil {
 		t.Fatalf("缺缓存该安静地返回空: %v %+v", err, got)
@@ -185,11 +185,11 @@ func TestLoadToolsMissingIsNotAnError(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	if got := truncate("短", 100); got != "短" {
+	if got := truncate("", "短", 100); got != "短" {
 		t.Errorf("没超限不该动: %q", got)
 	}
 	long := strings.Repeat("中", 100) // 每个 3 字节
-	got := truncate(long, 50)
+	got := truncate("", long, 50)
 	if !strings.Contains(got, "已截断") {
 		t.Error("截断了却没说")
 	}
@@ -257,7 +257,7 @@ func TestEndToEndStdio(t *testing.T) {
 		"self": {"type": "stdio", "command": "`+self+`", "env": {"`+serverEnv+`": "1"}}
 	}`))
 
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	b, err := store.Install(src)
 	if err != nil {
 		t.Fatalf("安装失败: %v", err)
@@ -267,7 +267,7 @@ func TestEndToEndStdio(t *testing.T) {
 	}
 
 	// 握手：拉起子进程、initialize、tools/list
-	tools, problems, err := Handshake(context.Background(), b, filepath.Join(base, "data"))
+	tools, problems, err := Handshake(context.Background(), "", b, filepath.Join(base, "data"))
 	if err != nil {
 		t.Fatalf("握手失败: %v", err)
 	}
@@ -285,11 +285,11 @@ func TestEndToEndStdio(t *testing.T) {
 	}
 
 	// 装配成插件，走一次真正的调用
-	b2, err := Load(store.Path(b.Manifest.Name))
+	b2, err := Load("", store.Path(b.Manifest.Name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := NewPlugin(b2, store)
+	p := NewPlugin("", b2, store)
 	if got := len(p.Tools()); got != 2 {
 		t.Fatalf("Tools() 该从缓存里读出 2 件，实际 %d 件", got)
 	}
@@ -366,12 +366,12 @@ func TestEndToEndStreamableHTTP(t *testing.T) {
 		"remote": {"type": "streamable-http", "url": "`+ts.URL+`", "headers": {"X-Tenant": "public"}}
 	}`))
 
-	store := NewStore(filepath.Join(base, "cfg"))
+	store := NewStore("", filepath.Join(base, "cfg"))
 	b, err := store.Install(src)
 	if err != nil {
 		t.Fatalf("安装失败: %v", err)
 	}
-	tools, problems, err := Handshake(context.Background(), b, filepath.Join(base, "data"))
+	tools, problems, err := Handshake(context.Background(), "", b, filepath.Join(base, "data"))
 	if err != nil || len(problems) > 0 {
 		t.Fatalf("握手失败: %v %v", err, problems)
 	}
@@ -382,7 +382,7 @@ func TestEndToEndStreamableHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewPlugin(b, store)
+	p := NewPlugin("", b, store)
 	if err := p.Init(plugin.InitContext{StateDir: filepath.Join(base, "state")}, nil); err != nil {
 		t.Fatalf("Init 失败: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestLoadClaudeLayout(t *testing.T) {
 	}
 	writeBundle(t, dir, "", map[string]string{"a": "---\nname: a\ndescription: d\n---\n"}, "")
 
-	b, err := Load(dir)
+	b, err := Load("", dir)
 	if err != nil {
 		t.Fatalf("加载失败: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestLooseManifestStillChecksName(t *testing.T) {
 		[]byte(`{"name": "Bad Name"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(dir); err == nil {
+	if _, err := Load("", dir); err == nil {
 		t.Fatal("名字不合法却装上了")
 	}
 }

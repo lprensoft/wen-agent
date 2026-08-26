@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // getupdates 长轮询主循环，对照官方 monitor.ts 移植：
@@ -34,9 +35,9 @@ func loadUpdatesBuf(stateDir string) string {
 	return strings.TrimSpace(string(raw))
 }
 
-func saveUpdatesBuf(stateDir, buf string) {
+func saveUpdatesBuf(lang, stateDir, buf string) {
 	if err := os.WriteFile(bufPath(stateDir), []byte(buf), 0o644); err != nil {
-		log.Printf("wechat_bot: 保存收信游标失败: %v", err)
+		i18n.Logf(lang, "log.wechat.save_cursor_failed", "wechat_bot: 保存收信游标失败: %v", err)
 	}
 }
 
@@ -50,7 +51,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 	buf := loadUpdatesBuf(stateDir)
 	timeout := longPollTimeout
 	fails := 0
-	log.Printf("wechat_bot: 已连接微信收信通道（bot_id=%s）", creds.BotID)
+	i18n.Logf(p.langOf(), "log.wechat.connected", "wechat_bot: 已连接微信收信通道（bot_id=%s）", creds.BotID)
 
 	for ctx.Err() == nil {
 		resp, err := p.getUpdates(ctx, creds, buf, timeout)
@@ -62,7 +63,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 				continue
 			}
 			fails++
-			log.Printf("wechat_bot: 收信失败（%d/%d）: %v", fails, maxConsecutiveFails, err)
+			i18n.Logf(p.langOf(), "log.wechat.poll_failed", "wechat_bot: 收信失败（%d/%d）: %v", fails, maxConsecutiveFails, err)
 			if fails >= maxConsecutiveFails {
 				fails = 0
 				sleepCtx(ctx, failBackoff)
@@ -76,14 +77,14 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 		}
 		if resp.Ret != 0 || resp.Errcode != 0 {
 			if resp.Ret == errcodeExpired || resp.Errcode == errcodeExpired {
-				log.Printf("wechat_bot: 微信侧会话已过期（errcode %d），暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
+				i18n.Logf(p.langOf(), "log.wechat.session_expired", "wechat_bot: 微信侧会话已过期（errcode %d），暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
 					errcodeExpired, pause)
 				fails = 0
 				sleepCtx(ctx, pause)
 				continue
 			}
 			fails++
-			log.Printf("wechat_bot: 收信接口报错（%d/%d）: ret=%d errcode=%d %s",
+			i18n.Logf(p.langOf(), "log.wechat.poll_api_error", "wechat_bot: 收信接口报错（%d/%d）: ret=%d errcode=%d %s",
 				fails, maxConsecutiveFails, resp.Ret, resp.Errcode, resp.Errmsg)
 			if fails >= maxConsecutiveFails {
 				fails = 0
@@ -96,7 +97,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 		fails = 0
 		if resp.GetUpdatesBuf != "" {
 			buf = resp.GetUpdatesBuf
-			saveUpdatesBuf(stateDir, buf)
+			saveUpdatesBuf(p.langOf(), stateDir, buf)
 		}
 		for _, msg := range resp.Msgs {
 			p.dispatch(ctx, msg)
@@ -128,7 +129,7 @@ func (p *Plugin) dispatch(ctx context.Context, msg wxMessage) {
 		return // Bot 自己的消息回显等
 	}
 	if msg.GroupID != "" {
-		log.Printf("wechat_bot: 忽略群聊消息（group_id=%s，仅支持私聊）", msg.GroupID)
+		i18n.Logf(p.langOf(), "log.wechat.group_ignored", "wechat_bot: 忽略群聊消息（group_id=%s，仅支持私聊）", msg.GroupID)
 		return
 	}
 	if msg.FromUserID == "" || msg.ContextToken == "" {

@@ -17,11 +17,12 @@ package wechatbot
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
@@ -53,6 +54,7 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
+	lang      string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	apiBase   string // 扫码入口用的公共基址；绑定后改用服务端下发的专属 baseurl
 	whitelist map[string]bool
 	format    string // 消息格式：markdown 直发 / plain 转纯文本
@@ -158,6 +160,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 
 // Init 应用配置并（重）启动。可重入：先停旧循环与骨架。
 // 未绑定时 Init 也成功——插件进入待绑定状态，等设置页扫码；绑定过则直接起轮询。
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录")
@@ -188,6 +197,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.Stop()
 
 	p.mu.Lock()
+	p.lang = ictx.Lang
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
@@ -201,6 +211,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	coreCfg := imbot.Config{
 		PluginName:     p.Name(),
 		Sender:         sender{p: p},
+		Lang:           ictx.Lang,
 		StateDir:       ictx.StateDir,
 		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
 		TurnTimeout:    turnTimeout,
@@ -238,7 +249,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if bound {
 		p.startPolling()
 	} else {
-		log.Printf("wechat_bot: 尚未绑定微信，请到设置页的插件卡片上点击「扫码绑定微信」")
+		i18n.Logf(p.langOf(), "log.wechat.not_bound_hint", "wechat_bot: 尚未绑定微信，请到设置页的插件卡片上点击「扫码绑定微信」")
 	}
 	return nil
 }
@@ -255,7 +266,7 @@ func (p *Plugin) rememberToken(msg imbot.Message) {
 	p.mu.Lock()
 	tokens := p.tokens
 	p.mu.Unlock()
-	tokens.remember(msg.UserID, msg.ReplyTo)
+	tokens.remember(p.langOf(), msg.UserID, msg.ReplyTo)
 }
 
 // onTyping 把骨架的「正在输入」回调接到微信协议层。

@@ -9,11 +9,11 @@ package weather
 // 宕机横跨的转变说「刚下起来」就是错的，宁可错过。
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/prompt"
 )
 
 // cueTTL 是天气理由的有效期。「刚下起雨」过了这个时长还没说出口就不再算数——
@@ -25,17 +25,17 @@ const cueTTL = 90 * time.Minute
 // 该说的是「停了」，而不是按顺序把两件事都播一遍。
 func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) bool {
 	s := p.snapshot()
-	prefix := s.rolePrefix(loc)
+	prefix := s.rolePrefix(s.lang, loc)
 	if prefix == "" {
 		return false // 配置已不再关心的地点
 	}
 	// 现况的转变：前一次观测断档太久（超过两个刷新周期）就当没有先前状态
 	if prevOK && cur.Fetched.Sub(prev.Fetched) <= 2*s.refresh {
-		if text := changeText(prefix, prev, cur); text != "" {
+		if text := changeText(s.lang, prefix, prev, cur); text != "" {
 			cue.Post(cue.Cue{Source: "weather", Key: loc, Text: text, Expire: cur.Fetched.Add(cueTTL)})
 		}
 	}
-	return p.forecastCue(prefix, loc, prev, cur, s.inTomorrowWindow(cur.Fetched))
+	return p.forecastCue(s.lang, prefix, loc, prev, cur, s.inTomorrowWindow(cur.Fetched))
 }
 
 // forecastCue 盯着明天的预报：预报里出现降水时投一条理由——「明天有雨，记得带伞」
@@ -45,7 +45,7 @@ func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) 
 // （Cued 随观测延续，刷新不重投）：理由可能已被心跳说出口，重投会让它反复念叨。
 // 理由的有效期到今天为止——过了午夜「明天有雨」这句话就指错了日子。
 // 返回本次是否投递了，调用方据此把 Cued 记到缓存上。
-func (p *Plugin) forecastCue(prefix, loc string, prev, cur Report, inWindow bool) bool {
+func (p *Plugin) forecastCue(lang, prefix, loc string, prev, cur Report, inWindow bool) bool {
 	tm := cur.Tomorrow
 	if !tm.known() {
 		return false
@@ -61,7 +61,8 @@ func (p *Plugin) forecastCue(prefix, loc string, prev, cur Report, inWindow bool
 		if err != nil {
 			return false
 		}
-		text := fmt.Sprintf("%s%s明天预报有%s（%.0f~%.0f℃）。", prefix, cur.Place, tm.Condition, tm.MinC, tm.MaxC)
+		text := prompt.Tf(lang, "prompt.weather.cue.forecast", "%s%s明天预报有%s（%.0f~%.0f℃）。",
+			prefix, cur.Place, conditions.For(lang, tm.Condition), tm.MinC, tm.MaxC)
 		cue.Post(cue.Cue{Source: "weather", Key: key, Text: text, Expire: expire})
 		return true
 	case prevWetCued:
@@ -71,32 +72,36 @@ func (p *Plugin) forecastCue(prefix, loc string, prev, cur Report, inWindow bool
 }
 
 // rolePrefix 给出「这处地点是谁的」的措辞前缀，与 TurnPrompt 的注入措辞一致。
-func (s settings) rolePrefix(loc string) string {
+func (s settings) rolePrefix(lang, loc string) string {
 	switch {
 	case s.sameCity && loc == s.personaLoc:
-		return "你与对方所在的"
+		return prompt.T(lang, "prompt.weather.prefix.both", "你与对方所在的")
 	case loc == s.personaLoc:
-		return "你所在的"
+		return prompt.T(lang, "prompt.weather.prefix.persona", "你所在的")
 	case loc == s.userLoc:
-		return "对方所在的"
+		return prompt.T(lang, "prompt.weather.prefix.user", "对方所在的")
 	}
 	return ""
 }
 
 // changeText 把一次值得开口的天气转变写成一句话；无事可说返回空串。
-func changeText(prefix string, prev, cur Report) string {
+func changeText(lang, prefix string, prev, cur Report) string {
 	wasWet, nowWet := isWet(prev.Condition), isWet(cur.Condition)
 	switch {
 	case !wasWet && nowWet:
-		return fmt.Sprintf("%s%s刚下起了%s。", prefix, cur.Place, cur.Condition)
+		return prompt.Tf(lang, "prompt.weather.cue.started", "%s%s刚下起了%s。",
+			prefix, cur.Place, conditions.For(lang, cur.Condition))
 	case wasWet && !nowWet:
-		return fmt.Sprintf("%s%s的%s停了，现在%s。", prefix, cur.Place, prev.Condition, cur.Condition)
+		return prompt.Tf(lang, "prompt.weather.cue.stopped", "%s%s的%s停了，现在%s。",
+			prefix, cur.Place, conditions.For(lang, prev.Condition), conditions.For(lang, cur.Condition))
 	}
 	return ""
 }
 
 // isWet 判断一个天气现象是否属于降水。按中文说法的用字判断而不是 WMO 代码：
 // 观测缓存里的旧条目没有存代码，而这些说法是本插件自己的固定词表。
+//
+// 它认的是**规范值**，与界面语言无关——缓存里存的一律是中文，译名只出现在展示时。
 func isWet(condition string) bool {
 	for _, w := range []string{"雨", "雪", "雹"} {
 		if strings.Contains(condition, w) {

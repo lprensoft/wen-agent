@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"wen/internal/i18n"
 
 	"wen/internal/mdtext"
 )
@@ -40,18 +41,18 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 
 		var err error
 		if useMD {
-			err = p.sendMessage(ctx, client, chatID, toMarkdownV2(chunk), "MarkdownV2", replyTo)
+			err = p.sendMessage(ctx, client, chatID, toMarkdownV2(p.langOf(), chunk), "MarkdownV2", replyTo)
 			var ae *apiError
 			if errors.As(err, &ae) && ae.isParseError() {
 				// 转换漏了某个字符：记住并当场降级纯文本重发，这一条不能丢
 				p.disableMarkdown(chatID)
 				useMD = false
-				log.Printf("telegram_bot: MarkdownV2 解析失败（%s），对 %s 降级为纯文本（%v 后重新探测）",
+				i18n.Logf(p.langOf(), "log.telegram.markdown_downgraded", "telegram_bot: MarkdownV2 解析失败（%s），对 %s 降级为纯文本（%v 后重新探测）",
 					ae.Description, chatID, mdOffTTL)
-				err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+				err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 			}
 		} else {
-			err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+			err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 		}
 
 		// 限流：官方给了等待秒数，等一次再试一次。其余错误不重试——
@@ -60,12 +61,12 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 		if errors.As(err, &ae) && ae.RetryAfter > 0 {
 			wait := time.Duration(ae.RetryAfter) * time.Second
 			if wait <= maxRetryAfter {
-				log.Printf("telegram_bot: 触发限流，%v 后重试", wait)
+				i18n.Logf(p.langOf(), "log.telegram.rate_limited", "telegram_bot: 触发限流，%v 后重试", wait)
 				sleepCtx(ctx, wait)
 				if useMD {
-					err = p.sendMessage(ctx, client, chatID, toMarkdownV2(chunk), "MarkdownV2", replyTo)
+					err = p.sendMessage(ctx, client, chatID, toMarkdownV2(p.langOf(), chunk), "MarkdownV2", replyTo)
 				} else {
-					err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(chunk), "", replyTo)
+					err = p.sendMessage(ctx, client, chatID, mdtext.ToPlainText(p.langOf(), chunk), "", replyTo)
 				}
 			}
 		}
@@ -73,7 +74,7 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("telegram_bot: 发送失败: %v", err)
+			i18n.Logf(p.langOf(), "log.telegram.send_failed", "telegram_bot: 发送失败: %v", err)
 		}
 		// 只有第一段挂在原消息上回复，后续段落各自独立，免得刷一屏引用
 		replyTo = ""
@@ -110,7 +111,7 @@ func (p *Plugin) sendChatAction(ctx context.Context, chatID string) {
 	p.mu.Unlock()
 	params := map[string]any{"chat_id": chatID, "action": "typing"}
 	if err := p.apiCall(ctx, client, "sendChatAction", params, nil); err != nil && ctx.Err() == nil {
-		log.Printf("telegram_bot: 发送输入状态失败: %v", err)
+		i18n.Logf(p.langOf(), "log.telegram.typing_failed", "telegram_bot: 发送输入状态失败: %v", err)
 	}
 }
 

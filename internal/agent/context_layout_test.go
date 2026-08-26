@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
@@ -283,23 +284,43 @@ func TestDayMarkNeverSplitsToolResults(t *testing.T) {
 
 // [历史与时间] 里引述了两种标注的措辞，而真正生成它们的是 dayMark 与 gapNote。
 // 两处分头改就会指向一段模型在上下文里根本找不到的东西，说明反而变成误导。
+//
+// **逐语言跑**：日界线与历史规则在每门语言里各有一份，只对上中文那份不算数——
+// 一个英文用户拿到的会是「说明里引述的措辞在上下文里根本不存在」。
 func TestHistoryRulesQuoteRealMarkers(t *testing.T) {
-	// 取标注里到第一个数字为止的那段固定措辞，日期与时长是变的，措辞不是
-	lead := func(s string) string {
-		s = strings.TrimPrefix(s, "（")
-		if i := strings.IndexAny(s, "0123456789"); i > 0 {
-			s = s[:i]
-		}
-		return strings.TrimRight(s, " ") // 数字前的那个空格是排版，不是措辞
-	}
-	for _, tc := range []struct{ what, marker string }{
-		{"日界线", dayMark(time.Date(2026, 8, 20, 9, 0, 0, 0, time.Local))},
-		{"间隔", gapNote(time.Now().Add(-14*time.Hour), time.Now())},
-	} {
-		if got := lead(tc.marker); got == "" || !strings.Contains(historyRules, got) {
-			t.Errorf("[历史与时间] 没有引用真正的%s措辞 %q:\n%s", tc.what, got, historyRules)
+	for _, l := range i18n.Languages() {
+		rules := historyRulesFor(l.Code)
+		for _, tc := range []struct{ what, format string }{
+			{"日界线", dayMarkFmt(l.Code)},
+			{"间隔", gapNoteFmt(l.Code)},
+		} {
+			got := longestLiteral(tc.format)
+			if got == "" || !strings.Contains(rules, got) {
+				t.Errorf("%s: [历史与时间] 没有引用真正的%s措辞 %q:\n%s", l.Code, tc.what, got, rules)
+			}
 		}
 	}
+}
+
+// longestLiteral 取格式串里最长的一段固定措辞：按占位符切开，取最长的那块。
+//
+// 比「截到第一个数字为止」通用——后者是照着中文的语序写的，英文里日期不一定在最后，
+// 固定措辞也不一定在数字前面。
+func longestLiteral(format string) string {
+	best := ""
+	for i, part := range strings.Split(format, "%") {
+		// 除第一段外，每段开头那个字符是占位符的类型（s / d），不是措辞
+		if i > 0 {
+			if len(part) < 2 {
+				continue
+			}
+			part = part[1:]
+		}
+		if part = strings.Trim(part, "\n"); len(part) > len(best) {
+			best = part
+		}
+	}
+	return best
 }
 
 // 这段是缓存前缀的一部分，必须整轮之间逐字节不变——它是常量，测试盯着别人把它改成函数。

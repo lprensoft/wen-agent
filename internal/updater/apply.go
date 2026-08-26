@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // workDirName 是下载与解压的落脚点，建在**可执行文件所在的目录**里。
@@ -25,10 +27,10 @@ const smokeTimeout = 30 * time.Second
 //
 // 跟随符号链接是必要的：Linux 上常见把二进制放一处、在 PATH 里挂个链接，
 // 直接盖掉链接会把安装布局改掉，而用户以为只是升了个级。
-func ExePath() (string, error) {
+func ExePath(lang string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("无法定位当前程序: %w", err)
+		return "", fmt.Errorf(i18n.T(lang, "updater.err.exe_path", "无法定位当前程序: %w"), err)
 	}
 	// Linux 上这个值来自 /proc/self/exe，文件被替换之后它会变成「/路径/wen (deleted)」。
 	// 自更新做的正是替换这个文件，于是更新之后再问一次就会拿到一个不存在的路径。
@@ -74,12 +76,13 @@ func freeBackupPath(exe string) string {
 //
 // 提前查是为了把最常见的那种失败说清楚：装在 /usr/local/bin、Program Files 或
 // 由包管理器装的，目录本来就不归当前用户写。等下完十几兆再报错，白花时间也白花流量。
-func CheckWritable(exe string) error {
+func CheckWritable(lang, exe string) error {
 	dir := filepath.Dir(exe)
 	f, err := os.CreateTemp(dir, ".wen-write-check-*")
 	if err != nil {
-		return fmt.Errorf("安装目录 %s 不可写（%v）。程序可能是由包管理器或管理员安装的，"+
-			"这种情况请用原来的方式升级，或手工下载新版替换", dir, err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.not_writable",
+			"安装目录 %s 不可写（%v）。程序可能是由包管理器或管理员安装的，"+
+				"这种情况请用原来的方式升级，或手工下载新版替换"), dir, err)
 	}
 	name := f.Name()
 	f.Close()
@@ -91,17 +94,17 @@ func CheckWritable(exe string) error {
 //
 // 这一步挡住的是「校验和没问题但根本跑不了」：架构不符、被杀软改写或隔离、
 // 文件系统挂了 noexec。它在替换之前做，失败就当作这次更新没发生过。
-func SmokeTest(ctx context.Context, bin, wantTag string) error {
+func SmokeTest(ctx context.Context, lang, bin, wantTag string) error {
 	ctx, cancel := context.WithTimeout(ctx, smokeTimeout)
 	defer cancel()
 
 	out, err := exec.CommandContext(ctx, bin, "version").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("新版程序无法运行（%v）。可能被杀毒软件拦截或隔离，本次更新已取消", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.smoke_run", "新版程序无法运行（%v）。可能被杀毒软件拦截或隔离，本次更新已取消"), err)
 	}
 	got := strings.TrimSpace(string(out))
 	if got != wantTag {
-		return fmt.Errorf("新版程序自报版本为 %q，与预期的 %s 不符，本次更新已取消", got, wantTag)
+		return fmt.Errorf(i18n.T(lang, "updater.err.smoke_version", "新版程序自报版本为 %q，与预期的 %s 不符，本次更新已取消"), got, wantTag)
 	}
 	return nil
 }

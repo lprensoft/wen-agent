@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 const (
@@ -38,13 +40,15 @@ type Scene struct {
 // 文件可能被用户在进程外修改，因此每次操作都重新读取，不做缓存——
 // 场景条目数量小，读取开销可以忽略。
 type Store struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
 	path string
 }
 
 // NewStore 建立指向 <dir>/scenes.json 的场景库。
-func NewStore(dir string) *Store {
-	return &Store{path: filepath.Join(dir, "scenes.json")}
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, path: filepath.Join(dir, "scenes.json")}
 }
 
 // List 返回全部场景，按记录顺序。文件不存在时返回空列表。
@@ -60,11 +64,11 @@ func (s *Store) load() ([]Scene, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("读取场景记忆失败: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.read_failed", "读取场景记忆失败: %w"), err)
 	}
 	var scenes []Scene
 	if err := json.Unmarshal(raw, &scenes); err != nil {
-		return nil, fmt.Errorf("场景记忆文件损坏: %w", err)
+		return nil, fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.corrupt", "场景记忆文件损坏: %w"), err)
 	}
 	return scenes, nil
 }
@@ -72,16 +76,17 @@ func (s *Store) load() ([]Scene, error) {
 // Save 记录一条场景。replace 为 false 时拒绝覆盖同名条目；覆盖保留原记录时间与
 // 原有位置——场景的先后顺序承载着舞台展开的脉络，更新描述不应把它挪到末尾。
 func (s *Store) Save(in Scene, replace bool) (Scene, error) {
-	name, err := normalizeName(in.Name)
+	name, err := normalizeName(s.lang, in.Name)
 	if err != nil {
 		return Scene{}, err
 	}
 	detail := strings.TrimSpace(in.Detail)
 	if detail == "" {
-		return Scene{}, fmt.Errorf("场景描述不能为空")
+		return Scene{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.scene.store.detail_empty", "场景描述不能为空"))
 	}
 	if n := len([]rune(detail)); n > maxDetailRunes {
-		return Scene{}, fmt.Errorf("场景描述过长（%d 字，上限 %d 字），请压缩后重试", n, maxDetailRunes)
+		return Scene{}, fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.detail_long",
+			"场景描述过长（%d 字，上限 %d 字），请压缩后重试"), n, maxDetailRunes)
 	}
 
 	s.mu.Lock()
@@ -95,7 +100,8 @@ func (s *Store) Save(in Scene, replace bool) (Scene, error) {
 	out := Scene{Name: name, Detail: detail, Created: now, Updated: now}
 	if i := indexOf(scenes, name); i >= 0 {
 		if !replace {
-			return Scene{}, fmt.Errorf("已记录过场景 %q，如需更新请把 mode 设为 replace", scenes[i].Name)
+			return Scene{}, fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.exists",
+				"已记录过场景 %q，如需更新请把 mode 设为 replace"), scenes[i].Name)
 		}
 		out.Created = scenes[i].Created
 		scenes[i] = out
@@ -118,7 +124,8 @@ func (s *Store) Delete(name string) (Scene, error) {
 	}
 	i := indexOf(scenes, name)
 	if i < 0 {
-		return Scene{}, fmt.Errorf("没有名为 %q 的场景", strings.TrimSpace(name))
+		return Scene{}, fmt.Errorf(prompt.T(s.lang, "prompt.scene.result.not_found",
+			"没有名为 %q 的场景"), strings.TrimSpace(name))
 	}
 	out := scenes[i]
 	scenes = append(scenes[:i], scenes[i+1:]...)
@@ -135,18 +142,18 @@ func (s *Store) save(scenes []Scene) error {
 	}
 	raw, err := json.MarshalIndent(scenes, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存场景记忆失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.save_failed", "保存场景记忆失败: %w"), err)
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("创建场景记忆目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.mkdir_failed", "创建场景记忆目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		return fmt.Errorf("保存场景记忆失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.save_failed", "保存场景记忆失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存场景记忆失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.scene.store.save_failed", "保存场景记忆失败: %w"), err)
 	}
 	return nil
 }
@@ -163,13 +170,14 @@ func indexOf(scenes []Scene, name string) int {
 }
 
 // normalizeName 规整场景名称：压掉换行与连续空白，校验非空与长度。
-func normalizeName(name string) (string, error) {
+func normalizeName(lang, name string) (string, error) {
 	name = strings.Join(strings.Fields(name), " ")
 	if name == "" {
-		return "", fmt.Errorf("场景名称不能为空")
+		return "", fmt.Errorf("%s", prompt.T(lang, "prompt.scene.store.name_empty", "场景名称不能为空"))
 	}
 	if n := len([]rune(name)); n > maxNameRunes {
-		return "", fmt.Errorf("场景名称过长（%d 字，上限 %d 字），请用更短的名称", n, maxNameRunes)
+		return "", fmt.Errorf(prompt.T(lang, "prompt.scene.store.name_long",
+			"场景名称过长（%d 字，上限 %d 字），请用更短的名称"), n, maxNameRunes)
 	}
 	return name, nil
 }
