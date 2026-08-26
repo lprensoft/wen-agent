@@ -58,8 +58,8 @@ import (
 // runServe 启动服务。这是没有子命令时的默认动作，也是 wen serve 的实现。
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-	port := fs.Int("p", 0, "监听端口（覆盖配置文件）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
+	port := fs.Int("p", 0, tr("cli.serve.flag.port", "监听端口（覆盖配置文件）"))
 	_ = fs.Parse(args)
 
 	path := config.ResolvePath(*configPath)

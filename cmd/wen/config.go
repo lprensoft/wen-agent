@@ -26,21 +26,21 @@ func runConfig(args []string) error {
 	switch section {
 	case "", "plugins", "models", "server":
 	default:
-		return fmt.Errorf("未知的配置栏目 %q（可用：plugins、models、server）", section)
+		return fmt.Errorf(tr("cli.config.unknown_section", "未知的配置栏目 %q（可用：plugins、models、server）"), section)
 	}
 
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
+	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
 	_ = fs.Parse(args)
 
 	if !isInteractive() {
-		return errors.New("wen config 需要在终端里运行（当前的标准输入不是终端）")
+		return errors.New(tr("cli.config.needs_tty", "wen config 需要在终端里运行（当前的标准输入不是终端）"))
 	}
 
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
 	adoptLang(cfg)
 	b, err := openBackend(cfg)
@@ -48,7 +48,7 @@ func runConfig(args []string) error {
 		return err
 	}
 
-	fmt.Printf("配置文件 %s\n模式 %s\n\n", path, b.mode())
+	fmt.Print(trf("cli.config.head", "配置文件 %s\n模式 %s\n\n", path, b.mode()))
 
 	// 直接指定栏目时先进那一屏，返回后落到顶层菜单，方便接着改别的
 	for {

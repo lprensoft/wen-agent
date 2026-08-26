@@ -156,11 +156,11 @@ type offlineBackend struct {
 func newOfflineBackend(cfg *config.Config) (*offlineBackend, error) {
 	models, err := modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("加载模型配置失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
 	auth, err := server.NewAuthStore(cfg.BaseDir)
 	if err != nil {
-		return nil, fmt.Errorf("加载访问口令失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.load_auth", "加载访问口令失败: %w"), err)
 	}
 	plugins := buildPlugins(cfg, plugin.InitContext{
 		Workdir:    cfg.Agent.Workdir,
@@ -193,11 +193,11 @@ func (b *offlineBackend) setPluginConfig(name string, cfg map[string]any) error 
 }
 
 func (b *offlineBackend) startPluginAction(string, string) error {
-	return fmt.Errorf("插件操作需要服务在运行，请先启动 wen")
+	return fmt.Errorf("%s", tr("cli.err.action_needs_server", "插件操作需要服务在运行，请先启动 wen"))
 }
 
 func (b *offlineBackend) pluginActionState(string, string) (plugin.ActionState, error) {
-	return plugin.ActionState{}, fmt.Errorf("插件操作需要服务在运行，请先启动 wen")
+	return plugin.ActionState{}, fmt.Errorf("%s", tr("cli.err.action_needs_server", "插件操作需要服务在运行，请先启动 wen"))
 }
 
 func (b *offlineBackend) loadModels() (modelsDoc, error) {

@@ -38,6 +38,13 @@ func adoptLang(cfg *config.Config) string {
 	return uiLang
 }
 
+// adoptLangFromEnv 在还读不到配置时定下语言：帮助文本与未知命令的提示在参数分发
+// 之前就要打出来，而那时连 -c 指向哪个配置文件都还不知道。系统区域是此刻唯一的
+// 线索；随后每个子命令读到配置会用 adoptLang 覆盖掉它。
+func adoptLangFromEnv() {
+	uiLang = resolveLang(nil)
+}
+
 // langSummary 把语言的判定结果写成一行，供启动日志与 wen status 使用。
 //
 // 光报一个语言名不够用：判定有两个来源，而「我明明没配过为什么它说英文」正是

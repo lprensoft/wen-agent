@@ -189,7 +189,7 @@ func TestRenderRowsForJudgeDropsOldest(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		rows = append(rows, evalRow{Kind: rowSay, Index: i, Say: "问", Reply: strings.Repeat("答", 100)})
 	}
-	out := renderRowsForJudge(rows, 1500)
+	out := renderRowsForJudge("", rows, 1500)
 	if !strings.HasPrefix(out, "（更早的 ") {
 		t.Errorf("超出预算应从最早的丢起：%q", out[:40])
 	}
@@ -199,7 +199,7 @@ func TestRenderRowsForJudgeDropsOldest(t *testing.T) {
 }
 
 func TestHumanHours(t *testing.T) {
-	if humanHours(8) != "8 小时" || humanHours(1.5) != "1.5 小时" {
-		t.Error(humanHours(8), humanHours(1.5))
+	if humanHours("", 8) != "8 小时" || humanHours("", 1.5) != "1.5 小时" {
+		t.Error(humanHours("", 8), humanHours("", 1.5))
 	}
 }

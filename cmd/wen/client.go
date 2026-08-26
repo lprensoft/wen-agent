@@ -98,7 +98,7 @@ func (c *client) do(method, path string, body, out any) error {
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
 			return fmt.Errorf("%s", e.Error)
 		}
-		return fmt.Errorf("服务返回 %s", resp.Status)
+		return fmt.Errorf(tr("cli.err.http", "服务返回 %s"), resp.Status)
 	}
 	if out != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, out)

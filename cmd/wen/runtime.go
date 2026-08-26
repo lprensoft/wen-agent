@@ -63,7 +63,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	)
 	store, err := session.NewStore(sessionDir)
 	if err != nil {
-		return nil, fmt.Errorf("初始化 session 存储失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.session_store", "初始化 session 存储失败: %w"), err)
 	}
 
 	lang := resolveLang(cfg)
@@ -74,19 +74,19 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		SessionDir: sessionDir,
 		Complete: func(ctx context.Context, prompt string) (string, error) {
 			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
+				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
 			return ag.Complete(ctx, prompt)
 		},
 		RunTurn: func(ctx context.Context, sessionID, input string) (string, error) {
 			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
+				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
 			return ag.RunTurn(ctx, sessionID, input)
 		},
 		Notice: func(ctx context.Context, sessionID, text string) error {
 			if ag == nil {
-				return fmt.Errorf("会话尚未就绪")
+				return fmt.Errorf("%s", tr("cli.err.no_session", "会话尚未就绪"))
 			}
 			return ag.AppendNotice(ctx, sessionID, text)
 		},
@@ -96,7 +96,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		},
 		Compact: func(ctx context.Context, sessionID string) error {
 			if ag == nil {
-				return fmt.Errorf("模型尚未就绪")
+				return fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
 			return ag.CompactTurn(ctx, sessionID)
 		},
@@ -111,7 +111,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
 			if models == nil {
-				return plugin.StatusInfo{}, fmt.Errorf("状态尚未就绪")
+				return plugin.StatusInfo{}, fmt.Errorf("%s", tr("cli.err.no_status", "状态尚未就绪"))
 			}
 			provider, model, thinking, contextLength := models.Status()
 			info := plugin.StatusInfo{
@@ -147,12 +147,12 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
 	if err != nil {
 		plugins.StopAll()
-		return nil, fmt.Errorf("加载模型配置失败: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
 	cur, err := models.Resolve()
 	if err != nil {
 		plugins.StopAll()
-		return nil, fmt.Errorf("模型配置无效: %w", err)
+		return nil, fmt.Errorf(tr("cli.err.bad_models", "模型配置无效: %w"), err)
 	}
 	provider, err := llm.New(llm.Config{
 		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
