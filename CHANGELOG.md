@@ -9,6 +9,30 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v0.8.1] - 2026-08-26
+
+### 新增
+
+- 样例配置新增英文版 `config.example.en.yaml`
+
+### 变更
+
+- 样例配置只写每一项是什么，详细说明移到 `docs/configuration.md`
+- 英文文档与英文发布说明改指英文版样例配置
+- 发布包同时带上中英两份样例配置
+
+---
+
+### Added
+
+- An English example configuration, `config.example.en.yaml`
+
+### Changed
+
+- The example configuration only names each option; the details have moved to `docs/en/configuration.md`
+- The English documentation and release notes now point at the English example configuration
+- Release archives carry both example configurations
+
 ## [v0.8.0] - 2026-08-26
 
 ### 破坏性变更
