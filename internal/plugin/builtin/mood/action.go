@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -27,13 +28,13 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // 界面上的操作不是模型的读取路径，不存在泄漏问题。
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	if key != actionReset {
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	p.mu.RLock()
 	base := p.base
 	p.mu.RUnlock()
 	if base == "" {
-		return errNotReady
+		return errNotReady(p.langOf())
 	}
 
 	// Scope 取零值：Write 为空、Read 为 nil，ReadDomains 因此枚举磁盘上已存在的
@@ -55,22 +56,20 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 	p.actMu.Lock()
 	defer p.actMu.Unlock()
 	if len(failed) > 0 {
-		p.actState = plugin.ActionState{
-			Status:  plugin.ActionError,
-			Message: "重置失败：" + strings.Join(failed, "; "),
-		}
-		return fmt.Errorf("重置心情失败: %s", strings.Join(failed, "; "))
+		msg := i18n.Tf(p.langOf(), "plugin.mood.reset.failed", "重置心情失败：%s", strings.Join(failed, "; "))
+		p.actState = plugin.ActionState{Status: plugin.ActionError, Message: msg}
+		return fmt.Errorf("%s", msg)
 	}
 	p.actState = plugin.ActionState{
 		Status:  plugin.ActionDone,
-		Message: fmt.Sprintf("已把 %d 份心情重置为平静。", reset),
+		Message: i18n.Tf(p.langOf(), "plugin.mood.reset.done", "已把 %d 份心情重置为平静。", reset),
 	}
 	return nil
 }
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionReset {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 const (
@@ -35,14 +37,16 @@ type State struct {
 
 // Store 管理一个可见域的心情。单个 JSON 文件，每次操作重新读取不做缓存。
 type Store struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
 	dir  string
 	path string
 }
 
 // NewStore 建立指向 <dir>/mood.json 的心情库。
-func NewStore(dir string) *Store {
-	return &Store{dir: dir, path: filepath.Join(dir, "mood.json")}
+func NewStore(lang, dir string) *Store {
+	return &Store{lang: lang, dir: dir, path: filepath.Join(dir, "mood.json")}
 }
 
 // Current 返回按回归速率折算到此刻的心情。第二个返回值表示是否有过记录——
@@ -64,7 +68,7 @@ func (s *Store) Current(decayPerHour int, now time.Time) (State, bool, error) {
 // 而且会让并发的读把彼此的时间戳覆盖掉。
 func (s *Store) Apply(delta, maxDelta, decayPerHour int, reason string, now time.Time) (State, int, error) {
 	if delta == 0 {
-		return State{}, 0, fmt.Errorf("变化量不能为 0")
+		return State{}, 0, fmt.Errorf("%s", prompt.T(s.lang, "prompt.mood.result.zero_delta", "变化量不能为 0"))
 	}
 	applied := clamp(delta, -maxDelta, maxDelta)
 
@@ -91,7 +95,7 @@ func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("重置心情失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.reset_failed", "重置心情失败: %w"), err)
 	}
 	return nil
 }
@@ -102,11 +106,11 @@ func (s *Store) load() (State, bool, error) {
 		if os.IsNotExist(err) {
 			return State{}, false, nil
 		}
-		return State{}, false, fmt.Errorf("读取心情失败: %w", err)
+		return State{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.read_failed", "读取心情失败: %w"), err)
 	}
 	var st State
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return State{}, false, fmt.Errorf("心情记录文件损坏: %w", err)
+		return State{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.corrupt", "心情记录文件损坏: %w"), err)
 	}
 	st.Value = clamp(st.Value, moodMin, moodMax) // 手改过的文件不该把量程撑破
 	return st, true, nil
@@ -116,18 +120,18 @@ func (s *Store) load() (State, bool, error) {
 func (s *Store) save(st State) error {
 	raw, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存心情失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.save_failed", "保存心情失败: %w"), err)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return fmt.Errorf("创建心情目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.mkdir_failed", "创建心情目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存心情失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.save_failed", "保存心情失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存心情失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.save_failed", "保存心情失败: %w"), err)
 	}
 	return nil
 }
