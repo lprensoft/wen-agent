@@ -9,6 +9,80 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v0.8.0] - 2026-08-26
+
+### 破坏性变更
+
+- 角色演绎整组、`heartbeat` 与 `agenda` 默认启用，开箱即是角色「雯」
+- `read_file` 与 `exec_command` 默认关闭，要用需在设置页打开
+- 以上两条只影响从未在设置页改过插件开关的用户
+
+### 新增
+
+- 可安装 Agent Plugins 1.0 格式的插件包，带来其中的技能与 MCP 工具
+- 插件包里的 MCP server 支持 stdio 与 HTTP 两种传输
+- 认 Claude、Codex、Cursor 格式插件包里的技能与 MCP 声明
+- 设置页新增插件包的安装入口，命令行对应 `wen plugins`
+- config.yaml 新增 `lang:`，决定发给模型与写进日志的语言
+- `roleplay` 自带一份默认角色设定与四段台词样例
+- 发给模型的提示词、工具说明与参数提供英文
+- 插件状态行、会话注记、运行日志与命令行输出提供英文
+- 文风观察补上英文的助手腔检测规则
+
+### 变更
+
+- 换语言不改写已经存下来的摘要、记忆与日程
+- `wen config` 顶层菜单新增 `Language`
+- `wen help` 与未知命令的提示跟随 `lang:`
+
+### 修复
+
+- 插件配置项的默认值现在会交给插件，英文下不再收到中文
+- 插件包里链接进来的技能不再被悄悄丢掉
+- 刚登记的健康状况不再注入一个空的严重度词
+- 角色排当天日程时不再引用一个不存在的段落
+
+### 安全
+
+- 插件包技能目录的越界检查在 Windows 上同样生效
+
+---
+
+### Breaking changes
+
+- The whole roleplay group, `heartbeat` and `agenda` are on by default, so out of the box you get the character Wen
+- `read_file` and `exec_command` are off by default and have to be turned on from the settings page
+- Both only affect users who have never changed a plugin toggle on the settings page
+
+### Added
+
+- Agent Plugins 1.0 bundles can be installed, bringing their skills and MCP tools with them
+- An MCP server in a bundle works over both stdio and HTTP
+- Skills and MCP declarations inside Claude, Codex and Cursor bundles are recognised
+- The settings page has an install entry for bundles, with `wen plugins` on the command line
+- config.yaml gains `lang:`, which sets the language sent to the model and written to the log
+- `roleplay` ships with a default character sheet and four sample lines
+- The prompts, tool descriptions and parameters sent to the model are available in English
+- Plugin status lines, session notes, the runtime log and command-line output are available in English
+- Style watch gains English assistant-speak detection rules
+
+### Changed
+
+- Changing the language does not rewrite summaries, memories or agenda items already stored
+- `wen config` gains `Language` on its top-level menu
+- `wen help` and the unknown-command message follow `lang:`
+
+### Fixed
+
+- Plugin setting defaults now reach the plugin, so English no longer receives Chinese
+- Skills linked into a bundle are no longer silently dropped
+- A newly recorded ailment no longer injects an empty severity word
+- Planning the day no longer refers to a section that does not exist
+
+### Security
+
+- The bundle skills directory escape check now works on Windows too
+
 ## [v0.7.0] - 2026-08-22
 
 ### 新增
