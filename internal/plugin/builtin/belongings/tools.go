@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // errNotReady 在插件未取得持久化目录时返回，正常流程下不会出现。
-var errNotReady = fmt.Errorf("持有物清单尚未就绪")
+func errNotReady(lang string) error {
+	return fmt.Errorf("%s", prompt.T(lang, "prompt.belongings.result.not_ready", "持有物清单尚未就绪"))
+}
 
 // maxListBytes 限制 list_items 的返回长度。
 const maxListBytes = 16 * 1024
@@ -24,13 +27,20 @@ type updateTool struct{ p *Plugin }
 func (t *updateTool) Name() string { return "update_items" }
 
 func (t *updateTool) Description() string {
-	return "更新一个容器（冰箱、衣柜等）里的物品：add 放入、remove 取出或消耗。" +
-		"物品发生增减时（买了、用掉、吃完、扔了）随手更新，同一容器的变化合并成一次调用。" +
-		"容器不存在时自动新建。"
+	return prompt.T(t.p.langOf(), "prompt.belongings.tool.update_items.desc",
+		"更新一个容器（冰箱、衣柜等）里的物品：add 放入、remove 取出或消耗。"+
+			"物品发生增减时（买了、用掉、吃完、扔了）随手更新，同一容器的变化合并成一次调用。"+
+			"容器不存在时自动新建。")
 }
 
 func (t *updateTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.belongings.tool.update_items.schema",
+		updateSchemaZH))
+}
+
+// updateSchemaZH 是 update_items 的参数 Schema。整段一个键：它是手写的 JSON，
+// 拆成一个字段一个键的话，译者要照着结构去拼，而拼错一个引号就是一份非法的 Schema。
+const updateSchemaZH = `{
 		"type": "object",
 		"properties": {
 			"container": {"type": "string", "description": "容器名，如「冰箱」「衣柜」（20 字内）"},
@@ -62,8 +72,7 @@ func (t *updateTool) Schema() json.RawMessage {
 			"reason": {"type": "string", "description": "这次变化的缘由，一句话，如「做了番茄炒蛋」"}
 		},
 		"required": ["container", "reason"]
-	}`)
-}
+	}`
 
 func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
@@ -80,17 +89,19 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
-		return "", fmt.Errorf("参数格式错误: %w", err)
-	}
-	if len(a.Add) == 0 && len(a.Remove) == 0 {
-		return "", fmt.Errorf("add 与 remove 至少要有一项")
-	}
-	if strings.TrimSpace(a.Reason) == "" {
-		return "", fmt.Errorf("reason 不能为空：一句话说明这次增减的缘由")
+		return "", plugin.BadArgs(t.p.langOf(), err)
 	}
 	s := t.p.snapshot()
+	if len(a.Add) == 0 && len(a.Remove) == 0 {
+		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.belongings.result.nothing_to_do",
+			"add 与 remove 至少要有一项"))
+	}
+	if strings.TrimSpace(a.Reason) == "" {
+		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.belongings.result.reason_required",
+			"reason 不能为空：一句话说明这次增减的缘由"))
+	}
 	if s.base == "" {
-		return "", errNotReady
+		return "", errNotReady(s.lang)
 	}
 
 	// 容器已存在时写回它所在的库（同一个冰箱不因人格切换分叉成两份）；
@@ -103,11 +114,12 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if i := containerIndex(cs, a.Container); i >= 0 {
 		store = t.p.storeFor(cs[i].Domain)
 	} else if len(a.Add) == 0 {
-		return "", fmt.Errorf("没有名为 %q 的容器，现有：%s",
-			strings.TrimSpace(a.Container), nameList(containerNames(cs)))
+		return "", fmt.Errorf(prompt.T(s.lang, "prompt.belongings.result.no_container",
+			"没有名为 %q 的容器，现有：%s"),
+			strings.TrimSpace(a.Container), nameList(s.lang, containerNames(cs)))
 	}
 	if store == nil {
-		return "", errNotReady
+		return "", errNotReady(s.lang)
 	}
 
 	add := make([]Change, 0, len(a.Add))
@@ -128,14 +140,17 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 
 	// 回显本次变化：本轮的清单注入在对话开始时就已定型，回执让变化立刻可见，
 	// 避免同一轮里重复更新。
+	sep := prompt.T(s.lang, "prompt.belongings.render.sep", "、")
 	var parts []string
 	if len(res.Added) > 0 {
-		parts = append(parts, "入 "+strings.Join(res.Added, "、"))
+		parts = append(parts, prompt.T(s.lang, "prompt.belongings.result.in", "入 ")+strings.Join(res.Added, sep))
 	}
 	if len(res.Removed) > 0 {
-		parts = append(parts, "出 "+strings.Join(res.Removed, "、"))
+		parts = append(parts, prompt.T(s.lang, "prompt.belongings.result.out", "出 ")+strings.Join(res.Removed, sep))
 	}
-	return res.Container + "：" + strings.Join(parts, "；") + "。", nil
+	return res.Container + prompt.T(s.lang, "prompt.belongings.render.colon", "：") +
+		strings.Join(parts, prompt.T(s.lang, "prompt.belongings.render.extras_sep", "；")) +
+		prompt.T(s.lang, "prompt.belongings.result.period", "。"), nil
 }
 
 // ---------- list_items ----------
@@ -145,19 +160,23 @@ type listTool struct{ p *Plugin }
 func (t *listTool) Name() string { return "list_items" }
 
 func (t *listTool) Description() string {
-	return "列出持有物清单的完整内容。可按容器或关键词过滤，用于清单未完整注入、" +
-		"或需要确认某件物品在不在时。"
+	return prompt.T(t.p.langOf(), "prompt.belongings.tool.list_items.desc",
+		"列出持有物清单的完整内容。可按容器或关键词过滤，用于清单未完整注入、"+
+			"或需要确认某件物品在不在时。")
 }
 
 func (t *listTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.belongings.tool.list_items.schema",
+		listSchemaZH))
+}
+
+const listSchemaZH = `{
 		"type": "object",
 		"properties": {
 			"container": {"type": "string", "description": "只看这个容器；留空表示全部"},
 			"keyword": {"type": "string", "description": "过滤关键词，对物品名与备注做包含匹配；留空表示不过滤"}
 		}
-	}`)
-}
+	}`
 
 func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
@@ -166,11 +185,12 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
-			return "", fmt.Errorf("参数格式错误: %w", err)
+			return "", plugin.BadArgs(t.p.langOf(), err)
 		}
 	}
-	if t.p.snapshot().base == "" {
-		return "", errNotReady
+	s := t.p.snapshot()
+	if s.base == "" {
+		return "", errNotReady(s.lang)
 	}
 	// 只数、只列本轮可读的容器：条数本身也会泄漏「存在什么」
 	cs, err := t.p.visibleContainers(ctx)
@@ -178,14 +198,15 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		return "", err
 	}
 	if len(cs) == 0 {
-		return "还没有记录任何持有物。", nil
+		return prompt.T(s.lang, "prompt.belongings.result.nothing_yet", "还没有记录任何持有物。"), nil
 	}
 
 	cname := strings.TrimSpace(a.Container)
 	if cname != "" {
 		i := containerIndex(cs, cname)
 		if i < 0 {
-			return "", fmt.Errorf("没有名为 %q 的容器，现有：%s", cname, nameList(containerNames(cs)))
+			return "", fmt.Errorf(prompt.T(s.lang, "prompt.belongings.result.no_container",
+				"没有名为 %q 的容器，现有：%s"), cname, nameList(s.lang, containerNames(cs)))
 		}
 		cs = cs[i : i+1]
 	}
@@ -206,32 +227,36 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 				line += fmt.Sprintf(" ×%d", it.Qty)
 			}
 			if it.Note != "" {
-				line += "（" + it.Note + "）"
+				line += prompt.T(s.lang, "prompt.belongings.render.extras_open", "（") + it.Note +
+					prompt.T(s.lang, "prompt.belongings.render.extras_close", "）")
 			}
 			if !it.Added.IsZero() {
-				line += "，" + it.Added.Format("2006-01-02") + " 放入"
+				line += prompt.Tf(s.lang, "prompt.belongings.result.added_on",
+					"，%s 放入", it.Added.Format("2006-01-02"))
 			}
 			lines = append(lines, line)
 		}
 		if kw != "" && len(lines) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "%s（%d 项）：\n", c.Name, len(c.Items))
+		fmt.Fprintf(&b, prompt.T(s.lang, "prompt.belongings.result.container_head", "%s（%d 项）：")+"\n",
+			c.Name, len(c.Items))
 		if len(lines) == 0 {
-			b.WriteString("（空）\n")
+			b.WriteString(prompt.T(s.lang, "prompt.belongings.render.empty", "（空）") + "\n")
 		} else {
 			b.WriteString(strings.Join(lines, "\n"))
 			b.WriteString("\n")
 		}
 	}
 	if kw != "" && matched == 0 {
-		return fmt.Sprintf("共 %d 项物品，没有符合条件的。", total), nil
+		return prompt.Tf(s.lang, "prompt.belongings.result.no_match", "共 %d 项物品，没有符合条件的。", total), nil
 	}
 
 	out, truncated := plugin.TruncateUTF8([]byte(strings.TrimRight(b.String(), "\n")), maxListBytes)
 	res := string(out)
 	if truncated {
-		res += fmt.Sprintf("\n...[超过 %d 字节，已截断，请用更具体的条件过滤]", maxListBytes)
+		res += prompt.Tf(s.lang, "prompt.belongings.result.truncated",
+			"\n...[超过 %d 字节，已截断，请用更具体的条件过滤]", maxListBytes)
 	}
 	return res, nil
 }

@@ -16,7 +16,7 @@ import (
 func testLimits() Limits { return Limits{MaxContainers: 3, MaxItemsPerContainer: 3} }
 
 func TestStoreAddRemove(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 
 	// 新建容器并放入
@@ -54,7 +54,7 @@ func TestStoreAddRemove(t *testing.T) {
 }
 
 func TestStoreMergeSameName(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	early := time.Now().Add(-72 * time.Hour)
 	if _, err := s.Apply("冰箱", []Change{{Name: "鸡蛋", Qty: 4}}, nil, early, testLimits()); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -78,7 +78,7 @@ func TestStoreMergeSameName(t *testing.T) {
 }
 
 func TestStoreErrors(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 	lim := testLimits()
 	if _, err := s.Apply("冰箱", []Change{{Name: "鸡蛋", Qty: 6}}, nil, now, lim); err != nil {
@@ -127,7 +127,7 @@ func TestStoreErrors(t *testing.T) {
 
 func TestStoreCorruptFile(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	if err := os.WriteFile(filepath.Join(dir, "containers.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestAgeNote(t *testing.T) {
 		{now.Add(-400 * 24 * time.Hour), "1 年前放入"},
 	}
 	for _, c := range cases {
-		if got := ageNote(c.added, now); got != c.want {
+		if got := ageNote("", c.added, now); got != c.want {
 			t.Errorf("ageNote(%v) = %q, want %q", c.added, got, c.want)
 		}
 	}
@@ -168,7 +168,7 @@ func TestRenderDegrade(t *testing.T) {
 	}
 	cs := []Container{{Name: "冰箱", Items: items}, {Name: "书架"}}
 
-	full := renderContainers(cs, 8*1024, now)
+	full := renderContainers("", cs, 8*1024, now)
 	if !strings.Contains(full, "鸡蛋×4（1 天前放入）") {
 		t.Fatalf("全列应带数量与入库时间: %q", full)
 	}
@@ -180,13 +180,13 @@ func TestRenderDegrade(t *testing.T) {
 	}
 
 	// 预算装不下全列时，降级为只报件数——容器名与件数必须还在
-	mid := renderContainers(cs, 150, now)
+	mid := renderContainers("", cs, 150, now)
 	if !strings.Contains(mid, "冰箱：（22 项") || strings.Contains(mid, "鸡蛋") {
 		t.Fatalf("一级降级应只报件数: %q", mid)
 	}
 
 	// 连件数都装不下时，只注明容器数
-	tiny := renderContainers(cs, 40, now)
+	tiny := renderContainers("", cs, 40, now)
 	if !strings.Contains(tiny, "2 个容器") {
 		t.Fatalf("兜底降级应注明容器数: %q", tiny)
 	}
@@ -249,7 +249,7 @@ func TestToolsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TurnPrompt: %v", err)
 	}
-	if !strings.HasPrefix(tp, stateHeader) || !strings.Contains(tp, "鸡蛋×4") {
+	if !strings.HasPrefix(tp, stateHeaderFor("")) || !strings.Contains(tp, "鸡蛋×4") {
 		t.Fatalf("TurnPrompt 应注入清单: %q", tp)
 	}
 
