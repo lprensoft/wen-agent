@@ -400,6 +400,8 @@
   "plugin.relationship.action.reset.desc": "Wipe every relationship snapshot, including the separate copies each persona keeps. Cannot be undone.",
   "plugin.relationship.action.reset.label": "Reset the relationship",
   "plugin.relationship.desc": "Relationship: what stage the two of you are at, what you call each other, what changed recently, and the understandings and the off-limits subjects, kept as a snapshot injected each turn so the character stops running hot and cold",
+  "plugin.relationship.reset.done": "Reset %d relationship snapshot(s).",
+  "plugin.relationship.reset.failed": "Failed to reset the relationship state: %s",
   "plugin.roleplay.desc": "Plays a character from your notes: injects the character sheet, sample lines and what it knows about you, acts out scenes and gestures in 【】, and holds the writing and the sense of time together",
   "plugin.roleplay.field.boundaries.desc": "Lets the character say no in its own voice: at the lightest, steering away from the subject; further along, naming what it feels and asking to stop; at the limit, refusing outright — always first person, always starting from a feeling. Where the line falls is decided by the character sheet and the scene, not by this plugin.",
   "plugin.roleplay.field.boundaries.label": "Allow boundaries",

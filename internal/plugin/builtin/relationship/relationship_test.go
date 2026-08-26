@@ -44,7 +44,7 @@ func TestInitRequiresStateDir(t *testing.T) {
 }
 
 func TestApplyRejectsOverLimit(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 	cases := map[string]Update{
 		"stage 过长":      {Stage: str(strings.Repeat("热", maxStageRunes+1))},
@@ -71,7 +71,7 @@ func TestApplyRejectsOverLimit(t *testing.T) {
 }
 
 func TestApplyClearAndBondsOverride(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	now := time.Now()
 
 	updated, cleared, err := s.Apply(Update{
@@ -126,7 +126,7 @@ func TestApplyClearAndBondsOverride(t *testing.T) {
 }
 
 func TestApplyRecentAlwaysStampsNow(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	t0 := time.Date(2026, 8, 1, 12, 0, 0, 0, time.Local)
 	if _, _, err := s.Apply(Update{Recent: str("吵了一架")}, t0); err != nil {
 		t.Fatal(err)
@@ -164,17 +164,17 @@ func TestRenderExact(t *testing.T) {
 		"最近：3 天前为对方忘了纪念日吵过一架，昨天和好了。\n" +
 		"默契与禁区：对方不爱被催；晚安一定要说；别提前任。\n" +
 		"对方近况：项目上线前在赶工。"
-	if got := renderSnapshot(snap, now); got != want {
+	if got := renderSnapshot("", snap, now); got != want {
 		t.Errorf("渲染不对:\n got: %q\nwant: %q", got, want)
 	}
 
 	// 缺项省句；今天的变动标「今天」；已有句号不重复加
 	partial := Snapshot{TheirCall: "小舟", Recent: "表白了！", RecentAt: now.Add(-time.Hour)}
 	want = "对方叫你「小舟」。\n最近：今天表白了！"
-	if got := renderSnapshot(partial, now); got != want {
+	if got := renderSnapshot("", partial, now); got != want {
 		t.Errorf("部分渲染不对:\n got: %q\nwant: %q", got, want)
 	}
-	if got := renderSnapshot(Snapshot{MyCall: "阿宁"}, now); got != "你叫对方「阿宁」。" {
+	if got := renderSnapshot("", Snapshot{MyCall: "阿宁"}, now); got != "你叫对方「阿宁」。" {
 		t.Errorf("只有我的称呼: %q", got)
 	}
 }
@@ -182,16 +182,16 @@ func TestRenderExact(t *testing.T) {
 func TestRecentExpires(t *testing.T) {
 	now := time.Now()
 	fresh := Snapshot{Recent: "和好了", RecentAt: now.AddDate(0, 0, -29)}
-	if got := renderSnapshot(fresh, now); got != "最近：29 天前和好了。" {
+	if got := renderSnapshot("", fresh, now); got != "最近：29 天前和好了。" {
 		t.Errorf("29 天前应仍注入: %q", got)
 	}
 	stale := Snapshot{Stage: "老夫老妻", Recent: "和好了", RecentAt: now.AddDate(0, 0, -31)}
-	if got := renderSnapshot(stale, now); got != "阶段：老夫老妻。" {
+	if got := renderSnapshot("", stale, now); got != "阶段：老夫老妻。" {
 		t.Errorf("31 天前的「最近」不该注入: %q", got)
 	}
 	// 手改的文件没有时刻：照样注入但不标时间
 	noStamp := Snapshot{Recent: "和好了"}
-	if got := renderSnapshot(noStamp, now); got != "最近：和好了。" {
+	if got := renderSnapshot("", noStamp, now); got != "最近：和好了。" {
 		t.Errorf("无时刻: %q", got)
 	}
 }
@@ -296,11 +296,11 @@ func TestAgoText(t *testing.T) {
 		"3 天前": now.AddDate(0, 0, -3),
 	}
 	for want, at := range cases {
-		if got := agoText(at, now); got != want {
+		if got := agoText("", at, now); got != want {
 			t.Errorf("agoText(%v) = %q, want %q", at, got, want)
 		}
 	}
-	if got := agoText(now.Add(24*time.Hour), now); got != "" {
+	if got := agoText("", now.Add(24*time.Hour), now); got != "" {
 		t.Errorf("时钟倒流不该标: %q", got)
 	}
 }
