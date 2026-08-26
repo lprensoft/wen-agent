@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang           string // 进程语言，注入片段与工具文本据此取用
 	base           string // 基准人物库目录（= 共享域）
 	maxPeople      int
 	maxInjectBytes int
@@ -70,7 +72,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把人物库散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存人物库")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.people.no_state_dir",
+			"没有可用的持久化目录，无法保存人物库"))
 	}
 
 	p.storesMu.Lock()
@@ -79,6 +82,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.base = filepath.Join(ictx.StateDir, "people")
 	p.maxPeople = plugin.CfgInt(cfg, "max_people", defaultMaxPeople)
 	p.maxInjectBytes = plugin.CfgInt(cfg, "max_inject_bytes", defaultMaxInject)
@@ -95,6 +99,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang           string
 	base           string
 	maxPeople      int
 	maxInjectBytes int
@@ -105,6 +110,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:           p.lang,
 		base:           p.base,
 		maxPeople:      p.maxPeople,
 		maxInjectBytes: p.maxInjectBytes,
@@ -113,7 +119,15 @@ func (p *Plugin) snapshot() settings {
 
 // SystemPrompt 注入维护判据，全部为静态内容。
 // 清单本体改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘。
-func (p *Plugin) SystemPrompt() string { return guidePrompt }
+func (p *Plugin) SystemPrompt() string { return guideFor(p.langOf()) }
+
+// langOf 取进程语言。SystemPrompt 与 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
+}
 
 // TurnPrompt 注入本轮可读的清单。一个人都没有时不注入：判据已在 SystemPrompt 里。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
@@ -125,7 +139,8 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || len(ps) == 0 {
 		return "", err
 	}
-	return stateHeader + "\n" + renderPeople(ps, s.maxInjectBytes, time.Now()), nil
+	return stateHeaderFor(s.lang) + "\n" +
+		renderPeople(s.lang, ps, s.maxInjectBytes, time.Now()), nil
 }
 
 // ---------- 给其它插件的只读查询 ----------
@@ -182,7 +197,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -228,7 +243,8 @@ func (p *Plugin) visiblePeople(ctx context.Context) ([]Person, error) {
 		}
 	}
 	if out == nil && len(errs) > 0 {
-		return nil, fmt.Errorf("读取人物库失败: %s", strings.Join(errs, "; "))
+		return nil, fmt.Errorf(prompt.T(p.langOf(), "prompt.people.store.read_failed_all",
+			"读取人物库失败: %s"), strings.Join(errs, "; "))
 	}
 	return out, nil
 }
@@ -239,20 +255,21 @@ func (p *Plugin) visiblePeople(ctx context.Context) ([]Person, error) {
 // 全列（关系 + 亲近度 + 上次来往与摘要）→ 只留名字与亲近度 → 只注明人数。
 // 降级保住存在性：名字在，模型才知道这个人存在，不会另编一个。
 // 按记录顺序不按时间：按时间排会让每次更新都重排整块文本。
-func renderPeople(ps []Person, maxBytes int, now time.Time) string {
-	if out, ok := renderLines(ps, maxBytes, now, true); ok {
+func renderPeople(lang string, ps []Person, maxBytes int, now time.Time) string {
+	if out, ok := renderLines(lang, ps, maxBytes, now, true); ok {
 		return out
 	}
-	if out, ok := renderLines(ps, maxBytes, now, false); ok {
+	if out, ok := renderLines(lang, ps, maxBytes, now, false); ok {
 		return out
 	}
-	return fmt.Sprintf("（共 %d 人，注入预算不足以列出，可用 list_people 查看）", len(ps))
+	return prompt.Tf(lang, "prompt.people.render.budget_short",
+		"（共 %d 人，注入预算不足以列出，可用 list_people 查看）", len(ps))
 }
 
-func renderLines(ps []Person, maxBytes int, now time.Time, full bool) (string, bool) {
+func renderLines(lang string, ps []Person, maxBytes int, now time.Time, full bool) (string, bool) {
 	var b strings.Builder
 	for _, p := range ps {
-		b.WriteString(renderPerson(p, now, full))
+		b.WriteString(renderPerson(lang, p, now, full))
 		b.WriteString("\n")
 	}
 	out := strings.TrimRight(b.String(), "\n")
@@ -264,15 +281,16 @@ func renderLines(ps []Person, maxBytes int, now time.Time, full bool) (string, b
 
 // renderPerson 渲染一行：`林舟（大学同学，熟）上次来往 3 天前：一起吃了晚饭`。
 // 精简形态只留 `林舟（熟）`。
-func renderPerson(p Person, now time.Time, full bool) string {
+func renderPerson(lang string, p Person, now time.Time, full bool) string {
+	closeness := closenessLevels.For(lang, p.Closeness)
 	if !full {
-		return fmt.Sprintf("%s（%s）", p.Name, p.Closeness)
+		return prompt.Tf(lang, "prompt.people.render.brief", "%s（%s）", p.Name, closeness)
 	}
-	s := fmt.Sprintf("%s（%s，%s）", p.Name, p.Relation, p.Closeness)
-	if a := agoText(p.LastMet, now); a != "" {
-		s += "上次来往 " + a
+	s := prompt.Tf(lang, "prompt.people.render.full", "%s（%s，%s）", p.Name, p.Relation, closeness)
+	if a := agoText(lang, p.LastMet, now); a != "" {
+		s += prompt.Tf(lang, "prompt.people.render.last_met", "上次来往 %s", a)
 		if p.LastNote != "" {
-			s += "：" + p.LastNote
+			s += prompt.Tf(lang, "prompt.people.render.last_note", "：%s", p.LastNote)
 		}
 	}
 	return s
@@ -280,7 +298,7 @@ func renderPerson(p Person, now time.Time, full bool) string {
 
 // agoText 把时刻化成「今天 / 昨天 / N 天前 / N 个月前 / N 年前」，按日历日算而不是
 // 按 24 小时——昨晚见的面今天凌晨不该说「今天」。零值或倒流（改过系统时钟）时不标。
-func agoText(t, now time.Time) string {
+func agoText(lang string, t, now time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
@@ -293,14 +311,12 @@ func agoText(t, now time.Time) string {
 	case days < 0:
 		return ""
 	case days == 0:
-		return "今天"
+		return prompt.T(lang, "prompt.people.ago.today", "今天")
 	case days == 1:
-		return "昨天"
-	case days < 30:
-		return fmt.Sprintf("%d 天前", days)
-	case days < 365:
-		return fmt.Sprintf("%d 个月前", days/30)
-	default:
-		return fmt.Sprintf("%d 年前", days/365)
+		return prompt.T(lang, "prompt.people.ago.yesterday", "昨天")
 	}
+	// 天数以上走全程序共用的时长口径。按日历日算得的天数换回时长再交给它，
+	// 是为了让「N 天前 / N 个月前 / N 年前」的分档与别处一致。
+	return prompt.Tf(lang, "prompt.people.ago.before", "%s前",
+		prompt.Duration(lang, time.Duration(days)*24*time.Hour))
 }
