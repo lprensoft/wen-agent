@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/updater"
 	"wen/internal/version"
@@ -64,6 +65,7 @@ type Options struct {
 // Plugin 是 self_update 系统插件。
 type Plugin struct {
 	mu          sync.RWMutex
+	lang        string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	autoCheck   bool
 	interval    time.Duration
 	autoRestart bool
@@ -153,7 +155,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // 这里不发网络请求：启动时断网不该让插件启用失败，第一次检查交给后台循环。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法记录上次检查的时刻")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.self_update.no_state_dir",
+			"没有可用的持久化目录，无法记录上次检查的时刻"))
 	}
 	exe := p.fixedExe
 	if exe == "" {
@@ -174,6 +177,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.Stop() // 重入：先停上一轮循环，避免两套定时器并行
 
 	p.mu.Lock()
+	p.lang = ictx.Lang
 	p.stateDir = ictx.StateDir
 	p.exe = exe
 	p.autoCheck = autoCheck
@@ -231,7 +235,8 @@ func (p *Plugin) reconcile() {
 	if pend.To == version.Version {
 		p.st.LastUpdate = pend.To
 		p.st.LastUpdateAt = p.now()
-		msg = fmt.Sprintf("已更新到 %s（原 %s），服务已重启，新版正在运行。", pend.To, pend.From)
+		msg = i18n.Tf(p.lang, "plugin.self_update.notice.done",
+			"已更新到 %s（原 %s），服务已重启，新版正在运行。", pend.To, pend.From)
 	}
 	p.saveLocked()
 	p.mu.Unlock()
@@ -243,7 +248,8 @@ func (p *Plugin) reconcile() {
 	}
 	// 文件换过了，跑起来的却还是旧版本：多半是重启没到位，或者程序被从别处启动。
 	// 说清楚现状，让人知道该做什么，而不是留一个「更新过但看不出来」的状态。
-	warn := fmt.Sprintf("上次已把程序更新到 %s，但当前运行的仍是 %s。重启程序即可用上新版。",
+	warn := i18n.Tf(p.lang, "plugin.self_update.notice.pending",
+		"上次已把程序更新到 %s，但当前运行的仍是 %s。重启程序即可用上新版。",
 		pend.To, version.Version)
 	p.setAction(plugin.ActionState{Status: plugin.ActionError, Message: warn})
 	log.Printf("self_update: %s", warn)
@@ -251,6 +257,7 @@ func (p *Plugin) reconcile() {
 
 // snapshot 是一次调用期间使用的配置与状态快照。
 type snapshot struct {
+	lang        string
 	autoCheck   bool
 	interval    time.Duration
 	autoRestart bool
@@ -265,6 +272,7 @@ func (p *Plugin) snapshot() snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return snapshot{
+		lang:        p.lang,
 		autoCheck:   p.autoCheck,
 		interval:    p.interval,
 		autoRestart: p.autoRestart,
@@ -274,6 +282,13 @@ func (p *Plugin) snapshot() snapshot {
 		restart:     p.restart,
 		st:          p.st,
 	}
+}
+
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 // newerTag 返回「比当前版本新的那个已知版本」，没有则返回空串。

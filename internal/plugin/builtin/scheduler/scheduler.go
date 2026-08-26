@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // 常量集中在此，便于对照行为。
 const (
-	taskPrefix     = "【定时任务】" // 任务内容作为轮次输入时的前缀，让模型知道这不是用户现场消息
+	taskPrefixZH   = "【定时任务】" // 任务内容作为轮次输入时的前缀，让模型知道这不是用户现场消息
 	runTimeout     = 15 * time.Minute
 	busyRetryEvery = time.Minute // once 任务撞上会话忙时的重试间隔
 	busyRetryMax   = 5
@@ -30,6 +31,7 @@ const (
 type Plugin struct {
 	mu sync.Mutex
 
+	lang       string // 进程语言，注入片段与工具文本据此取用
 	stateDir   string
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
@@ -53,12 +55,15 @@ func (p *Plugin) Description() string {
 	return "对话中创建定时任务（一次性/周期/每日），到点后台执行并把结果写进最近活跃的会话"
 }
 
+// guideZH 是定时任务的用法判据。
+const guideZH = "你可以管理定时任务：用 schedule_task 创建（支持一次性、按分钟周期、每日定点三种），" +
+	"用 list_tasks 查看，用 cancel_task 取消。用户提出“稍后/定时/每天提醒或执行某事”时应使用这些工具。" +
+	"对方随口提到将来的事（约好的时间、要办的事、值得关心的时点）时，即使没有明说要提醒，" +
+	"也可以顺手定一个一次性任务，到时候主动提起。" +
+	"这些任务是对对方的提醒与承诺，到点由你执行；你自己一天里要去做的事（出门、赴约、工作）不是定时任务，归日程工具。"
+
 func (p *Plugin) SystemPrompt() string {
-	return "你可以管理定时任务：用 schedule_task 创建（支持一次性、按分钟周期、每日定点三种），" +
-		"用 list_tasks 查看，用 cancel_task 取消。用户提出“稍后/定时/每天提醒或执行某事”时应使用这些工具。" +
-		"对方随口提到将来的事（约好的时间、要办的事、值得关心的时点）时，即使没有明说要提醒，" +
-		"也可以顺手定一个一次性任务，到时候主动提起。" +
-		"这些任务是对对方的提醒与承诺，到点由你执行；你自己一天里要去做的事（出门、赴约、工作）不是定时任务，归日程工具。"
+	return prompt.T(p.langOf(), "prompt.scheduler.guide", guideZH)
 }
 
 func (p *Plugin) Tools() []plugin.Tool {
@@ -70,27 +75,38 @@ func (p *Plugin) Tools() []plugin.Tool {
 }
 
 // Init 加载任务并（重）启动调度循环。可重入：先停上一轮。
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存任务")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_state_dir",
+			"没有可用的持久化目录，无法保存任务"))
 	}
 	if ictx.RunTurn == nil {
-		return fmt.Errorf("当前环境不支持插件发起对话轮次")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_run_turn",
+			"当前环境不支持插件发起对话轮次"))
 	}
 	if ictx.Sessions == nil {
-		return fmt.Errorf("当前环境不支持会话查询")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.scheduler.no_sessions",
+			"当前环境不支持会话查询"))
 	}
 
 	p.Stop()
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
 	p.sessions = ictx.Sessions
 	if err := p.loadLocked(); err != nil {
-		return fmt.Errorf("加载任务失败: %w", err)
+		return fmt.Errorf(prompt.T(ictx.Lang, "prompt.scheduler.err.load", "加载任务失败: %w"), err)
 	}
 	p.catchUpLocked()
 

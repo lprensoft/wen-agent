@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // 任务类型。
@@ -50,7 +52,7 @@ func (t *Task) nextRun(now time.Time) time.Time {
 		}
 		return base.Add(time.Duration(t.IntervalMin) * time.Minute)
 	case typeDaily:
-		hh, mm, err := parseDaily(t.DailyTime)
+		hh, mm, err := parseDaily("", t.DailyTime) // 只看成功与否，报错被丢弃
 		if err != nil {
 			return time.Time{}
 		}
@@ -65,27 +67,28 @@ func (t *Task) nextRun(now time.Time) time.Time {
 }
 
 // describe 返回任务的一句话中文描述，供列表与创建回执使用。
-func (t *Task) describe() string {
+func (t *Task) describe(lang string) string {
 	var when string
 	switch t.Type {
 	case typeOnce:
-		when = t.At.Format("2006-01-02 15:04") + " 执行一次"
+		when = prompt.Tf(lang, "prompt.scheduler.when.once", "%s 执行一次",
+			t.At.Format("2006-01-02 15:04"))
 	case typeInterval:
-		when = fmt.Sprintf("每 %d 分钟", t.IntervalMin)
+		when = prompt.Tf(lang, "prompt.scheduler.when.interval", "每 %d 分钟", t.IntervalMin)
 	case typeDaily:
-		when = "每天 " + t.DailyTime
+		when = prompt.Tf(lang, "prompt.scheduler.when.daily", "每天 %s", t.DailyTime)
 	}
 	status := ""
 	if t.Done {
-		status = "（已结束"
+		status = prompt.T(lang, "prompt.scheduler.status.done", "（已结束")
 		if t.Note != "" {
-			status += "：" + t.Note
+			status += prompt.Tf(lang, "prompt.scheduler.status.note", "：%s", t.Note)
 		}
-		status += "）"
+		status += prompt.T(lang, "prompt.scheduler.status.close", "）")
 	} else if t.Note != "" {
-		status = "（" + t.Note + "）"
+		status = prompt.Tf(lang, "prompt.scheduler.status.plain", "（%s）", t.Note)
 	}
-	return fmt.Sprintf("[%s] %s：%s%s", t.ID, when, t.Content, status)
+	return prompt.Tf(lang, "prompt.scheduler.describe", "[%s] %s：%s%s", t.ID, when, t.Content, status)
 }
 
 func sameDay(a, b time.Time) bool {
@@ -95,19 +98,20 @@ func sameDay(a, b time.Time) bool {
 }
 
 // parseDaily 解析 "HH:MM"。
-func parseDaily(s string) (hh, mm int, err error) {
+func parseDaily(lang, s string) (hh, mm int, err error) {
 	if _, e := fmt.Sscanf(strings.TrimSpace(s), "%d:%d", &hh, &mm); e != nil {
-		return 0, 0, fmt.Errorf("时间格式应为 HH:MM，例如 08:30")
+		return 0, 0, fmt.Errorf("%s", prompt.T(lang, "prompt.scheduler.err.bad_daily",
+			"时间格式应为 HH:MM，例如 08:30"))
 	}
 	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return 0, 0, fmt.Errorf("时间 %q 不合法", s)
+		return 0, 0, fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.bad_time", "时间 %q 不合法"), s)
 	}
 	return hh, mm, nil
 }
 
 // parseAt 解析一次性任务的执行时刻（本地时区），接受 "2006-01-02 15:04"、
 // "2006-01-02 15:04:05" 与 RFC3339。
-func parseAt(s string) (time.Time, error) {
+func parseAt(lang, s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	for _, layout := range []string{"2006-01-02 15:04", "2006-01-02 15:04:05"} {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
@@ -117,7 +121,8 @@ func parseAt(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
-	return time.Time{}, fmt.Errorf("无法解析时间 %q，请用 \"2006-01-02 15:04\" 格式", s)
+	return time.Time{}, fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.bad_at",
+		"无法解析时间 %q，请用 2006-01-02 15:04 格式"), s)
 }
 
 func newTaskID() string {
@@ -179,7 +184,7 @@ func (p *Plugin) catchUpLocked() {
 		if now.Sub(t.At) > missedOnceMax {
 			t.Done = true
 			t.DoneAt = now
-			t.Note = "错过执行时间过久，已标记过期"
+			t.Note = prompt.T(p.lang, "prompt.scheduler.note.expired", "错过执行时间过久，已标记过期")
 			changed = true
 		}
 	}

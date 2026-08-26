@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 // loop 是调度循环：算出最近的到期时刻定时等待（30 秒兜底），到点把任务逐个派发出去。
@@ -64,7 +65,7 @@ func (p *Plugin) dispatchDue(ctx context.Context) {
 		if t.Type == typeOnce {
 			t.Done = true
 			t.DoneAt = now
-			t.Note = "执行中"
+			t.Note = prompt.T(p.lang, "prompt.scheduler.note.running", "执行中")
 		}
 		due = append(due, t)
 	}
@@ -86,12 +87,12 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("scheduler: 任务 %s 执行时 panic（已隔离）: %v", t.ID, r)
-			p.setNote(t, "执行异常")
+			p.setNote(t, prompt.T(p.langOf(), "prompt.scheduler.note.panic", "执行异常"))
 		}
 	}()
 
 	p.mu.Lock()
-	runTurn := p.runTurn
+	runTurn, lang := p.runTurn, p.lang
 	p.mu.Unlock()
 
 	for attempt := 0; ; attempt++ {
@@ -100,25 +101,25 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 		if err != nil {
 			cancel()
 			log.Printf("scheduler: 任务 %s 找不到可用会话: %v", t.ID, err)
-			p.setNote(t, "找不到可用会话")
+			p.setNote(t, prompt.T(lang, "prompt.scheduler.note.no_session", "找不到可用会话"))
 			return
 		}
-		_, err = runTurn(tctx, sid, taskPrefix+t.Content)
+		_, err = runTurn(tctx, sid, prompt.T(lang, "prompt.scheduler.task_prefix", taskPrefixZH)+t.Content)
 		cancel()
 
 		switch {
 		case err == nil:
-			p.setNote(t, "上次执行成功 "+time.Now().Format("01-02 15:04"))
+			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.ok", "上次执行成功 %s", time.Now().Format("01-02 15:04")))
 			return
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if t.Type != typeOnce {
 				log.Printf("scheduler: 会话忙，周期任务 %s 跳过本次", t.ID)
-				p.setNote(t, "上次因会话忙跳过")
+				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy", "上次因会话忙跳过"))
 				return
 			}
 			if attempt+1 >= busyRetryMax {
 				log.Printf("scheduler: 任务 %s 重试 %d 次仍撞上会话忙，放弃本次", t.ID, busyRetryMax)
-				p.setNote(t, "会话持续繁忙，本次未执行")
+				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy_gave_up", "会话持续繁忙，本次未执行"))
 				return
 			}
 			select {
@@ -131,7 +132,7 @@ func (p *Plugin) runTask(ctx context.Context, t *Task) {
 				return // 进程退出/插件停止，不记错
 			}
 			log.Printf("scheduler: 任务 %s 执行失败: %v", t.ID, err)
-			p.setNote(t, "上次执行失败："+truncate(err.Error(), 100))
+			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.failed", "上次执行失败：%s", truncate(err.Error(), 100)))
 			return
 		}
 	}

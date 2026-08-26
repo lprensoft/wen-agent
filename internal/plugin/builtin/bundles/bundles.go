@@ -16,11 +16,13 @@ import (
 	"sync"
 
 	"wen/internal/agentplugin"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
 // Plugin 是外源插件包的管理入口。
 type Plugin struct {
+	lang  string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
 	store *agentplugin.Store
 	// baseDir 用来推算每个包的 PLUGIN_DATA，握手要用与真正运行时同一份参数。
 	baseDir string
@@ -56,9 +58,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 }
 
 // Init 只校验有没有可用的存放位置。这个插件不起任何后台活动。
-func (p *Plugin) Init(_ plugin.InitContext, _ map[string]any) error {
+func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
+	p.mu.Lock()
+	p.lang = ictx.Lang
+	p.mu.Unlock()
 	if p.store == nil || p.store.Dir() == "" {
-		return fmt.Errorf("没有可用的配置目录，无法管理插件包")
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.bundles.no_base_dir",
+			"没有可用的配置目录，无法管理插件包"))
 	}
 	return nil
 }
@@ -67,19 +73,27 @@ func (p *Plugin) Init(_ plugin.InitContext, _ map[string]any) error {
 func (p *Plugin) SystemPrompt() string { return "" }
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
+// langOf 取进程语言。
+func (p *Plugin) langOf() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lang
+}
+
 func (p *Plugin) StatusLines(lang string) []string {
 	bundles, problems := p.store.List()
 	if len(bundles) == 0 && len(problems) == 0 {
-		return []string{"🧩 外源插件包：一个都没装"}
+		return []string{i18n.T(lang, "plugin.bundles.status.none", "🧩 外源插件包：一个都没装")}
 	}
 	var tools int
 	for _, b := range bundles {
 		ts, _ := p.store.LoadTools(b.Manifest.Name)
 		tools += len(ts)
 	}
-	line := fmt.Sprintf("🧩 外源插件包：%d 个，%d 件工具", len(bundles), tools)
+	line := i18n.Tf(lang, "plugin.bundles.status.line", "🧩 外源插件包：%d 个，%d 件工具",
+		len(bundles), tools)
 	if n := len(problems); n > 0 {
-		line += fmt.Sprintf("，%d 个读不出来", n)
+		line += i18n.Tf(lang, "plugin.bundles.status.broken", "，%d 个读不出来", n)
 	}
 	return []string{line}
 }
