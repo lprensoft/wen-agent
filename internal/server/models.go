@@ -24,11 +24,11 @@ func (s *Server) saveModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if _, err := s.models.Save(req); err != nil {
+	if _, err := s.models.Save(reqLang(r), req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.applyCurrentModel(); err != nil {
+	if err := s.applyCurrentModel(reqLang(r)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -42,11 +42,11 @@ func (s *Server) setCurrentModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if _, err := s.models.SetCurrent(sel); err != nil {
+	if _, err := s.models.SetCurrent(reqLang(r), sel); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.applyCurrentModel(); err != nil {
+	if err := s.applyCurrentModel(reqLang(r)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -125,8 +125,8 @@ func probe(ctx context.Context, provider llm.Provider, model string) error {
 }
 
 // applyCurrentModel 按当前选中项重建 provider 并热切换到 Agent。
-func (s *Server) applyCurrentModel() error {
-	cur, err := s.models.Resolve()
+func (s *Server) applyCurrentModel(lang string) error {
+	cur, err := s.models.Resolve(lang)
 	if err != nil {
 		return err
 	}

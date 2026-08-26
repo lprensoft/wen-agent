@@ -32,7 +32,7 @@ func TestResolvePromptCacheDefaultsOn(t *testing.T) {
 				},
 				defaults: config.ModelConfig{MaxTokens: 4096, Thinking: "high", ContextLength: 1000},
 			}
-			got, err := s.Resolve()
+			got, err := s.Resolve("")
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
 			}

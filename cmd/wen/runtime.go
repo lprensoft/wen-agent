@@ -144,12 +144,12 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	plugins = buildPlugins(cfg, ictx, ov.Restart, ov.PluginOpts...)
 
 	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
-	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
+	models, err = modelcfg.NewStore(uiLang, filepath.Join(cfg.BaseDir, "models.json"), cfg)
 	if err != nil {
 		plugins.StopAll()
 		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
-	cur, err := models.Resolve()
+	cur, err := models.Resolve(uiLang)
 	if err != nil {
 		plugins.StopAll()
 		return nil, fmt.Errorf(tr("cli.err.bad_models", "模型配置无效: %w"), err)

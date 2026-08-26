@@ -12,6 +12,8 @@ import (
 
 	"wen/internal/config"
 	"wen/internal/llm"
+
+	"wen/internal/i18n"
 )
 
 // File 是 models.json 的落盘结构。
@@ -84,7 +86,7 @@ type Store struct {
 
 // NewStore 读取 models.json（可能不存在）并与 config.yaml 合并。
 // 不写盘：只有界面上真的改了东西才创建文件。
-func NewStore(path string, cfg *config.Config) (*Store, error) {
+func NewStore(lang, path string, cfg *config.Config) (*Store, error) {
 	s := &Store{
 		path:     path,
 		base:     baseProviders(cfg),
@@ -96,16 +98,16 @@ func NewStore(path string, cfg *config.Config) (*Store, error) {
 	switch {
 	case err == nil:
 		if err := json.Unmarshal(raw, &s.own); err != nil {
-			return nil, fmt.Errorf("解析 %s 失败: %w", path, err)
+			return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.parse", "解析 %s 失败: %w"), path, err)
 		}
 	case os.IsNotExist(err):
 		s.own = File{Version: 1}
 	default:
-		return nil, fmt.Errorf("读取 %s 失败: %w", path, err)
+		return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.read", "读取 %s 失败: %w"), path, err)
 	}
 
-	if err := validateDoc(s.viewLocked()); err != nil {
-		return nil, fmt.Errorf("模型配置无效: %w", err)
+	if err := validateDoc(lang, s.viewLocked()); err != nil {
+		return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
 	}
 	return s, nil
 }
@@ -152,29 +154,30 @@ func (s *Store) Defaults() config.ModelConfig {
 }
 
 // Resolve 返回当前选中项的最终生效参数。
-func (s *Store) Resolve() (Resolved, error) {
+func (s *Store) Resolve(lang string) (Resolved, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return resolve(s.viewLocked(), s.defaults)
+	return resolve(lang, s.viewLocked(), s.defaults)
 }
 
 // Status 返回 /api/status 需要的非敏感字段。
 func (s *Store) Status() (provider, model, thinking string, contextLength int) {
-	r, err := s.Resolve()
+	// 这里的报错被丢弃（拿不到就报空），语言无关紧要
+	r, err := s.Resolve("")
 	if err != nil {
 		return "", "", "", 0
 	}
 	return r.ProviderName, r.ModelID, r.Thinking, r.ContextLength
 }
 
-func resolve(f File, def config.ModelConfig) (Resolved, error) {
+func resolve(lang string, f File, def config.ModelConfig) (Resolved, error) {
 	p, ok := findProvider(f.Providers, f.Current.Provider)
 	if !ok {
-		return Resolved{}, fmt.Errorf("未找到提供商 %q", f.Current.Provider)
+		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_provider", "未找到提供商 %q"), f.Current.Provider)
 	}
 	m, ok := findModel(p.Models, f.Current.Model)
 	if !ok {
-		return Resolved{}, fmt.Errorf("提供商 %q 下未找到模型 %q", p.Name, f.Current.Model)
+		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), p.Name, f.Current.Model)
 	}
 	r := Resolved{
 		ProviderName:  p.Name,
@@ -206,7 +209,7 @@ func resolve(f File, def config.ModelConfig) (Resolved, error) {
 
 // Save 校验并保存整份配置。api_key 为空表示沿用旧值；
 // 与 config.yaml 完全一致且从未被接管的提供商不写进 models.json，继续跟随配置文件。
-func (s *Store) Save(next File) (File, error) {
+func (s *Store) Save(lang string, next File) (File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -214,7 +217,7 @@ func (s *Store) Save(next File) (File, error) {
 	normalize(&own)
 	own.Version = 1
 	// 先校验提交的文档本身（重名、非法字段），再算坠碑与「未接管」条目
-	if err := validateDoc(own); err != nil {
+	if err := validateDoc(lang, own); err != nil {
 		return File{}, err
 	}
 	own.Removed = tombstones(own.Providers, s.base, s.own.Removed)
@@ -224,11 +227,11 @@ func (s *Store) Save(next File) (File, error) {
 	s.own = own
 	view := s.viewLocked()
 	// 删除保护：保存后当前使用的提供商与模型必须仍然存在
-	if err := checkCurrent(view.Providers, own.Current); err != nil {
+	if err := checkCurrent(lang, view.Providers, own.Current); err != nil {
 		s.own = prev
 		return File{}, err
 	}
-	if err := s.persistLocked(); err != nil {
+	if err := s.persistLocked(lang); err != nil {
 		s.own = prev
 		return File{}, err
 	}
@@ -236,25 +239,25 @@ func (s *Store) Save(next File) (File, error) {
 }
 
 // SetCurrent 切换当前使用的提供商与模型。
-func (s *Store) SetCurrent(sel Selection) (File, error) {
+func (s *Store) SetCurrent(lang string, sel Selection) (File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	view := s.viewLocked()
 	p, ok := findProvider(view.Providers, sel.Provider)
 	if !ok {
-		return File{}, fmt.Errorf("未找到提供商 %q", sel.Provider)
+		return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_provider", "未找到提供商 %q"), sel.Provider)
 	}
 	if _, ok := findModel(p.Models, sel.Model); !ok {
-		return File{}, fmt.Errorf("提供商 %q 下未找到模型 %q", sel.Provider, sel.Model)
+		return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), sel.Provider, sel.Model)
 	}
 	if strings.TrimSpace(p.APIKey) == "" {
-		return File{}, fmt.Errorf("提供商 %q 尚未配置 API Key，无法使用", sel.Provider)
+		return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_api_key", "提供商 %q 尚未配置 API Key，无法使用"), sel.Provider)
 	}
 
 	prev := s.own.Current
 	s.own.Current = Selection{Provider: p.Name, Model: sel.Model}
-	if err := s.persistLocked(); err != nil {
+	if err := s.persistLocked(lang); err != nil {
 		s.own.Current = prev
 		return File{}, err
 	}
@@ -278,7 +281,7 @@ func (s *Store) Lookup(provider, model string) (Provider, Model, bool) {
 }
 
 // persistLocked 原子写盘（temp + rename），文件含明文密钥故权限为 0600。
-func (s *Store) persistLocked() error {
+func (s *Store) persistLocked(lang string) error {
 	if s.path == "" {
 		return nil
 	}
@@ -288,10 +291,10 @@ func (s *Store) persistLocked() error {
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存模型配置失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "modelcfg.err.save", "保存模型配置失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("保存模型配置失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "modelcfg.err.save", "保存模型配置失败: %w"), err)
 	}
 	return nil
 }
