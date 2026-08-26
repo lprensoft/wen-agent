@@ -132,7 +132,7 @@ func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel update
 
 	// 先确认安装目录可写：装在系统目录或由包管理器装的，这一步就该停，
 	// 而不是下完十几兆再来报错
-	if err := updater.CheckWritable(s.exe); err != nil {
+	if err := updater.CheckWritable(s.lang, s.exe); err != nil {
 		fail(err)
 		return
 	}
@@ -154,20 +154,20 @@ func (p *Plugin) install(ctx context.Context, seq uint64, s snapshot, rel update
 	}
 
 	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.unpacking", "校验通过，正在解包…"))
-	bin, err := updater.Extract(archive, work, updater.HostBinaryName())
+	bin, err := updater.Extract(s.lang, archive, work, updater.HostBinaryName())
 	if err != nil {
 		fail(err)
 		return
 	}
 
 	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.trial", "正在试运行新版程序…"))
-	if err := updater.SmokeTest(ctx, bin, rel.Tag); err != nil {
+	if err := updater.SmokeTest(ctx, s.lang, bin, rel.Tag); err != nil {
 		fail(err)
 		return
 	}
 
 	p.progress(seq, i18n.T(s.lang, "plugin.self_update.step.replacing", "正在替换程序文件…"))
-	if err := updater.Apply(bin, s.exe); err != nil {
+	if err := updater.Apply(s.lang, bin, s.exe); err != nil {
 		fail(err)
 		return
 	}

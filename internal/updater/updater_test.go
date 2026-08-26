@@ -149,7 +149,7 @@ func TestLatestFetchExtract(t *testing.T) {
 		t.Fatalf("进度没走到底: %d/%d", lastDone, plan.Asset.Size)
 	}
 
-	bin, err := Extract(archive, work, BinaryName(runtime.GOOS))
+	bin, err := Extract("", archive, work, BinaryName(runtime.GOOS))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Apply(newBin, exe); err != nil {
+	if err := Apply("", newBin, exe); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(exe)
@@ -283,10 +283,10 @@ func TestCheckWritable(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckWritable(exe); err != nil {
+	if err := CheckWritable("", exe); err != nil {
 		t.Fatalf("可写目录被判成不可写: %v", err)
 	}
-	if err := CheckWritable(filepath.Join(dir, "没有这个目录", "wen")); err == nil {
+	if err := CheckWritable("", filepath.Join(dir, "没有这个目录", "wen")); err == nil {
 		t.Fatal("不存在的目录该判为不可写")
 	}
 	// 探测文件不该留下
@@ -303,7 +303,7 @@ func TestSmokeTestRejectsBrokenBinary(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("这不是一个可执行文件"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := SmokeTest(context.Background(), bin, "v9.9.9"); err == nil {
+	if err := SmokeTest(context.Background(), "", bin, "v9.9.9"); err == nil {
 		t.Fatal("跑不起来的二进制却通过了试运行")
 	}
 }
@@ -319,10 +319,10 @@ func TestSmokeTestVersionMismatch(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := SmokeTest(context.Background(), bin, "v1.2.3"); err != nil {
+	if err := SmokeTest(context.Background(), "", bin, "v1.2.3"); err != nil {
 		t.Fatalf("版本相符却没通过: %v", err)
 	}
-	err := SmokeTest(context.Background(), bin, "v9.9.9")
+	err := SmokeTest(context.Background(), "", bin, "v9.9.9")
 	if err == nil || !strings.Contains(err.Error(), "不符") {
 		t.Fatalf("版本不符却通过了: %v", err)
 	}

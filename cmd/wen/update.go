@@ -37,14 +37,14 @@ func runUpdate(args []string) error {
 		adoptLang(nil)
 	}
 
-	exe, err := updater.ExePath()
+	exe, err := updater.ExePath(uiLang)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	client := updater.NewClient(version.Version)
+	client := updater.NewClient(uiLang, version.Version)
 	fmt.Print(trf("cli.update.querying", "当前版本 %s，正在查询最新的正式版…\n", version.Version))
 	rel, err := client.Latest(ctx)
 	if err != nil {
@@ -77,7 +77,7 @@ func runUpdate(args []string) error {
 		return nil
 	}
 
-	if err := updater.CheckWritable(exe); err != nil {
+	if err := updater.CheckWritable(uiLang, exe); err != nil {
 		return err
 	}
 	plan, err := client.Prepare(ctx, rel)
@@ -97,15 +97,15 @@ func runUpdate(args []string) error {
 	}
 
 	fmt.Println(tr("cli.update.unpacking", "校验通过，正在解包…"))
-	bin, err := updater.Extract(archive, work, updater.HostBinaryName())
+	bin, err := updater.Extract(uiLang, archive, work, updater.HostBinaryName())
 	if err != nil {
 		return err
 	}
 	fmt.Println(tr("cli.update.trial", "正在试运行新版程序…"))
-	if err := updater.SmokeTest(ctx, bin, rel.Tag); err != nil {
+	if err := updater.SmokeTest(ctx, uiLang, bin, rel.Tag); err != nil {
 		return err
 	}
-	if err := updater.Apply(bin, exe); err != nil {
+	if err := updater.Apply(uiLang, bin, exe); err != nil {
 		return err
 	}
 	fmt.Print(trf("cli.update.done", "已更新到 %s。\n", rel.Tag))

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"wen/internal/i18n"
 )
 
 // Relaunch 用新程序接替当前进程。
@@ -14,14 +16,14 @@ import (
 //
 // 调用方必须在此之前关掉监听端口——父子两个进程会有短暂的重叠，端口没让出来的话
 // 新进程起不来。
-func Relaunch(exe string, args []string) error {
+func Relaunch(lang, exe string, args []string) error {
 	cmd := exec.Command(exe, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if wd, err := os.Getwd(); err == nil {
 		cmd.Dir = wd
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动新版程序失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.relaunch", "启动新版程序失败: %w"), err)
 	}
 	return nil
 }

@@ -94,7 +94,7 @@ type Plugin struct {
 }
 
 func New(opts Options) *Plugin {
-	c := updater.NewClient(version.Version)
+	c := updater.NewClient("", version.Version)
 	if opts.API != "" {
 		c.API = opts.API
 	}
@@ -160,7 +160,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	exe := p.fixedExe
 	if exe == "" {
-		resolved, err := updater.ExePath()
+		resolved, err := updater.ExePath(ictx.Lang)
 		if err != nil {
 			return err
 		}
@@ -178,6 +178,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	p.lang = ictx.Lang
+	p.client.Lang = ictx.Lang
 	p.stateDir = ictx.StateDir
 	p.exe = exe
 	p.autoCheck = autoCheck

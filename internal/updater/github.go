@@ -24,6 +24,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // DefaultRepo 是发布仓库。见包注释：它不做成配置项。
@@ -65,6 +67,9 @@ type Release struct {
 
 // Client 访问 GitHub 的发布接口。零值不可用，用 NewClient 构造。
 type Client struct {
+	// Lang 是这个客户端说话用的语言，取进程语言：更新的进展与失败都是给人看的。
+	// 与 API / Repo 一样对外可写——插件在 New 里就建好客户端，语言要等 Init 才知道。
+	Lang string
 	HTTP *http.Client
 	API  string // 接口根地址，为空用 api.github.com
 	Repo string // owner/name，为空用 DefaultRepo
@@ -73,8 +78,9 @@ type Client struct {
 }
 
 // NewClient 按默认参数构造。version 用于 User-Agent，出问题时对方日志里认得出是谁。
-func NewClient(version string) *Client {
+func NewClient(lang, version string) *Client {
 	return &Client{
+		Lang: lang,
 		HTTP: &http.Client{Timeout: apiTimeout},
 		API:  defaultAPI,
 		Repo: DefaultRepo,
@@ -121,51 +127,51 @@ func (c *Client) Latest(ctx context.Context) (Release, error) {
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return Release{}, fmt.Errorf("连接 GitHub 失败: %w", err)
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.connect", "连接 GitHub 失败: %w"), err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIBody))
 	if err != nil {
-		return Release{}, fmt.Errorf("读取响应失败: %w", err)
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.read_resp", "读取响应失败: %w"), err)
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return Release{}, fmt.Errorf("仓库 %s 还没有正式发布", c.repo())
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.no_release", "仓库 %s 还没有正式发布"), c.repo())
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		// 未鉴权的调用按 IP 限流（每小时 60 次）。说清楚是限流而不是坏了，
 		// 否则用户只会看到一个没头没尾的 403。
-		return Release{}, fmt.Errorf("GitHub 接口暂时限流，请过一会儿再试（%s）", resetHint(resp))
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.rate_limited", "GitHub 接口暂时限流，请过一会儿再试（%s）"), resetHint(c.Lang, resp))
 	default:
-		return Release{}, fmt.Errorf("GitHub 返回 %s", resp.Status)
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.github_status", "GitHub 返回 %s"), resp.Status)
 	}
 
 	var rel Release
 	if err := json.Unmarshal(body, &rel); err != nil {
-		return Release{}, fmt.Errorf("解析发布信息失败: %w", err)
+		return Release{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.parse_release", "解析发布信息失败: %w"), err)
 	}
 	if rel.Tag == "" {
-		return Release{}, fmt.Errorf("发布信息里没有版本号")
+		return Release{}, fmt.Errorf("%s", i18n.T(c.Lang, "updater.err.no_tag", "发布信息里没有版本号"))
 	}
 	return rel, nil
 }
 
 // resetHint 把限流重置时刻说成人话；拿不到就退回一句笼统的说明。
-func resetHint(resp *http.Response) string {
+func resetHint(lang string, resp *http.Response) string {
 	v := resp.Header.Get("X-RateLimit-Reset")
 	if v == "" {
-		return "已达接口调用上限"
+		return i18n.T(lang, "updater.rate.exhausted", "已达接口调用上限")
 	}
 	var sec int64
 	if _, err := fmt.Sscanf(v, "%d", &sec); err != nil || sec <= 0 {
-		return "已达接口调用上限"
+		return i18n.T(lang, "updater.rate.exhausted", "已达接口调用上限")
 	}
 	d := time.Until(time.Unix(sec, 0))
 	if d <= 0 {
-		return "已达接口调用上限"
+		return i18n.T(lang, "updater.rate.exhausted", "已达接口调用上限")
 	}
-	return fmt.Sprintf("约 %d 分钟后恢复", int(d.Minutes())+1)
+	return i18n.Tf(lang, "updater.rate.resets_in", "约 %d 分钟后恢复", int(d.Minutes())+1)
 }
 
 // AssetName 拼出某个版本在某个平台上的包名，与发布流水线的命名一致。
@@ -228,22 +234,22 @@ func (c *Client) Prepare(ctx context.Context, rel Release) (Plan, error) {
 		}
 	}
 	if pkg == nil {
-		return Plan{}, fmt.Errorf("%s 没有提供 %s/%s 的包（%s）", rel.Tag, runtime.GOOS, runtime.GOARCH, want)
+		return Plan{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.no_asset", "%s 没有提供 %s/%s 的包（%s）"), rel.Tag, runtime.GOOS, runtime.GOARCH, want)
 	}
 	if pkg.Size > maxAssetSize {
-		return Plan{}, fmt.Errorf("包体积异常（%d 字节），已中止", pkg.Size)
+		return Plan{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.bad_size", "包体积异常（%d 字节），已中止"), pkg.Size)
 	}
 	if sums == nil {
-		return Plan{}, fmt.Errorf("%s 没有提供 %s，无法校验下载内容", rel.Tag, sumsAsset)
+		return Plan{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.no_sums", "%s 没有提供 %s，无法校验下载内容"), rel.Tag, sumsAsset)
 	}
 
 	raw, err := c.get(ctx, sums.URL, maxAPIBody)
 	if err != nil {
-		return Plan{}, fmt.Errorf("下载校验和清单失败: %w", err)
+		return Plan{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.fetch_sums", "下载校验和清单失败: %w"), err)
 	}
 	sum, ok := lookupSum(string(raw), want)
 	if !ok {
-		return Plan{}, fmt.Errorf("%s 里没有 %s 的校验和", sumsAsset, want)
+		return Plan{}, fmt.Errorf(i18n.T(c.Lang, "updater.err.no_sum_line", "%s 里没有 %s 的校验和"), sumsAsset, want)
 	}
 	return Plan{Release: rel, Asset: *pkg, Sum: sum}, nil
 }
@@ -278,7 +284,7 @@ func (c *Client) get(ctx context.Context, url string, limit int64) ([]byte, erro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("返回 %s", resp.Status)
+		return nil, fmt.Errorf(i18n.T(c.Lang, "updater.err.status", "返回 %s"), resp.Status)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }

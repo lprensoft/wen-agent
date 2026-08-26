@@ -76,7 +76,7 @@ func runServe(args []string) {
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
-	exePath, exeErr := updater.ExePath()
+	exePath, exeErr := updater.ExePath(uiLang)
 	if exeErr != nil {
 		log.Printf("提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
 	}
@@ -203,7 +203,7 @@ func relaunch(exePath string) {
 		return
 	}
 	log.Printf("正在用新版程序重启：%s", exePath)
-	if err := updater.Relaunch(exePath, os.Args[1:]); err != nil {
+	if err := updater.Relaunch(uiLang, exePath, os.Args[1:]); err != nil {
 		log.Printf("自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
 		return
 	}

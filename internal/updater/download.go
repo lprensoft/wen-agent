@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // progressInterval 是进度回调的最小间隔。进度是给人看的，每收到一块就回调一次
@@ -27,7 +29,7 @@ const progressInterval = 400 * time.Millisecond
 // 上次那个坏的。onProgress 可为 nil。
 func (c *Client) Fetch(ctx context.Context, p Plan, workDir string, onProgress func(done, total int64)) (string, error) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return "", fmt.Errorf("创建下载目录失败: %w", err)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.mkdir", "创建下载目录失败: %w"), err)
 	}
 	dst := filepath.Join(workDir, p.Asset.Name)
 
@@ -40,16 +42,16 @@ func (c *Client) Fetch(ctx context.Context, p Plan, workDir string, onProgress f
 	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("下载失败: %w", err)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.download", "下载失败: %w"), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载失败: 返回 %s", resp.Status)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.download_status", "下载失败: 返回 %s"), resp.Status)
 	}
 
 	f, err := os.Create(dst)
 	if err != nil {
-		return "", fmt.Errorf("写入下载文件失败: %w", err)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.write_download", "写入下载文件失败: %w"), err)
 	}
 	sum := sha256.New()
 	total := p.Asset.Size
@@ -62,17 +64,17 @@ func (c *Client) Fetch(ctx context.Context, p Plan, workDir string, onProgress f
 	pw.flush()
 	if copyErr != nil {
 		os.Remove(dst)
-		return "", fmt.Errorf("下载中断: %w", copyErr)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.download_broken", "下载中断: %w"), copyErr)
 	}
 	if closeErr != nil {
 		os.Remove(dst)
-		return "", fmt.Errorf("写入下载文件失败: %w", closeErr)
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.write_download", "写入下载文件失败: %w"), closeErr)
 	}
 
 	got := hex.EncodeToString(sum.Sum(nil))
 	if !strings.EqualFold(got, p.Sum) {
 		os.Remove(dst)
-		return "", fmt.Errorf("校验和不符：期望 %s，实际 %s。下载内容与发布不一致，已中止", short(p.Sum), short(got))
+		return "", fmt.Errorf(i18n.T(c.Lang, "updater.err.checksum", "校验和不符：期望 %s，实际 %s。下载内容与发布不一致，已中止"), short(p.Sum), short(got))
 	}
 	return dst, nil
 }
@@ -112,16 +114,16 @@ func (w *progressWriter) flush() {
 //
 // 只按**文件名**匹配，落点也只由 workDir 与文件名拼出：包里的路径一概不参与，
 // 于是不存在解压路径穿越的问题（包是自己发的，但这条不该依赖发布端的正确性）。
-func Extract(archive, workDir, binaryName string) (string, error) {
+func Extract(lang, archive, workDir, binaryName string) (string, error) {
 	dst := filepath.Join(workDir, binaryName)
 	var err error
 	switch {
 	case strings.HasSuffix(archive, ".zip"):
-		err = extractZip(archive, dst, binaryName)
+		err = extractZip(lang, archive, dst, binaryName)
 	case strings.HasSuffix(archive, ".tar.gz"):
-		err = extractTarGz(archive, dst, binaryName)
+		err = extractTarGz(lang, archive, dst, binaryName)
 	default:
-		err = fmt.Errorf("不认识的包格式: %s", filepath.Base(archive))
+		err = fmt.Errorf(i18n.T(lang, "updater.err.bad_archive", "不认识的包格式: %s"), filepath.Base(archive))
 	}
 	if err != nil {
 		os.Remove(dst)
@@ -130,10 +132,10 @@ func Extract(archive, workDir, binaryName string) (string, error) {
 	return dst, nil
 }
 
-func extractZip(archive, dst, name string) error {
+func extractZip(lang, archive, dst, name string) error {
 	zr, err := zip.OpenReader(archive)
 	if err != nil {
-		return fmt.Errorf("打开压缩包失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.open_archive", "打开压缩包失败: %w"), err)
 	}
 	defer zr.Close()
 	for _, f := range zr.File {
@@ -142,23 +144,23 @@ func extractZip(archive, dst, name string) error {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return fmt.Errorf("解压失败: %w", err)
+			return fmt.Errorf(i18n.T(lang, "updater.err.extract", "解压失败: %w"), err)
 		}
 		defer rc.Close()
-		return writeExecutable(dst, rc)
+		return writeExecutable(lang, dst, rc)
 	}
-	return fmt.Errorf("包里没有 %s", name)
+	return fmt.Errorf(i18n.T(lang, "updater.err.no_binary", "包里没有 %s"), name)
 }
 
-func extractTarGz(archive, dst, name string) error {
+func extractTarGz(lang, archive, dst, name string) error {
 	f, err := os.Open(archive)
 	if err != nil {
-		return fmt.Errorf("打开压缩包失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.open_archive", "打开压缩包失败: %w"), err)
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return fmt.Errorf("解压失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.extract", "解压失败: %w"), err)
 	}
 	defer gz.Close()
 
@@ -169,33 +171,33 @@ func extractTarGz(archive, dst, name string) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("解压失败: %w", err)
+			return fmt.Errorf(i18n.T(lang, "updater.err.extract", "解压失败: %w"), err)
 		}
 		if hdr.Typeflag != tar.TypeReg || path.Base(hdr.Name) != name {
 			continue
 		}
-		return writeExecutable(dst, tr)
+		return writeExecutable(lang, dst, tr)
 	}
-	return fmt.Errorf("包里没有 %s", name)
+	return fmt.Errorf(i18n.T(lang, "updater.err.no_binary", "包里没有 %s"), name)
 }
 
 // writeExecutable 落盘并置上可执行位（macOS 与 Linux 上少了它换上去也起不来）。
-func writeExecutable(dst string, src io.Reader) error {
+func writeExecutable(lang, dst string, src io.Reader) error {
 	f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
-		return fmt.Errorf("写入失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.write", "写入失败: %w"), err)
 	}
 	if _, err := io.Copy(f, io.LimitReader(src, maxAssetSize)); err != nil {
 		f.Close()
-		return fmt.Errorf("写入失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.write", "写入失败: %w"), err)
 	}
 	// 显式 Sync：紧接着就要去执行它，内容还在缓冲里的话行为无从解释
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("写入失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.write", "写入失败: %w"), err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("写入失败: %w", err)
+		return fmt.Errorf(i18n.T(lang, "updater.err.write", "写入失败: %w"), err)
 	}
 	return os.Chmod(dst, 0o755)
 }
