@@ -12,20 +12,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // OpenAICompat 通过 OpenAI 兼容协议对接后端（DeepSeek、MiniMax、Qwen 等）。
 // 自实现请求与 SSE 解析，以支持各家思考扩展字段的完整往返；
 // 思考参数按 dialect（思考参数方言）分派，见 dialect.go。
 type OpenAICompat struct {
+	lang    string // 报错说话用的语言，见 Config.Lang
 	baseURL string
 	apiKey  string
 	dialect string
 	client  *http.Client
 }
 
-func NewOpenAICompat(baseURL, apiKey, dialect string) *OpenAICompat {
+func NewOpenAICompat(lang, baseURL, apiKey, dialect string) *OpenAICompat {
 	return &OpenAICompat{
+		lang:    lang,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		dialect: dialect,
@@ -329,7 +333,7 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 			case "content_filter":
 				// 内容被后端安全策略拦截。当成错误上报而不是静默收尾，
 				// 否则表现为「说到一半没了」且没有任何解释。
-				emit(StreamEvent{Type: EventError, Err: &APIError{Kind: KindContentFilter, Body: "内容被提供商安全策略拦截（finish_reason=content_filter）"}})
+				emit(StreamEvent{Type: EventError, Err: &APIError{Kind: KindContentFilter, Body: i18n.T(p.lang, "llm.err.content_filter", "内容被提供商安全策略拦截（finish_reason=content_filter）")}})
 				return
 			case "length":
 				log.Printf("llm: 输出被 max_tokens 截断（finish_reason=length）")

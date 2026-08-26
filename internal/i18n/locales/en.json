@@ -285,6 +285,17 @@
   "imbot.unknown_command": "Unknown command: %s\n%s",
   "lang.fromDefault": "%s (could not read the system locale, so this is the default)",
   "lang.fromSystem": "%s (following the system locale %s)",
+  "llm.dialect.deepseek": "DeepSeek (thinking + reasoning_effort)",
+  "llm.dialect.effort": "OpenAI / Kimi (reasoning_effort)",
+  "llm.dialect.minimax": "MiniMax (adaptive + reasoning_split)",
+  "llm.dialect.none": "send no thinking parameters",
+  "llm.dialect.qwen": "Qwen (enable_thinking)",
+  "llm.err.bad_dialect": "unsupported thinking-parameter dialect %q (available: %s)",
+  "llm.err.bad_type": "unsupported API mode %q (available: %s)",
+  "llm.err.content_filter": "the content was blocked by the provider's safety policy (finish_reason=content_filter)",
+  "llm.err.unknown": "unknown error",
+  "llm.type.anthropic": "Anthropic-compatible",
+  "llm.type.openai_compat": "OpenAI-compatible",
   "modelcfg.err.bad_base_url": "the Base URL is malformed; it has to start with http:// or https://",
   "modelcfg.err.bad_context": "the context window of model %q has to be greater than 0",
   "modelcfg.err.bad_dialect": "the thinking-parameter dialect %[2]q of provider %[1]q is not supported (available: %[3]s)",
@@ -1037,5 +1048,6 @@
   "plugin.wechat_bot.field.show_tools.desc": "Also push which tools each turn called (names only, no arguments or results)",
   "plugin.wechat_bot.field.show_tools.label": "Show tool calls",
   "plugin.wechat_bot.field.whitelist.desc": "One WeChat user ID per line (shaped like xxx@im.wechat). Whoever scanned the code to bind is always allowed; everyone else is refused, and their ID is written to the log so you can copy it in",
-  "plugin.wechat_bot.field.whitelist.label": "User allowlist"
+  "plugin.wechat_bot.field.whitelist.label": "User allowlist",
+  "server.err.need_api_key": "Fill in the API key"
 }

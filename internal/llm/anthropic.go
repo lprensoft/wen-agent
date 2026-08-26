@@ -11,12 +11,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 const anthropicVersion = "2023-06-01"
 
 // Anthropic 是 Anthropic Messages API 的 Provider 实现。
 type Anthropic struct {
+	lang    string // 报错说话用的语言，见 Config.Lang
 	baseURL string
 	apiKey  string
 	// cache 为真时在请求里显式打提示词缓存断点（见 markCacheBreakpoints）。
@@ -26,8 +29,9 @@ type Anthropic struct {
 	client *http.Client
 }
 
-func NewAnthropic(baseURL, apiKey string, promptCache bool) *Anthropic {
+func NewAnthropic(lang, baseURL, apiKey string, promptCache bool) *Anthropic {
 	return &Anthropic{
+		lang:    lang,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		cache:   promptCache,
@@ -393,7 +397,7 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 				finish()
 				return
 			case "error":
-				msg := "未知错误"
+				msg := i18n.T(p.lang, "llm.err.unknown", "未知错误")
 				if ev.Error != nil {
 					msg = ev.Error.Type + ": " + ev.Error.Message
 				}

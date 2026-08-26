@@ -10,11 +10,13 @@ import (
 	"wen/internal/agent"
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
+
+	"wen/internal/i18n"
 )
 
 // listModels 返回提供商与模型的全量配置（API Key 只给掩码）。
-func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.modelsView())
+func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // saveModels 整档保存配置：校验通过后落盘，并让当前选中的模型立即生效。
@@ -32,7 +34,7 @@ func (s *Server) saveModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.modelsView())
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // setCurrentModel 切换当前使用的提供商与模型。
@@ -50,7 +52,7 @@ func (s *Server) setCurrentModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.modelsView())
+	writeJSON(w, http.StatusOK, s.modelsView(reqLang(r)))
 }
 
 // testModel 用极小的一次真实请求验证 base_url / API Key / 模型 id 是否可用。
@@ -80,13 +82,14 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.APIKey == "" {
-		writeError(w, http.StatusBadRequest, "请填写 API Key")
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.need_api_key", "请填写 API Key"))
 		return
 	}
 
 	provider, err := llm.New(llm.Config{
 		Type: req.Type, BaseURL: req.BaseURL, APIKey: req.APIKey, Dialect: req.Dialect,
 		PromptCache: req.PromptCache == nil || *req.PromptCache,
+		Lang:        s.lang,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -133,6 +136,7 @@ func (s *Server) applyCurrentModel(lang string) error {
 	provider, err := llm.New(llm.Config{
 		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
 		PromptCache: cur.PromptCache,
+		Lang:        s.lang,
 	})
 	if err != nil {
 		return err
@@ -148,7 +152,7 @@ func (s *Server) applyCurrentModel(lang string) error {
 }
 
 // modelsView 组装响应：api_key 一律不出现，只给掩码与「是否已配置」。
-func (s *Server) modelsView() map[string]any {
+func (s *Server) modelsView(lang string) map[string]any {
 	view := s.models.Snapshot()
 	def := s.models.Defaults()
 
@@ -175,8 +179,8 @@ func (s *Server) modelsView() map[string]any {
 	return map[string]any{
 		"providers": providers,
 		"current":   view.Current,
-		"types":     modelcfg.TypeOptions(),
-		"dialects":  modelcfg.DialectOptions(),
+		"types":     modelcfg.TypeOptions(lang),
+		"dialects":  modelcfg.DialectOptions(lang),
 		"defaults": map[string]any{
 			"temperature":    def.Temperature,
 			"max_tokens":     def.MaxTokens,

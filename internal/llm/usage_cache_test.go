@@ -54,7 +54,7 @@ func TestUsageWithoutCacheFields(t *testing.T) {
 
 func collectUsage(t *testing.T, url string) *Usage {
 	t.Helper()
-	ch, err := NewOpenAICompat(url, "sk-test", "").ChatStream(context.Background(), ChatRequest{
+	ch, err := NewOpenAICompat("", url, "sk-test", "").ChatStream(context.Background(), ChatRequest{
 		Model: "m", Messages: []Message{{Role: RoleUser, Content: "问"}},
 	})
 	if err != nil {

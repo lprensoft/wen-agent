@@ -157,6 +157,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	provider, err := llm.New(llm.Config{
 		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
 		PromptCache: cur.PromptCache,
+		Lang:        uiLang,
 	})
 	if err != nil {
 		plugins.StopAll()

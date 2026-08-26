@@ -331,12 +331,12 @@ func cloneFile(f File) File {
 }
 
 // TypeOptions 返回界面下拉需要的 API 模式候选。
-func TypeOptions() []map[string]string {
+func TypeOptions(lang string) []map[string]string {
 	out := make([]map[string]string, 0, len(llm.KnownTypes))
 	for _, t := range llm.KnownTypes {
 		out = append(out, map[string]string{
 			"value":            t,
-			"label":            llm.TypeLabel(t),
+			"label":            llm.TypeLabel(lang, t),
 			"default_base_url": llm.DefaultBaseURL(t),
 		})
 	}
@@ -344,10 +344,10 @@ func TypeOptions() []map[string]string {
 }
 
 // DialectOptions 返回界面下拉需要的思考参数方言候选。
-func DialectOptions() []map[string]string {
+func DialectOptions(lang string) []map[string]string {
 	out := make([]map[string]string, 0, len(llm.KnownDialects))
 	for _, d := range llm.KnownDialects {
-		out = append(out, map[string]string{"value": d, "label": llm.DialectLabel(d)})
+		out = append(out, map[string]string{"value": d, "label": llm.DialectLabel(lang, d)})
 	}
 	return out
 }

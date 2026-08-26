@@ -122,6 +122,7 @@ func runServe(args []string) {
 		Auth:          auth,
 		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
 		Exposed:       exposed,
+		Lang:          uiLang,
 	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
