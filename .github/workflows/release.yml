@@ -106,7 +106,7 @@ jobs:
             GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "$work/$binary" ./cmd/wen
 
             # 只给二进制的话，用户拿到手不知道配置从哪来
-            cp config.example.yaml README.md README.en.md CHANGELOG.md LICENSE "$work/"
+            cp config.example.yaml config.example.en.yaml README.md README.en.md CHANGELOG.md LICENSE "$work/"
             # README 里的细节都在 docs/，不一并打包的话包里的链接全是死的
             cp -r docs "$work/"
 
@@ -155,7 +155,7 @@ jobs:
             echo "| macOS | \`darwin-arm64\` (Apple silicon), \`darwin-amd64\` (Intel) |"
             echo "| Linux | \`linux-amd64\`, \`linux-arm64\` |"
             echo ""
-            echo "Unpack it, copy \`config.example.yaml\` to \`config.yaml\`, fill in your API key and run it."
+            echo "Unpack it, copy \`config.example.en.yaml\` to \`config.yaml\`, fill in your API key and run it."
             echo "Checksums are in \`SHA256SUMS.txt\`."
             echo ""
             echo "On macOS and Linux the binary needs the executable bit the first time: \`chmod +x wen\`."
@@ -207,7 +207,7 @@ jobs:
             echo "macOS 与 Linux 首次运行需要 \`chmod +x wen\`；macOS 还需"
             echo "\`xattr -d com.apple.quarantine wen\` 解除隔离。"
             echo ""
-            echo "Download and run it the same way as a stable release: unpack it, copy \`config.example.yaml\`"
+            echo "Download and run it the same way as a stable release: unpack it, copy \`config.example.en.yaml\`"
             echo "to \`config.yaml\`, fill in your API key and run it; checksums are in \`SHA256SUMS.txt\`."
             echo "On macOS and Linux the binary needs \`chmod +x wen\` the first time; on macOS also run"
             echo "\`xattr -d com.apple.quarantine wen\` to clear the quarantine flag."

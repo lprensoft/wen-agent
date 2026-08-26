@@ -1,65 +1,52 @@
-# Wen Agent 配置示例
+# Wen Agent 配置示例　·　English: config.example.en.yaml
 # 复制为 config.yaml 后按需修改（config.yaml 已在 .gitignore 中，不会提交入库）。
-# 加载优先级：CLI flag > config.yaml > 内置默认值
+# 每一项的详细说明见 docs/configuration.md，这里只说它是什么。
 
 # 这个服务用哪门语言：zh / en。不填则跟随系统区域，判不出来时用中文。
-# 它管的是发给模型的提示词与工具说明、插件状态行、会话注记、运行日志，以及
-# wen status 这类命令的输出。浏览器界面的语言是另一件事，在设置页右上角选，
-# 只存在那台浏览器里——同一个服务可能一台电脑一台手机各用一种语言。
-# 换语言不改写已经存下来的摘要、记忆与日程，它们是当时发生的事实。
+# 它管发给模型的提示词与运行信息；浏览器界面的语言在设置页右上角另选。
 # lang: zh
 
 server:
   host: 127.0.0.1
   port: 8080
-  # 回环免认证（默认开启）：来自本机的请求不需要登录，其它来源需要访问口令。
-  # 本机运行因此全程无感，同一台机器上的 CLI 也不必处理凭据。
-  # 前面套了 Nginx / Caddy 之类反向代理时**必须改成 false**：那种部署下所有请求
-  # 都从回环地址进来，开着等于没有认证。
+  # 回环免认证（默认开启）。前面套了 Nginx / Caddy 之类反向代理时**必须改成 false**：
+  # 那种部署下所有请求都从回环地址进来，开着等于没有认证。
   # trust_loopback: true
 
-# 访问口令不在这里配。它存于 <配置目录>/auth.json（0600，只存哈希），
-# 由设置页的「访问控制」栏目维护；容器与自动化部署可用环境变量 WEN_AUTH_PASSWORD。
-# 未设置口令时，即便 host 配成 0.0.0.0 也会降级为只监听 127.0.0.1。
+# 访问口令不在这里配，它存于 <配置目录>/auth.json，由设置页的「访问控制」维护
+# （容器与自动化部署可用环境变量 WEN_AUTH_PASSWORD）。未设口令时即便 host 配成
+# 0.0.0.0 也会降级为只监听 127.0.0.1。
 
-# 当前使用的模型（provider 名 + 模型 id）。
-# 这里是初始值：设置页「模型」栏目的改动写入 <配置目录>/models.json 并优先生效，
-# 不会回写本文件；未在界面上改过的条目仍跟随这里。
+# 当前使用的模型。这里是初始值，设置页「模型」栏目的改动写入 models.json 并优先生效。
 model:
   provider: deepseek
   name: deepseek-v4-flash
   temperature: 0.7           # 思考模式开启时不生效
   max_tokens: 4096
-  thinking: high             # 思考模式：off / low / medium / high / xhigh / max（默认 high）
-  context_length: 1000000    # 模型上下文窗口（token），超出时自动裁剪最旧对话轮次
+  thinking: high             # off / low / medium / high / xhigh / max
+  context_length: 1000000    # 模型上下文窗口（token），超出时裁掉最旧的对话轮次
 
 # Provider 注册表 —— 后续接入 OpenAI / Ollama 等只需在此加条目
 providers:
   deepseek:
     type: openai_compat      # openai_compat / anthropic
     base_url: https://api.deepseek.com
-    api_key: sk-你的密钥       # 直接填写；也支持 ${VAR} 从进程环境变量读取
-                             # 注意：${VAR} 展开后的值若被界面保存进 models.json 就会固定下来
+    api_key: sk-xxxxxxxx     # 直接填写，也支持 ${VAR} 从环境变量读取
   # anthropic:
   #   type: anthropic
   #   base_url: https://api.anthropic.com
-  #   api_key: sk-ant-你的密钥
-  #   prompt_cache: true       # 提示词缓存（仅 anthropic，默认开启）：把不变的部分标为
-  #                            # 可缓存，命中约十分之一价、未命中的写入多付约四分之一。
-  #                            # 对话间隔常超过几分钟（缓存有效期）时关掉更省。
+  #   api_key: sk-ant-xxxxxxxx
+  #   prompt_cache: true     # 提示词缓存（仅 anthropic，默认开启）。对话间隔常超过
+  #                          # 几分钟时关掉更省，理由见 docs/configuration.md
 
 agent:
   system_prompt: ""          # 系统提示词，先留空
   max_turns: 20              # 单次用户请求内工具循环上限
   workdir: ""                # 工作目录（插件与环境块共用），空 = 进程当前目录
 
-# 插件的开关与配置不在这里配：它们由设置页维护，存于 <配置目录>/plugins.state.json。
-# 首次运行时按各插件声明的默认参数启用，十个除外：read_file 与 exec_command（能读
-# 任意文件、执行任意命令，要用就去设置页显式打开）、dual_persona / weather / skills
-# （不填触发词、城市，或技能目录是空的，开着也不成其为功能），以及五个 IM 通道
-# （要凭证）。其余全部默认启用，包括整个角色演绎组与 heartbeat——心跳默认开着意味着
-# 装上即按固定节奏消耗额度，不需要就在设置页关掉。
-# 插件自身的数据落在 <配置目录>/plugins/<插件名>/（已在 .gitignore 中）。
+# 插件的开关与配置不在这里配：它们由设置页维护，存于 <配置目录>/plugins.state.json，
+# 插件自己的数据落在 <配置目录>/plugins/<插件名>/。开箱默认开着哪些见
+# docs/plugins/README.md。
 
 session:
-  dir: ""                    # session 存储目录，空 = <配置目录>/sessions
+  dir: ""                    # 会话存储目录，空 = <配置目录>/sessions

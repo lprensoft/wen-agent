@@ -40,7 +40,7 @@ Prebuilt binaries are on the [Releases](https://github.com/lprensoft/project-wen
 ```bash
 # 1. Config: copy the example and fill in the api_key of the provider you use
 #    (the example uses providers.deepseek)
-cp config.example.yaml config.yaml
+cp config.example.en.yaml config.yaml
 
 # 2. Run (or go build -o wen ./cmd/wen and run ./wen)
 go run ./cmd/wen
@@ -71,7 +71,7 @@ wen update [--check] [-y]  check for and install a new version
 
 ## Configuration
 
-`config.yaml` holds only start-up configuration — model, server, sessions. The essentials are in [Configuration and models](docs/en/configuration.md); the full example is [config.example.yaml](config.example.yaml).
+`config.yaml` holds only start-up configuration — model, server, sessions. The essentials are in [Configuration and models](docs/en/configuration.md); the full example is [config.example.en.yaml](config.example.en.yaml).
 
 **Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page (or `wen config plugins` on a remote machine) and stored only in `<config dir>/plugins.state.json`; each plugin's own data lives in `<config dir>/plugins/<plugin>/`.
 
