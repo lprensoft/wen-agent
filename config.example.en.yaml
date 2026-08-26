@@ -1,0 +1,57 @@
+# Wen Agent example configuration　·　中文：config.example.yaml
+# Copy it to config.yaml and edit (config.yaml is in .gitignore and never committed).
+# Every option is described in docs/en/configuration.md; this file only names them.
+
+# Which language this service speaks: zh / en. Left empty it follows the system
+# locale. It governs the prompts sent to the model and everything the program
+# reports; the browser interface has its own selector on the settings page.
+# lang: en
+
+server:
+  host: 127.0.0.1
+  port: 8080
+  # Loopback skips authentication (on by default). It **must** be set to false
+  # behind a reverse proxy such as Nginx or Caddy: there every request arrives
+  # from loopback, so leaving it on means no authentication at all.
+  # trust_loopback: true
+
+# The access password is not configured here. It lives in <config dir>/auth.json
+# and is maintained under "Access control" on the settings page (containers and
+# automated deployments can use the WEN_AUTH_PASSWORD environment variable). With
+# no password set, the service listens on 127.0.0.1 only even if host says otherwise.
+
+# The model in use. This is the initial value; changes made under "Models" on the
+# settings page are written to models.json and take precedence.
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+  temperature: 0.7           # has no effect while thinking is on
+  max_tokens: 4096
+  thinking: high             # off / low / medium / high / xhigh / max
+  context_length: 1000000    # context window in tokens; the oldest turns are trimmed past it
+
+# The provider registry — adding OpenAI, Ollama and the like means adding an entry here
+providers:
+  deepseek:
+    type: openai_compat      # openai_compat / anthropic
+    base_url: https://api.deepseek.com
+    api_key: sk-xxxxxxxx     # written out here, or ${VAR} to read it from the environment
+  # anthropic:
+  #   type: anthropic
+  #   base_url: https://api.anthropic.com
+  #   api_key: sk-ant-xxxxxxxx
+  #   prompt_cache: true     # prompt caching (anthropic only, on by default). Cheaper to
+  #                          # turn off if your messages are minutes apart; see the docs
+
+agent:
+  system_prompt: ""          # the system prompt; left empty for now
+  max_turns: 20              # cap on tool-loop iterations within one user request
+  workdir: ""                # working directory shared by plugins and the environment block
+
+# Plugin toggles and settings are not configured here: they are maintained on the
+# settings page and stored in <config dir>/plugins.state.json, while each plugin's
+# own data lives in <config dir>/plugins/<plugin>/. Which ones are on out of the
+# box is listed in docs/en/plugins/README.md.
+
+session:
+  dir: ""                    # where sessions are stored; empty means <config dir>/sessions

@@ -186,9 +186,11 @@
 
 `README.md` 是门面，只到「这是什么、怎么跑起来、有哪些东西」为止；每个功能的细节、配置项表格与设计取舍一律放 `docs/`，README 里只留一句话与一个链接。判据是「读的人是刚来的还是已经在用的」——刚来的人要在一屏内决定值不值得试，配置项表格对他是噪声。新增插件时在 `docs/plugins/` 对应的分组文件里加一节，并在 `docs/plugins/README.md` 的总览表里补一行（分组与设置页的 `Category()` 一致），README 的插件表只在多出一个分组时才动。
 
-**每篇文档都有中英两版，改一处就要改另一处**：`README.md` / `README.en.md`，以及 `docs/<名>.md` / `docs/en/<名>.md`（插件文档同理落在 `docs/plugins/` 与 `docs/en/plugins/`）。中文是主版本，英文跟着它走——只改中文的话，英文那边会慢慢变成另一个项目的介绍。两边的导航行末尾都挂着语言切换链接（`中文　·　[English](...)`），新增文档时一并补上，否则读者从英文首页点进去就再也回不到英文了。英文版按英语的语法与用词写，不做逐句直译。**块名与枚举值在英文文档里写英文那一份**（`[Character]`、`[Today's Plan]`、`preference` / `boundary`）：程序发给英文用户的模型的就是那些字面量，写中文反而对不上——这条从前是反过来的，那时提示词只有中文。落盘的枚举值仍以中文为规范形式（见「国际化约定」的 `prompt.Enum`），文档里要提到磁盘上存的是什么时才说中文那一份。英文措辞以 `internal/i18n/locales/en.json` 与 `internal/prompt/locales/en.json` 为准，别在文档里另起一套说法。
+**每篇文档都有中英两版，改一处就要改另一处**：`README.md` / `README.en.md`、`config.example.yaml` / `config.example.en.yaml`，以及 `docs/<名>.md` / `docs/en/<名>.md`（插件文档同理落在 `docs/plugins/` 与 `docs/en/plugins/`）。中文是主版本，英文跟着它走——只改中文的话，英文那边会慢慢变成另一个项目的介绍。两边的导航行末尾都挂着语言切换链接（`中文　·　[English](...)`），新增文档时一并补上，否则读者从英文首页点进去就再也回不到英文了。英文版按英语的语法与用词写，不做逐句直译。**块名与枚举值在英文文档里写英文那一份**（`[Character]`、`[Today's Plan]`、`preference` / `boundary`）：程序发给英文用户的模型的就是那些字面量，写中文反而对不上——这条从前是反过来的，那时提示词只有中文。落盘的枚举值仍以中文为规范形式（见「国际化约定」的 `prompt.Enum`），文档里要提到磁盘上存的是什么时才说中文那一份。英文措辞以 `internal/i18n/locales/en.json` 与 `internal/prompt/locales/en.json` 为准，别在文档里另起一套说法。
 
-发布包里带的是 `README.md` + `README.en.md` + 整个 `docs/`（含 `docs/en/`，见 `.github/workflows/release.yml`）：README 里的链接全指向 docs，不一并打包的话下载下来的包里全是死链。
+两份**样例配置**是这里唯一能上测试的一对：散文没法比对，而配置是结构化的，因此 `TestConfigExamplesMatch` 把说明文字剥掉，逐行比对生效的配置行与被注释掉的选项（`lang:` 本身就是注释掉的，只比生效行等于漏掉它们）。说明文字各写各的——英文比中文长，硬要求行数对齐等于绑住译者的手；但配置本身不许分叉，加了一项只加在中文那份里，英文用户照着复制就少一项，而这既不报错也没人看得出来。样例里只写「这一项是什么」，详细说明归 `docs/configuration.md`，与 README 那条判据相同。
+
+发布包里带的是 `README.md` + `README.en.md` + 两份样例配置 + 整个 `docs/`（含 `docs/en/`，见 `.github/workflows/release.yml`）：README 里的链接全指向 docs，不一并打包的话下载下来的包里全是死链。
 
 ## 国际化约定
 

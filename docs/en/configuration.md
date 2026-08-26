@@ -4,7 +4,7 @@
 
 ## The config file
 
-See [config.example.yaml](../../config.example.yaml). The essentials:
+See [config.example.en.yaml](../../config.example.en.yaml). The essentials:
 
 | Option | Description |
 |---|---|
