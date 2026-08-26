@@ -65,7 +65,7 @@ func runServe(args []string) {
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
-		log.Fatalf("加载配置失败: %v", err)
+		fatalf("log.serve.config_failed", "加载配置失败: %v", err)
 	}
 	if *port != 0 {
 		cfg.Server.Port = *port
@@ -78,7 +78,7 @@ func runServe(args []string) {
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
 	exePath, exeErr := updater.ExePath(uiLang)
 	if exeErr != nil {
-		log.Printf("提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
+		logf("log.serve.no_exe_path", "提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
 	}
 
 	// restartCh 传「换好新版了，可以重启」。缓冲 1 且非阻塞投递：重启只需要发生一次。
@@ -96,13 +96,13 @@ func runServe(args []string) {
 
 	rt, err := buildRuntime(cfg, runtimeOverrides{Restart: requestRestart})
 	if err != nil {
-		log.Fatalf("%v", err)
+		log.Fatal(err)
 	}
 	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
 	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
 	if err != nil {
-		log.Fatalf("加载访问口令失败: %v", err)
+		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
 	}
 
 	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
@@ -110,9 +110,9 @@ func runServe(args []string) {
 	// 降级同样一次都没暴露过，且 SSH 隧道进来就能把口令补上。
 	exposed := !server.IsLoopbackHost(cfg.Server.Host)
 	if exposed && !auth.HasPassword() {
-		log.Printf("⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
-		log.Printf("  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
-		log.Printf("  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
+		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
+		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
+		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
 			cfg.Server.Port, cfg.Server.Port)
 		cfg.Server.Host = "127.0.0.1"
 		exposed = false
@@ -126,30 +126,31 @@ func runServe(args []string) {
 	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	log.Printf("配置文件: %s", path)
-	log.Printf("语言: %s", langSummary(cfg))
-	log.Printf("模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
-	for _, st := range plugins.List() {
-		state := "禁用"
+	logf("log.serve.config_file", "配置文件: %s", path)
+	logf("log.serve.language", "语言: %s", langSummary(cfg))
+	logf("log.serve.model", "模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
+	// 插件说明按语言取一次再打：日志与设置页看到的该是同一句话
+	for _, st := range plugin.Localize(uiLang, plugins.List()) {
+		state := tr("log.serve.plugin.off", "禁用")
 		if st.Enabled {
-			state = "启用"
+			state = tr("log.serve.plugin.on", "启用")
 		}
-		log.Printf("插件: %-12s [%s] %s", st.Name, state, st.Description)
+		logf("log.serve.plugin", "插件: %-12s [%s] %s", st.Name, state, st.Description)
 	}
-	log.Printf("访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
-	log.Printf("Wen Agent %s 已启动: http://%s", version.Version, addr)
+	logf("log.serve.access", "访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
+	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
 	// 失败只是让配置工具退回离线模式，不该拦住服务启动。
 	if prev, ok := runlock.Read(cfg.BaseDir); ok && reachable(prev.Addr) {
-		log.Printf("警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
+		logf("log.serve.another_instance", "警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
 	}
 	releaseLock, err := runlock.Acquire(cfg.BaseDir, runlock.Info{
 		PID: os.Getpid(), Addr: addr, Version: version.Version,
 		Started: time.Now().Format(time.RFC3339),
 	})
 	if err != nil {
-		log.Printf("提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
+		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
 	}
 	defer releaseLock()
 
@@ -170,9 +171,9 @@ func runServe(args []string) {
 	var restartReason string
 	select {
 	case <-rootCtx.Done():
-		log.Printf("收到退出信号，正在关闭…")
+		logf("log.serve.shutdown_signal", "收到退出信号，正在关闭…")
 	case restartReason = <-restartCh:
-		log.Printf("%s：正在关闭当前实例…", restartReason)
+		logf("log.serve.restarting", "%s：正在关闭当前实例…", restartReason)
 	}
 	// 先停插件、再关 HTTP：反过来的话，插件的后台轮次要等 HTTP 那边最多 5 秒的
 	// 等待走完才被取消，于是「收到退出信号」之后还会有工具调用继续落盘——实际见过。
@@ -199,16 +200,16 @@ func runServe(args []string) {
 // 程序文件已经是新版，人工启动一次就行，所以这里只报告，让日志说清现状。
 func relaunch(exePath string) {
 	if exePath == "" {
-		log.Printf("无法定位当前程序，未能自动重启。程序文件已是新版，手工启动即可。")
+		logf("log.serve.relaunch_no_path", "无法定位当前程序，未能自动重启。程序文件已是新版，手工启动即可。")
 		return
 	}
-	log.Printf("正在用新版程序重启：%s", exePath)
+	logf("log.serve.relaunching", "正在用新版程序重启：%s", exePath)
 	if err := updater.Relaunch(uiLang, exePath, os.Args[1:]); err != nil {
-		log.Printf("自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
+		logf("log.serve.relaunch_failed", "自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
 		return
 	}
 	if updater.RelaunchExits {
-		log.Printf("新版程序已启动，本进程退出。")
+		logf("log.serve.relaunched", "新版程序已启动，本进程退出。")
 	}
 }
 
@@ -218,13 +219,13 @@ func relaunch(exePath string) {
 func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
 	switch {
 	case !auth.HasPassword():
-		return "未设置口令，仅本机可访问"
+		return tr("log.serve.auth.none", "未设置口令，仅本机可访问")
 	case !trustLoopback:
-		return "已设置口令，所有来源（含本机）都需登录"
+		return tr("log.serve.auth.all", "已设置口令，所有来源（含本机）都需登录")
 	case exposed:
-		return "已设置口令，本机免登录、其它来源需登录"
+		return tr("log.serve.auth.exposed", "已设置口令，本机免登录、其它来源需登录")
 	default:
-		return "已设置口令，但当前只监听本机，不会被外部访问"
+		return tr("log.serve.auth.local", "已设置口令，但当前只监听本机，不会被外部访问")
 	}
 }
 
@@ -273,7 +274,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
 		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
 		if err := m.Register(p, init); err != nil {
-			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
+			logf("log.serve.register_failed", "警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
 	registerBundles(m, ictx.Lang, cfg.BaseDir)
@@ -293,12 +294,12 @@ func registerBundles(m *plugin.Manager, lang, baseDir string) {
 	store := agentplugin.NewStore(lang, baseDir)
 	bundles, problems := store.List()
 	for _, p := range problems {
-		log.Printf("警告: 插件包 %s", p)
+		logf("log.serve.bundle_warning", "警告: 插件包 %s", p)
 	}
 	for _, b := range bundles {
 		p := agentplugin.NewPlugin(lang, b, store)
 		if err := m.RegisterExternal(p, plugin.PluginConfig{Enabled: true}); err != nil {
-			log.Printf("警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
+			logf("log.serve.bundle_register_failed", "警告: 注册插件包 %q 失败: %v", b.Manifest.Name, err)
 			continue
 		}
 		// 包自己的提醒（未知字段之类）不在这里打：buildPlugins 也被 wen config 与

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -31,6 +32,17 @@ func tr(key, zh string) string {
 // 拼出来的句子在另一种语言里必然是错的。
 func trf(key, zh string, a ...any) string {
 	return fmt.Sprintf(i18n.T(uiLang, key, zh), a...)
+}
+
+// logf 打一行运行日志（措辞同样按语言取，见 i18n.Logf 的说明）。与 trf 同形，
+// 只是去处从标准输出换成日志。
+func logf(key, zh string, a ...any) {
+	i18n.Logf(uiLang, key, zh, a...)
+}
+
+// fatalf 打一行日志后退出。启动阶段那几处「起不来就别起」用它。
+func fatalf(key, zh string, a ...any) {
+	log.Fatal(trf(key, zh, a...))
 }
 
 // languageMenu 让用户挑一种界面语言。

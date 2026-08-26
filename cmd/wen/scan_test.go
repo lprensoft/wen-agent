@@ -129,8 +129,8 @@ const (
 //
 //	prompt.T(lang, key, zh) / prompt.Tf(lang, key, zh, ...)   给模型看的
 //	prompt.Text(key, zh)                                      给模型看的（声明在表里的那种）
-//	i18n.T(lang, key, zh) / i18n.Tf(...)                      给人看的
-//	tr(key, zh) / trf(key, zh, ...)                           给人看的（cmd/wen 里的简写）
+//	i18n.T(lang, key, zh) / i18n.Tf(...) / i18n.Logf(...)      给人看的
+//	tr(key, zh) / trf(...) / logf(...) / fatalf(...)           给人看的（cmd/wen 里的简写）
 func classify(call *ast.CallExpr, selfPrompt bool) (kind scanKind, key, zh ast.Expr) {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -141,7 +141,7 @@ func classify(call *ast.CallExpr, selfPrompt bool) (kind scanKind, key, zh ast.E
 		if pkg.Name == "prompt" && fn.Sel.Name == "Text" && len(call.Args) == 2 {
 			return kindPrompt, call.Args[0], call.Args[1]
 		}
-		if len(call.Args) < 3 || (fn.Sel.Name != "T" && fn.Sel.Name != "Tf") {
+		if len(call.Args) < 3 || (fn.Sel.Name != "T" && fn.Sel.Name != "Tf" && fn.Sel.Name != "Logf") {
 			return kindNone, nil, nil
 		}
 		switch pkg.Name {
@@ -151,8 +151,11 @@ func classify(call *ast.CallExpr, selfPrompt bool) (kind scanKind, key, zh ast.E
 			return kindUI, call.Args[1], call.Args[2]
 		}
 	case *ast.Ident:
-		if (fn.Name == "tr" || fn.Name == "trf") && len(call.Args) >= 2 {
-			return kindUI, call.Args[0], call.Args[1]
+		switch fn.Name {
+		case "tr", "trf", "logf", "fatalf":
+			if len(call.Args) >= 2 {
+				return kindUI, call.Args[0], call.Args[1]
+			}
 		}
 		if selfPrompt && (fn.Name == "T" || fn.Name == "Tf") && len(call.Args) >= 3 {
 			return kindPrompt, call.Args[1], call.Args[2]
