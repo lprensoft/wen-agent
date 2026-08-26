@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
@@ -35,13 +36,23 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 // StartAction 清空全部可见域的记录或状态。用户拥有全部域，这里不做可见域过滤——
 // 界面上的操作不是模型的读取路径，不存在泄漏问题。
 func (p *Plugin) StartAction(_ context.Context, key string) error {
+	// 两句回执各自成句、键与原文都写在调用点上。把「清空 %s 失败」里的名词抽出来当
+	// 变量看着更省，但那个名词得跟着界面语言变，拼出来的句子在另一种语言里未必还是
+	// 这个语序；把键抽成变量也不行，覆盖检查是静态扫 (键, 原文) 对的，扫不到就等于
+	// 这两句永远不会被提醒漏译。
 	var (
 		clearOne func(tag string) error
-		noun     string
+		done     func(lang string, n int) string
+		failed1  func(lang, detail string) string
 	)
 	switch key {
 	case actionClear:
-		noun = "接触记录"
+		done = func(lang string, n int) string {
+			return i18n.Tf(lang, "plugin.body_sense.clear.done", "已清空 %d 份接触记录。", n)
+		}
+		failed1 = func(lang, detail string) string {
+			return i18n.Tf(lang, "plugin.body_sense.clear.failed", "清空接触记录失败：%s", detail)
+		}
 		clearOne = func(tag string) error {
 			store := p.storeFor(tag)
 			if store == nil {
@@ -50,7 +61,12 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 			return store.Clear()
 		}
 	case actionResetState:
-		noun = "身体状态"
+		done = func(lang string, n int) string {
+			return i18n.Tf(lang, "plugin.body_sense.reset_state.done", "已重置 %d 份身体状态。", n)
+		}
+		failed1 = func(lang, detail string) string {
+			return i18n.Tf(lang, "plugin.body_sense.reset_state.failed", "重置身体状态失败：%s", detail)
+		}
 		clearOne = func(tag string) error {
 			store := p.stateStoreFor(tag)
 			if store == nil {
@@ -59,13 +75,13 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 			return store.Clear()
 		}
 	default:
-		return fmt.Errorf("未知的操作 %q", key)
+		return plugin.UnknownAction(p.langOf(), key)
 	}
 	p.mu.RLock()
 	base := p.base
 	p.mu.RUnlock()
 	if base == "" {
-		return errNotReady
+		return errNotReady(p.langOf())
 	}
 
 	// Scope 取零值：Write 为空、Read 为 nil，ReadDomains 因此枚举磁盘上已存在的
@@ -82,23 +98,19 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 
 	p.actMu.Lock()
 	defer p.actMu.Unlock()
+	lang := p.langOf()
 	if len(failed) > 0 {
-		p.actState = plugin.ActionState{
-			Status:  plugin.ActionError,
-			Message: "清空失败：" + strings.Join(failed, "; "),
-		}
-		return fmt.Errorf("清空%s失败: %s", noun, strings.Join(failed, "; "))
+		msg := failed1(lang, strings.Join(failed, "; "))
+		p.actState = plugin.ActionState{Status: plugin.ActionError, Message: msg}
+		return fmt.Errorf("%s", msg)
 	}
-	p.actState = plugin.ActionState{
-		Status:  plugin.ActionDone,
-		Message: fmt.Sprintf("已清空 %d 份%s。", cleared, noun),
-	}
+	p.actState = plugin.ActionState{Status: plugin.ActionDone, Message: done(lang, cleared)}
 	return nil
 }
 
 func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	if key != actionClear && key != actionResetState {
-		return plugin.ActionState{}, fmt.Errorf("未知的操作 %q", key)
+		return plugin.ActionState{}, plugin.UnknownAction(p.langOf(), key)
 	}
 	p.actMu.Lock()
 	defer p.actMu.Unlock()

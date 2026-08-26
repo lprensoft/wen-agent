@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/prompt"
 )
 
 // 即时身体状态：唤起与疲劳，各 0..100，随时间向 0 回落。
@@ -38,15 +40,17 @@ type BodyState struct {
 
 // StateStore 管理一个可见域的即时身体状态。单个 JSON 文件，每次操作重新读取。
 type StateStore struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+	// lang 是进程语言。这个库的错误会经工具返回给模型，因此要跟着语言走。
+	lang string
 	dir  string
 	path string
 }
 
 // NewStateStore 建立指向 <dir>/state.json 的状态库（与 body.json 同目录，
 // 但不挤进那个文件：那边是数组、累加语义，混用会让两种语义共用一次原子写）。
-func NewStateStore(dir string) *StateStore {
-	return &StateStore{dir: dir, path: filepath.Join(dir, "state.json")}
+func NewStateStore(lang, dir string) *StateStore {
+	return &StateStore{lang: lang, dir: dir, path: filepath.Join(dir, "state.json")}
 }
 
 // Current 返回按回落速率折算到此刻的状态。第二个返回值表示是否有过记录。
@@ -64,7 +68,8 @@ func (s *StateStore) Current(arousalPerHour, fatiguePerHour int, now time.Time) 
 // 返回实际生效的两个变化量，供工具回显被收拢的事实。
 func (s *StateStore) Apply(dArousal, dFatigue, maxDelta, arousalPerHour, fatiguePerHour int, reason string, now time.Time) (BodyState, int, int, error) {
 	if dArousal == 0 && dFatigue == 0 {
-		return BodyState{}, 0, 0, fmt.Errorf("两个变化量不能都为 0")
+		return BodyState{}, 0, 0, fmt.Errorf("%s", prompt.T(s.lang, "prompt.body_sense.result.both_zero",
+			"两个变化量不能都为 0"))
 	}
 	appliedA := clampInt(dArousal, -maxDelta, maxDelta)
 	appliedF := clampInt(dFatigue, -maxDelta, maxDelta)
@@ -96,7 +101,7 @@ func (s *StateStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("重置身体状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_clear_failed", "重置身体状态失败: %w"), err)
 	}
 	return nil
 }
@@ -107,11 +112,11 @@ func (s *StateStore) load() (BodyState, bool, error) {
 		if os.IsNotExist(err) {
 			return BodyState{}, false, nil
 		}
-		return BodyState{}, false, fmt.Errorf("读取身体状态失败: %w", err)
+		return BodyState{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_read_failed", "读取身体状态失败: %w"), err)
 	}
 	var st BodyState
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return BodyState{}, false, fmt.Errorf("身体状态文件损坏: %w", err)
+		return BodyState{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_corrupt", "身体状态文件损坏: %w"), err)
 	}
 	// 手改过的文件不该把量程撑破
 	st.Arousal = clampInt(st.Arousal, stateMin, stateMax)
@@ -123,18 +128,18 @@ func (s *StateStore) load() (BodyState, bool, error) {
 func (s *StateStore) save(st BodyState) error {
 	raw, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
-		return fmt.Errorf("保存身体状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_save_failed", "保存身体状态失败: %w"), err)
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return fmt.Errorf("创建身体状态目录失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_mkdir_failed", "创建身体状态目录失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("保存身体状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_save_failed", "保存身体状态失败: %w"), err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("保存身体状态失败: %w", err)
+		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_save_failed", "保存身体状态失败: %w"), err)
 	}
 	return nil
 }
@@ -183,29 +188,29 @@ func clampInt(v, lo, hi int) int { return min(max(v, lo), hi) }
 
 // arousalBand / fatigueBand 按数值给出状态词，分档取 15 / 40 / 70 三道线。
 // 0 一档在渲染处整项省略，不出词。
-func arousalBand(v int) string {
+func arousalBand(lang string, v int) string {
 	switch {
 	case v < 15:
-		return "平静"
+		return prompt.T(lang, "prompt.body_sense.arousal.calm", "平静")
 	case v < 40:
-		return "微热"
+		return prompt.T(lang, "prompt.body_sense.arousal.warm", "微热")
 	case v < 70:
-		return "情动"
+		return prompt.T(lang, "prompt.body_sense.arousal.stirred", "情动")
 	default:
-		return "深陷"
+		return prompt.T(lang, "prompt.body_sense.arousal.deep", "深陷")
 	}
 }
 
-func fatigueBand(v int) string {
+func fatigueBand(lang string, v int) string {
 	switch {
 	case v < 15:
-		return "精神尚好"
+		return prompt.T(lang, "prompt.body_sense.fatigue.fresh", "精神尚好")
 	case v < 40:
-		return "有些乏"
+		return prompt.T(lang, "prompt.body_sense.fatigue.tiring", "有些乏")
 	case v < 70:
-		return "疲惫"
+		return prompt.T(lang, "prompt.body_sense.fatigue.weary", "疲惫")
 	default:
-		return "累极"
+		return prompt.T(lang, "prompt.body_sense.fatigue.spent", "累极")
 	}
 }
 
@@ -213,20 +218,23 @@ func fatigueBand(v int) string {
 // （完全平复的身体不值得占一行）。体量固定，不需要预算与降级。
 //
 // 不注入「距上次多久」：回落速率已经把时间编码进数值本身，再报一次间隔是重复的。
-func renderBodyState(st BodyState) string {
+func renderBodyState(lang string, st BodyState) string {
 	var parts []string
 	if st.Arousal > 0 {
-		parts = append(parts, fmt.Sprintf("唤起 %s（%d）", arousalBand(st.Arousal), st.Arousal))
+		parts = append(parts, prompt.Tf(lang, "prompt.body_sense.render.arousal",
+			"唤起 %s（%d）", arousalBand(lang, st.Arousal), st.Arousal))
 	}
 	if st.Fatigue > 0 {
-		parts = append(parts, fmt.Sprintf("疲劳 %s（%d）", fatigueBand(st.Fatigue), st.Fatigue))
+		parts = append(parts, prompt.Tf(lang, "prompt.body_sense.render.fatigue",
+			"疲劳 %s（%d）", fatigueBand(lang, st.Fatigue), st.Fatigue))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	out := "此刻：" + strings.Join(parts, "，") + "。"
+	out := prompt.Tf(lang, "prompt.body_sense.render.now", "此刻：%s。",
+		strings.Join(parts, prompt.T(lang, "prompt.body_sense.render.comma", "，")))
 	if st.Reason != "" {
-		out += "起因：" + st.Reason + "。"
+		out += prompt.Tf(lang, "prompt.body_sense.render.cause", "起因：%s。", st.Reason)
 	}
 	return out
 }

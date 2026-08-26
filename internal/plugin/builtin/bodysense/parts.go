@@ -10,6 +10,8 @@ package bodysense
 import (
 	"fmt"
 	"strings"
+
+	"wen/internal/prompt"
 )
 
 // 私密度分档。它不参与熟悉度的计算，只随状态注入，由反应准则消费：
@@ -52,17 +54,25 @@ type Part struct {
 	Privacy int
 }
 
-// privacyLabel 给出私密度的中文说明，用于注入与工具回显。
-func privacyLabel(p int) string {
+// 私密度的四个说法，用于注入与工具回显。
+var (
+	privacyDailyText    = prompt.Text("prompt.body_sense.privacy.daily", "日常")
+	privacyCloseText    = prompt.Text("prompt.body_sense.privacy.close", "亲近")
+	privacyIntimateText = prompt.Text("prompt.body_sense.privacy.intimate", "亲密")
+	privacyPrivateText  = prompt.Text("prompt.body_sense.privacy.private", "私密")
+)
+
+// privacyLabel 给出私密度的说法。
+func privacyLabel(lang string, p int) string {
 	switch p {
 	case privacyDaily:
-		return "日常"
+		return privacyDailyText.For(lang)
 	case privacyClose:
-		return "亲近"
+		return privacyCloseText.For(lang)
 	case privacyIntimate:
-		return "亲密"
+		return privacyIntimateText.For(lang)
 	default:
-		return "私密"
+		return privacyPrivateText.For(lang)
 	}
 }
 
@@ -71,20 +81,21 @@ func privacyLabel(p int) string {
 //
 // 校验失败一律返回 error 而不是跳过：Manager.SetConfig 会把 Init 的错误原样回给
 // 设置页并回滚旧配置，这是用户看得见的通道；只记日志的话用户会以为那一行生效了。
-func parseParts(daily, closeUp, intimate, private string) ([]Part, error) {
+func parseParts(lang, daily, closeUp, intimate, private string) ([]Part, error) {
 	if n := len(daily) + len(closeUp) + len(intimate) + len(private); n > maxPartsBytes {
-		return nil, fmt.Errorf("部位表过长（%d 字节，上限 %d 字节），请精简后重试", n, maxPartsBytes)
+		return nil, fmt.Errorf(prompt.T(lang, "prompt.body_sense.parts.too_long",
+			"部位表过长（%d 字节，上限 %d 字节），请精简后重试"), n, maxPartsBytes)
 	}
 
 	groups := []struct {
 		text    string
 		privacy int
-		label   string
+		label   prompt.Piece
 	}{
-		{daily, privacyDaily, "日常可触部位"},
-		{closeUp, privacyClose, "需要亲近才会触碰的部位"},
-		{intimate, privacyIntimate, "亲密部位"},
-		{private, privacyPrivate, "私密部位"},
+		{daily, privacyDaily, prompt.Text("prompt.body_sense.tier.daily", "日常可触部位")},
+		{closeUp, privacyClose, prompt.Text("prompt.body_sense.tier.close", "需要亲近才会触碰的部位")},
+		{intimate, privacyIntimate, prompt.Text("prompt.body_sense.tier.intimate", "亲密部位")},
+		{private, privacyPrivate, prompt.Text("prompt.body_sense.tier.private", "私密部位")},
 	}
 
 	var out []Part
@@ -96,24 +107,28 @@ func parseParts(daily, closeUp, intimate, private string) ([]Part, error) {
 				continue
 			}
 			if n := len([]rune(name)); n > maxPartRunes {
-				return nil, fmt.Errorf("「%s」第 %d 行的部位名过长（%d 字，上限 %d 字）",
-					g.label, i+1, n, maxPartRunes)
+				return nil, fmt.Errorf(prompt.T(lang, "prompt.body_sense.parts.name_long",
+					"「%s」第 %d 行的部位名过长（%d 字，上限 %d 字）"),
+					g.label.For(lang), i+1, n, maxPartRunes)
 			}
 			key := strings.ToLower(name)
 			if prev, dup := seen[key]; dup {
-				return nil, fmt.Errorf("部位 %q 重复出现（%s 与 %s），同一部位只能属于一个档位",
-					name, prev, g.label)
+				return nil, fmt.Errorf(prompt.T(lang, "prompt.body_sense.parts.duplicate",
+					"部位 %q 重复出现（%s 与 %s），同一部位只能属于一个档位"),
+					name, prev, g.label.For(lang))
 			}
-			seen[key] = g.label
+			seen[key] = g.label.For(lang)
 			out = append(out, Part{Name: name, Privacy: g.privacy})
 		}
 	}
 
 	if len(out) == 0 {
-		return nil, fmt.Errorf("四档部位表全为空，至少要有一个部位")
+		return nil, fmt.Errorf("%s", prompt.T(lang, "prompt.body_sense.parts.all_empty",
+			"四档部位表全为空，至少要有一个部位"))
 	}
 	if len(out) > maxParts {
-		return nil, fmt.Errorf("部位共 %d 个，超出上限 %d 个，请精简后重试", len(out), maxParts)
+		return nil, fmt.Errorf(prompt.T(lang, "prompt.body_sense.parts.too_many",
+			"部位共 %d 个，超出上限 %d 个，请精简后重试"), len(out), maxParts)
 	}
 	return out, nil
 }

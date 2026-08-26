@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	lang           string // 进程语言，注入片段与工具文本据此取用
 	parts          []Part
 	pace           string
 	base           string // 基准记录库目录（= 共享域）
@@ -129,12 +131,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 需要一个可写目录；没有则拒绝启用，避免把接触记录散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存接触记录")
+		return fmt.Errorf("%s", prompt.T(ictx.Lang, "prompt.body_sense.no_state_dir",
+			"没有可用的持久化目录，无法保存接触记录"))
 	}
 	// 四档部位表都用原始取值而不是 plugin.CfgString：后者把空串当缺失（判的是
 	// ok && v != ""），而 FieldText 的空串是合法取值——用 CfgString 的话，用户清空
 	// 某一档保存后会静默恢复默认值，那一档永远清不掉。
-	parts, err := parseParts(
+	parts, err := parseParts(ictx.Lang,
 		cfgText(cfg, "parts_daily", defaultPartsDaily),
 		cfgText(cfg, "parts_close", defaultPartsClose),
 		cfgText(cfg, "parts_intimate", defaultPartsIntimate),
@@ -151,6 +154,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lang = ictx.Lang
 	p.parts = parts
 	p.pace = plugin.CfgString(cfg, "familiarity_pace", paceNormal)
 	p.base = filepath.Join(ictx.StateDir, "body")
@@ -183,6 +187,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
+	lang           string
 	parts          []Part
 	pace           string
 	base           string
@@ -197,6 +202,7 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
+		lang:  p.lang,
 		parts: p.parts, pace: p.pace, base: p.base, maxInjectBytes: p.maxInjectBytes,
 		arousalDecay: p.arousalDecay, fatigueDecay: p.fatigueDecay, stateMaxDelta: p.stateMaxDelta,
 	}
@@ -206,7 +212,16 @@ func (p *Plugin) snapshot() settings {
 // 累计记录改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘，
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
 func (p *Plugin) SystemPrompt() string {
-	return guidePrompt + "\n\n" + stageRules + "\n\n" + stateGuide
+	lang := p.langOf()
+	return guideFor(lang) + "\n\n" + stageRulesFor(lang) + "\n\n" + stateGuideFor(lang)
+}
+
+// langOf 取进程语言。SystemPrompt 与两处 storeFor 在快照之外单独取一次，
+// 它们不需要整份配置；零值（未初始化的插件）表示回落中文。
+func (p *Plugin) langOf() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lang
 }
 
 // TurnPrompt 注入本轮可读的累计记录与即时身体状态。都没有时不注入：
@@ -222,15 +237,15 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	}
 	var parts []string
 	if len(views) > 0 {
-		parts = append(parts, statesHeader+"\n"+renderViews(views, s.maxInjectBytes))
+		parts = append(parts, statesHeaderFor(s.lang)+"\n"+renderViews(s.lang, views, s.maxInjectBytes))
 	}
 	st, ok, err := p.visibleState(ctx)
 	if err != nil {
 		return "", err
 	}
 	if ok {
-		if line := renderBodyState(st); line != "" {
-			parts = append(parts, bodyStateHeader+"\n"+line)
+		if line := renderBodyState(s.lang, st); line != "" {
+			parts = append(parts, bodyStateHeaderFor(s.lang)+"\n"+line)
 		}
 	}
 	return strings.Join(parts, "\n\n"), nil
@@ -255,7 +270,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 	if s, ok := p.stores[tag]; ok {
 		return s
 	}
-	s := NewStore(plugin.DomainDir(base, tag))
+	s := NewStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stores[tag] = s
 	return s
 }
@@ -282,7 +297,7 @@ func (p *Plugin) stateStoreFor(tag string) *StateStore {
 	if s, ok := p.stateStores[tag]; ok {
 		return s
 	}
-	s := NewStateStore(plugin.DomainDir(base, tag))
+	s := NewStateStore(p.langOf(), plugin.DomainDir(base, tag))
 	p.stateStores[tag] = s
 	return s
 }
@@ -325,7 +340,8 @@ func (p *Plugin) visibleState(ctx context.Context) (BodyState, bool, error) {
 		}
 	}
 	if !found && len(errs) > 0 {
-		return BodyState{}, false, fmt.Errorf("读取身体状态失败: %s", strings.Join(errs, "; "))
+		return BodyState{}, false, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_read_failed_all",
+			"读取身体状态失败: %s"), strings.Join(errs, "; "))
 	}
 	return out, found, nil
 }
@@ -335,7 +351,7 @@ type view struct {
 	Name    string
 	Privacy int
 	Count   int
-	Stage   string
+	Stage   prompt.Piece
 	Last    time.Time
 	LastAct string
 }
@@ -392,7 +408,8 @@ func (p *Plugin) visibleViews(ctx context.Context) ([]view, int, error) {
 		}
 	}
 	if len(agg) == 0 && len(errs) > 0 {
-		return nil, 0, fmt.Errorf("读取接触记录失败: %s", strings.Join(errs, "; "))
+		return nil, 0, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.read_failed_all",
+			"读取接触记录失败: %s"), strings.Join(errs, "; "))
 	}
 
 	out := make([]view, 0, len(agg))
@@ -423,17 +440,18 @@ func (p *Plugin) visibleViews(ctx context.Context) ([]view, int, error) {
 // renderViews 按预算渲染累计记录，分四级降级：
 // 全列（次数 + 阶段 + 私密度）→ 去掉次数只留阶段 → 按阶段归并 → 只注明部位数。
 // 阶段词才是模型真正要用的信息，次数与时间是辅助，所以先砍后者。
-func renderViews(views []view, maxBytes int) string {
-	if out, ok := fit(renderFull(views), maxBytes); ok {
+func renderViews(lang string, views []view, maxBytes int) string {
+	if out, ok := fit(renderFull(lang, views), maxBytes); ok {
 		return out
 	}
-	if out, ok := fit(renderStages(views), maxBytes); ok {
+	if out, ok := fit(renderStages(lang, views), maxBytes); ok {
 		return out
 	}
-	if out, ok := fit(renderGrouped(views), maxBytes); ok {
+	if out, ok := fit(renderGrouped(lang, views), maxBytes); ok {
 		return out
 	}
-	return fmt.Sprintf("（共 %d 个部位有记录，注入预算不足以列出，可用 list_body_state 查看）", len(views))
+	return prompt.Tf(lang, "prompt.body_sense.render.budget_short",
+		"（共 %d 个部位有记录，注入预算不足以列出，可用 list_body_state 查看）", len(views))
 }
 
 func fit(s string, maxBytes int) (string, bool) {
@@ -443,38 +461,42 @@ func fit(s string, maxBytes int) (string, bool) {
 	return s, true
 }
 
-func renderFull(views []view) string {
+func renderFull(lang string, views []view) string {
 	var b strings.Builder
 	for _, v := range views {
-		fmt.Fprintf(&b, "- %s：%d 次（%s）· %s\n", v.Name, v.Count, v.Stage, privacyLabel(v.Privacy))
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.body_sense.render.full_line", "- %s：%d 次（%s）· %s")+"\n",
+			v.Name, v.Count, v.Stage.For(lang), privacyLabel(lang, v.Privacy))
 	}
-	if line := lastTouchLine(views); line != "" {
+	if line := lastTouchLine(lang, views); line != "" {
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderStages(views []view) string {
+func renderStages(lang string, views []view) string {
 	var b strings.Builder
 	for _, v := range views {
-		fmt.Fprintf(&b, "- %s：%s · %s\n", v.Name, v.Stage, privacyLabel(v.Privacy))
+		fmt.Fprintf(&b, prompt.T(lang, "prompt.body_sense.render.stage_line", "- %s：%s · %s")+"\n",
+			v.Name, v.Stage.For(lang), privacyLabel(lang, v.Privacy))
 	}
-	if line := lastTouchLine(views); line != "" {
+	if line := lastTouchLine(lang, views); line != "" {
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderGrouped 按阶段归并，极省字节而信息几乎无损。
-func renderGrouped(views []view) string {
-	byStage := map[string][]string{}
+func renderGrouped(lang string, views []view) string {
+	byStage := map[prompt.Piece][]string{}
 	for _, v := range views {
 		byStage[v.Stage] = append(byStage[v.Stage], v.Name)
 	}
+	sep := prompt.T(lang, "prompt.body_sense.render.sep", "、")
 	var b strings.Builder
-	for _, s := range stageOrder {
-		if names := byStage[s]; len(names) > 0 {
-			fmt.Fprintf(&b, "- %s：%s\n", s, strings.Join(names, "、"))
+	for _, st := range stageOrder {
+		if names := byStage[st]; len(names) > 0 {
+			fmt.Fprintf(&b, prompt.T(lang, "prompt.body_sense.render.group_line", "- %s：%s")+"\n",
+				st.For(lang), strings.Join(names, sep))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -482,7 +504,7 @@ func renderGrouped(views []view) string {
 
 // lastTouchLine 给出最近一次接触。间隔由落盘时记下的真实时间戳与当前时间作差算得，
 // 不含推测；时间戳为零值（旧文件、手改坏的文件）时整行不出现，不回落到别的字段。
-func lastTouchLine(views []view) string {
+func lastTouchLine(lang string, views []view) string {
 	var latest view
 	for _, v := range views {
 		if !v.Last.IsZero() && v.Last.After(latest.Last) {
@@ -497,9 +519,9 @@ func lastTouchLine(views []view) string {
 		out = append(out, latest.LastAct)
 	}
 	if gap := time.Since(latest.Last); gap < time.Minute {
-		out = append(out, "刚刚")
+		out = append(out, prompt.T(lang, "prompt.body_sense.render.just_now", "刚刚"))
 	} else {
-		out = append(out, humanizeGap(gap)+"前")
+		out = append(out, prompt.Tf(lang, "prompt.body_sense.render.ago", "%s前", prompt.Duration(lang, gap)))
 	}
-	return "最近一次接触：" + strings.Join(out, " · ")
+	return prompt.T(lang, "prompt.body_sense.render.last_touch", "最近一次接触：") + strings.Join(out, " · ")
 }

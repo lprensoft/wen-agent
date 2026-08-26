@@ -9,7 +9,7 @@ import (
 )
 
 func TestStoreRecordAccumulates(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, err := s.Record([]Touch{{Part: "手", Action: "牵"}}); err != nil {
 		t.Fatalf("首次记录失败: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestStoreRecordAccumulates(t *testing.T) {
 // 同一部位在一次调用里出现多次只算一次：计数没有回退手段，
 // 一次幻觉不该能加上几十次。
 func TestStoreRecordDedupesWithinCall(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	out, err := s.Record([]Touch{{Part: "腰"}, {Part: "腰"}, {Part: "腰"}})
 	if err != nil {
 		t.Fatalf("记录失败: %v", err)
@@ -42,7 +42,7 @@ func TestStoreRecordDedupesWithinCall(t *testing.T) {
 }
 
 func TestStoreRecordKeepsExistingActWhenOmitted(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	if _, err := s.Record([]Touch{{Part: "手", Action: "牵"}}); err != nil {
 		t.Fatalf("记录失败: %v", err)
 	}
@@ -68,13 +68,13 @@ func TestClipAct(t *testing.T) {
 
 func TestStorePersistsAndPermissions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "body")
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	if _, err := s.Record([]Touch{{Part: "肩"}}); err != nil {
 		t.Fatalf("记录失败: %v", err)
 	}
 
 	// 换一个 Store 指向同一目录，读到的应当是落盘的内容
-	got, err := NewStore(dir).List()
+	got, err := NewStore("", dir).List()
 	if err != nil {
 		t.Fatalf("读取失败: %v", err)
 	}
@@ -92,14 +92,14 @@ func TestStoreLoadRejectsBrokenFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte("{不是数组"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(dir).List(); err == nil {
+	if _, err := NewStore("", dir).List(); err == nil {
 		t.Fatal("损坏的文件应当报错，而不是当成空库")
 	}
 }
 
 func TestStoreClear(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := NewStore("", dir)
 	if _, err := s.Record([]Touch{{Part: "手"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestStoreClear(t *testing.T) {
 }
 
 func TestStoreConcurrentRecord(t *testing.T) {
-	s := NewStore(t.TempDir())
+	s := NewStore("", t.TempDir())
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
