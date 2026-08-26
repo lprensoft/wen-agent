@@ -100,7 +100,7 @@ func runServe(args []string) {
 	}
 	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
-	auth, err := server.NewAuthStore(cfg.BaseDir)
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
 	if err != nil {
 		log.Fatalf("加载访问口令失败: %v", err)
 	}

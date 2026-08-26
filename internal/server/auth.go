@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/i18n"
 )
 
 // 访问控制。
@@ -57,6 +59,7 @@ type credential struct {
 
 // AuthStore 保管访问口令。Hash 为空表示尚未设置口令。
 type AuthStore struct {
+	lang string // 报错说话用的语言，取进程语言
 	path string
 
 	mu     sync.RWMutex
@@ -66,8 +69,8 @@ type AuthStore struct {
 
 // NewAuthStore 从 dir/auth.json 加载口令；文件不存在表示未设置。
 // 环境变量 WEN_AUTH_PASSWORD 非空时以它为准，不读也不写文件。
-func NewAuthStore(dir string) (*AuthStore, error) {
-	s := &AuthStore{path: filepath.Join(dir, authFileName)}
+func NewAuthStore(lang, dir string) (*AuthStore, error) {
+	s := &AuthStore{lang: lang, path: filepath.Join(dir, authFileName)}
 
 	if pwd := strings.TrimSpace(os.Getenv(envPasswordKey)); pwd != "" {
 		s.envPwd = pwd
@@ -79,13 +82,13 @@ func NewAuthStore(dir string) (*AuthStore, error) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读取 %s: %w", s.path, err)
+		return nil, fmt.Errorf(i18n.T(s.lang, "server.auth.err.read", "读取 %s: %w"), s.path, err)
 	}
 	if err := json.Unmarshal(raw, &s.cred); err != nil {
-		return nil, fmt.Errorf("解析 %s: %w", s.path, err)
+		return nil, fmt.Errorf(i18n.T(s.lang, "server.auth.err.parse", "解析 %s: %w"), s.path, err)
 	}
 	if s.cred.Hash != "" && s.cred.Algo != "pbkdf2-sha256" {
-		return nil, fmt.Errorf("%s: 不认识的口令算法 %q", s.path, s.cred.Algo)
+		return nil, fmt.Errorf(i18n.T(s.lang, "server.auth.err.algo", "%s: 不认识的口令算法 %q"), s.path, s.cred.Algo)
 	}
 	return s, nil
 }
@@ -134,11 +137,21 @@ func (s *AuthStore) Verify(pwd string) bool {
 
 // 口令变更的几种拒绝理由。CLI 与 HTTP 两个入口共用同一套判定，
 // 各自按需要把它们翻译成退出码或状态码。
+// 四条口令错误的中文原文单独取常量：哨兵值用它建，处理器按语言取译文时也用它当
+// 兜底。覆盖检查是静态扫 (键, 原文) 对的，原文写成 err.Error() 就扫不到——那正是
+// 这四条一开始被漏掉的原因。
+const (
+	MsgEnvManagedZH        = "口令由环境变量 " + envPasswordKey + " 提供，无法在此修改"
+	MsgWrongCurrentZH      = "当前口令不正确"
+	MsgClearWhileExposedZH = "服务正在对外监听，清除口令会使它完全开放；请先改回只监听本地"
+	MsgTooShortZH          = "口令至少 8 位"
+)
+
 var (
-	ErrEnvManaged        = errors.New("口令由环境变量 " + envPasswordKey + " 提供，无法在此修改")
-	ErrWrongCurrent      = errors.New("当前口令不正确")
-	ErrClearWhileExposed = errors.New("服务正在对外监听，清除口令会使它完全开放；请先改回只监听本地")
-	ErrTooShort          = errors.New("口令至少 8 位")
+	ErrEnvManaged        = errors.New(MsgEnvManagedZH)
+	ErrWrongCurrent      = errors.New(MsgWrongCurrentZH)
+	ErrClearWhileExposed = errors.New(MsgClearWhileExposedZH)
+	ErrTooShort          = errors.New(MsgTooShortZH)
 )
 
 // minPasswordLen 是口令长度下限。挡的是「1234」这类一试就中的口令，
@@ -172,24 +185,24 @@ func (s *AuthStore) SetPassword(pwd string) error {
 	defer s.mu.Unlock()
 
 	if s.envPwd != "" {
-		return fmt.Errorf("口令由环境变量 %s 提供，无法在此修改", envPasswordKey)
+		return fmt.Errorf(i18n.T(s.lang, "server.auth.env_managed_f", "口令由环境变量 %s 提供，无法在此修改"), envPasswordKey)
 	}
 
 	if pwd == "" {
 		s.cred = credential{}
 		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("删除 %s: %w", s.path, err)
+			return fmt.Errorf(i18n.T(s.lang, "server.auth.err.remove", "删除 %s: %w"), s.path, err)
 		}
 		return nil
 	}
 
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("生成随机盐: %w", err)
+		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.salt", "生成随机盐: %w"), err)
 	}
 	key, err := pbkdf2.Key(sha256.New, pwd, salt, pbkdf2Iter, keyLen)
 	if err != nil {
-		return fmt.Errorf("计算口令哈希: %w", err)
+		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.hash", "计算口令哈希: %w"), err)
 	}
 	cred := credential{
 		Algo: "pbkdf2-sha256",
@@ -202,11 +215,11 @@ func (s *AuthStore) SetPassword(pwd string) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("创建配置目录: %w", err)
+		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.mkdir", "创建配置目录: %w"), err)
 	}
 	// 0600：与 models.json、plugins.state.json 一致，文件里是口令派生值
 	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
-		return fmt.Errorf("写入 %s: %w", s.path, err)
+		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.write", "写入 %s: %w"), s.path, err)
 	}
 	s.cred = cred
 	return nil

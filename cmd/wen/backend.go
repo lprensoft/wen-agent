@@ -158,7 +158,7 @@ func newOfflineBackend(cfg *config.Config) (*offlineBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
-	auth, err := server.NewAuthStore(cfg.BaseDir)
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
 	if err != nil {
 		return nil, fmt.Errorf(tr("cli.err.load_auth", "加载访问口令失败: %w"), err)
 	}
