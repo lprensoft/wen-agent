@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/logo-banner.png" alt="Wen Agent" width="520">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-banner-dark.png">
+    <img src="docs/assets/logo-banner-light.png" alt="Wen Agent" width="700">
+  </picture>
 </p>
 
 <p align="center"><b>An AI character who lives a life of their own — and stays the same person while doing it.</b></p>
