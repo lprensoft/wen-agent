@@ -1138,6 +1138,35 @@ body {
 .btn-ghost:hover { background: var(--bg); }
 .btn-ghost:disabled { opacity: 0.6; cursor: wait; }
 
+/* 预置提供商列表：一行一家，名字在上、一句话说明在下。
+   压一个高度上限并在内部滚动——条目有十几条，不压的话弹窗会顶到屏幕上下边。 */
+#preset-modal .modal { max-height: min(100%, 72vh); }
+.preset-hint { font-size: 12px; color: var(--text-dim); line-height: 1.5; margin: 0; }
+.preset-list { display: flex; flex-direction: column; gap: 6px; }
+.preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.preset-row:hover { border-color: var(--accent); }
+.preset-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 「自定义」与预置之间隔一道：它不是第十九家提供商，是另一条路 */
+.preset-row.is-custom { margin-top: 4px; border-style: dashed; }
+.preset-row-name { font-size: 13px; font-weight: 600; }
+.preset-row-desc { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+/* 表单项里的外链（如「去哪儿拿密钥」），跟在说明文字之后 */
+.field-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+.field-link:hover { text-decoration: underline; }
+
 /* 配置表单项 */
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field-label { font-size: 13px; font-weight: 600; }

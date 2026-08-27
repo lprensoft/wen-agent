@@ -48,6 +48,39 @@
 - 每个模型条目可单独覆盖 `context_length` / `max_tokens` / `thinking` / `temperature`，留空则回退到 `model:` 段的全局值。
 - **注意**：`${VAR}` 展开后的密钥一旦被写进 models.json 就固定下来，此后修改环境变量不再生效。
 
+### 添加提供商
+
+设置页的「新增提供商」先给一张预置列表：挑一家，接口地址、思考参数方言与常用模型就都填好了，你只需要补一个 API Key，表单里还给出了去哪儿领它的链接。挑不到的话，列表最后一项是「自定义」，走原来那套手工填写。`wen config` 的终端界面同样是这个流程。
+
+预置只是**填表单的初值**，不是第三种配置来源：保存下来的就是一条普通的用户条目，此后与预置表再无关系——程序升级后表里多了个模型，你这条不会自己长出来，也不会被改回去。这是刻意的，理由与 config.yaml 和 models.json 那条覆盖规则一样：两处都能配的时候，「哪一份在生效」就成了一条必须记住的规则。
+
+预置里同一家厂商如果国内与国际各有一套账号（智谱、Kimi、通义千问、MiniMax、硅基流动），会各出一条，国内那条名字里缀 `(CN)`。两边的密钥不通用，别拿国内的密钥去连国际站。
+
+`Ollama` 那条指向本机，因此不要求密钥——凡是 `base_url` 指向 `localhost` / `127.0.0.1` 的提供商都不要求。它也刻意不带模型：装了哪些只有你自己的机器知道，先 `ollama pull`，再在这条提供商下把模型添上。
+
+预置里的模型 ID 是会过期的东西（各家下线旧模型相当频繁），发版时会随更新日志复核一遍；发现哪条调不通，在界面上把它改掉即可。
+
+### 思考参数方言
+
+OpenAI 兼容协议只统一了 messages / tools / stream 这一层，**思考相关的参数是各家的私有扩展**，互不兼容，所以要按提供商选一种「方言」。预置已经选好了，只有自定义提供商才需要自己挑：
+
+| 方言 | 线上写法 | 接受的档位 |
+|---|---|---|
+| `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | 五档全收 |
+| `glm` | 同上 | `low` / `high` / `max` |
+| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split` | 只有开关 |
+| `qwen` | `enable_thinking` 布尔 | 只有开关 |
+| `kimi` | `reasoning_effort` | `low` / `high` / `max` |
+| `openai` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | 六档全收（`off` 发成 `none`） |
+| `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
+| `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |
+| `effort` | `reasoning_effort` | 五档原样发出 |
+| `none` | 不发送任何思考参数 | —— |
+
+界面上那六档（`off` / `low` / `medium` / `high` / `xhigh` / `max`）取自 Anthropic，别家没一家全收。选到对方没有的一档时**向上取整**：取不低于所选档位的最低一档，没有更高的就取最高档——选了 `medium` 的人要的是「比 low 多想一点」，给他 low 是给少了。所以在 `glm` 方言下选 `medium` 实际发出的是 `high`，在 `gemini` 下选 `max` 实际发出的是 `high`。
+
+有一处收敛救不了：`glm-5.3` 强制思考，把档位调到「关闭」它会直接报错。预置里给这个模型钉了 `high`，别去动它。
+
 支持两种 API 模式：
 
 | 模式 | 说明 |

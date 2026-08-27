@@ -110,3 +110,100 @@ func TestThinkFilter(t *testing.T) {
 		t.Fatalf("假前缀: content=%q reasoning=%q", c, r)
 	}
 }
+
+// 档位收敛：界面上那六档取自 Anthropic，别家没一家全收，
+// 原样发出去的结果是一个 400，而错误文案来自对方服务器。
+func TestSnapEffortRoundsUp(t *testing.T) {
+	lhm := []string{"low", "high", "max"}    // 智谱 GLM / Kimi
+	lmh := []string{"low", "medium", "high"} // Gemini
+
+	cases := []struct {
+		levels []string
+		want   string
+		got    string
+	}{
+		{lhm, "low", snapEffort(lhm, "low")},
+		{lhm, "high", snapEffort(lhm, "medium")}, // 与 DeepSeek 服务端的归并一致
+		{lhm, "max", snapEffort(lhm, "xhigh")},
+		{lhm, "max", snapEffort(lhm, "max")},
+		{lmh, "medium", snapEffort(lmh, "medium")},
+		{lmh, "high", snapEffort(lmh, "xhigh")}, // 没有更高的就取最高档
+		{lmh, "high", snapEffort(lmh, "max")},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("snapEffort(%v) = %q，想要 %q", c.levels, c.got, c.want)
+		}
+	}
+	// 不带档位的方言什么都不发
+	if got := snapEffort(nil, "high"); got != "" {
+		t.Errorf("无档位方言不该给出 effort，得到 %q", got)
+	}
+}
+
+// 各家方言实际发出去的档位。盯的是「不会发出对方不认识的取值」。
+func TestDialectEffortIsAccepted(t *testing.T) {
+	for _, name := range KnownDialects {
+		spec := dialectSpecs[name]
+		if len(spec.levels) == 0 {
+			continue
+		}
+		for _, want := range []string{"low", "medium", "high", "xhigh", "max"} {
+			var wr wireRequest
+			applyThinking(&wr, ChatRequest{Thinking: want, Temperature: 0.7}, name)
+			if wr.ReasoningEffort == "" {
+				t.Errorf("方言 %s 在 %s 档下没发 effort", name, want)
+				continue
+			}
+			if !contains(spec.levels, wr.ReasoningEffort) {
+				t.Errorf("方言 %s 在 %s 档下发出了对方不接受的 %q（只认 %v）",
+					name, want, wr.ReasoningEffort, spec.levels)
+			}
+		}
+	}
+}
+
+// OpenAI 系有两条硬限制，漏一条就是个 400：拒绝 temperature，
+// 且在 /chat/completions 上只接受 max_completion_tokens。
+func TestOpenAIDialectAvoidsRejectedParams(t *testing.T) {
+	for _, thinking := range []string{"off", "low", "max"} {
+		wr := buildRequest(ChatRequest{
+			Model: "gpt-5.6-terra", Thinking: thinking, Temperature: 0.7, MaxTokens: 4096,
+		}, DialectOpenAI)
+		if wr.Temperature != nil {
+			t.Errorf("thinking=%s 时仍发了 temperature", thinking)
+		}
+		if wr.MaxTokens != 0 {
+			t.Errorf("thinking=%s 时发了 max_tokens，OpenAI 只认 max_completion_tokens", thinking)
+		}
+		if wr.MaxCompletionTokens != 4096 {
+			t.Errorf("thinking=%s 时 max_completion_tokens = %d，想要 4096", thinking, wr.MaxCompletionTokens)
+		}
+	}
+	// 关闭思考走 none 这一档，而不是靠不发 effort 再补个 temperature
+	var wr wireRequest
+	applyThinking(&wr, ChatRequest{Thinking: "off"}, DialectOpenAI)
+	if wr.ReasoningEffort != "none" {
+		t.Errorf("OpenAI 关闭思考应发 effort=none，得到 %q", wr.ReasoningEffort)
+	}
+}
+
+// 别家仍然用 max_tokens —— 这条是为了防止上面那个改动漏到所有方言身上。
+func TestOtherDialectsKeepMaxTokens(t *testing.T) {
+	for _, name := range []string{"", DialectDeepSeek, DialectGLM, DialectMiniMax, DialectQwen, DialectKimi, DialectNone} {
+		wr := buildRequest(ChatRequest{Model: "m", Thinking: "high", MaxTokens: 2048}, name)
+		if wr.MaxTokens != 2048 || wr.MaxCompletionTokens != 0 {
+			t.Errorf("方言 %q 的输出上限写错了: max_tokens=%d max_completion_tokens=%d",
+				name, wr.MaxTokens, wr.MaxCompletionTokens)
+		}
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

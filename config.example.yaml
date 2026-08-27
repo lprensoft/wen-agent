@@ -27,6 +27,8 @@ model:
   context_length: 1000000    # 模型上下文窗口（token），超出时裁掉最旧的对话轮次
 
 # Provider 注册表 —— 后续接入 OpenAI / Ollama 等只需在此加条目
+# 不想手填的话，设置页的「新增提供商」里有一张预置列表（DeepSeek、智谱、Kimi、
+# 通义千问、豆包、OpenAI、Anthropic、Ollama 等），挑一家就把地址与常用模型都填好了。
 providers:
   deepseek:
     type: openai_compat      # openai_compat / anthropic

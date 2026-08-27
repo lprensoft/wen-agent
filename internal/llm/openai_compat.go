@@ -46,17 +46,21 @@ type wireThinking struct {
 }
 
 type wireRequest struct {
-	Model           string             `json:"model"`
-	Messages        []wireMessage      `json:"messages"`
-	Tools           []wireTool         `json:"tools,omitempty"`
-	Temperature     *float64           `json:"temperature,omitempty"`
-	MaxTokens       int                `json:"max_tokens,omitempty"`
-	Stream          bool               `json:"stream"`
-	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
-	Thinking        *wireThinking      `json:"thinking,omitempty"`
-	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
-	ReasoningSplit  bool               `json:"reasoning_split,omitempty"` // MiniMax：思考走独立字段而非 <think> 内联
-	EnableThinking  *bool              `json:"enable_thinking,omitempty"` // Qwen：思考开关
+	Model       string        `json:"model"`
+	Messages    []wireMessage `json:"messages"`
+	Tools       []wireTool    `json:"tools,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens 是 max_tokens 的替代写法。GPT-5 起的 OpenAI 模型在
+	// /chat/completions 上**拒绝** max_tokens，报 "Unsupported parameter"，
+	// 只接受这一个；两者互斥，按方言二选一（见 dialectSpec.maxCompletionTokens）。
+	MaxCompletionTokens int                `json:"max_completion_tokens,omitempty"`
+	Stream              bool               `json:"stream"`
+	StreamOptions       *wireStreamOptions `json:"stream_options,omitempty"`
+	Thinking            *wireThinking      `json:"thinking,omitempty"`
+	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
+	ReasoningSplit      bool               `json:"reasoning_split,omitempty"` // MiniMax：思考走独立字段而非 <think> 内联
+	EnableThinking      *bool              `json:"enable_thinking,omitempty"` // Qwen：思考开关
 }
 
 type wireStreamOptions struct {
@@ -159,9 +163,13 @@ func (u *wireUsage) usage() *Usage {
 func buildRequest(req ChatRequest, dialect string) wireRequest {
 	wr := wireRequest{
 		Model:         req.Model,
-		MaxTokens:     req.MaxTokens,
 		Stream:        true,
 		StreamOptions: &wireStreamOptions{IncludeUsage: true},
+	}
+	if specOf(dialect).maxCompletionTokens {
+		wr.MaxCompletionTokens = req.MaxTokens
+	} else {
+		wr.MaxTokens = req.MaxTokens
 	}
 	applyThinking(&wr, req, dialect)
 	for _, m := range req.Messages {
@@ -199,19 +207,25 @@ func buildRequest(req ChatRequest, dialect string) wireRequest {
 // applyThinking 按方言拼思考参数。
 // DeepSeek 在思考模式下拒绝 temperature 等采样参数，这是它特有的限制；
 // MiniMax 反而推荐思考时照常发 temperature，不能全局套用。
+// 档位一律经 snapEffort 收敛到对方接受的取值，不原样透传。
 func applyThinking(wr *wireRequest, req ChatRequest, dialect string) {
+	spec := specOf(dialect)
 	off := req.Thinking == "" || req.Thinking == "off"
 	temp := req.Temperature
-	switch dialect {
-	case "", DialectDeepSeek:
+	// sample 记下这门方言在这一轮该不该发 temperature，最后统一落笔——
+	// noSampling 的方言（OpenAI 系）任何情况下都不发，漏一处就是一个 400。
+	sample := false
+
+	switch spec.shape {
+	case shapeThinkingEffort:
 		if off {
 			wr.Thinking = &wireThinking{Type: "disabled"}
-			wr.Temperature = &temp
+			sample = true
 		} else {
 			wr.Thinking = &wireThinking{Type: "enabled"}
-			wr.ReasoningEffort = req.Thinking
+			wr.ReasoningEffort = snapEffort(spec.levels, req.Thinking)
 		}
-	case DialectMiniMax:
+	case shapeAdaptive:
 		if off {
 			// 注意 M2.x 系列并不真正关闭思考（平台接受 disabled 但无效）
 			wr.Thinking = &wireThinking{Type: "disabled"}
@@ -219,19 +233,25 @@ func applyThinking(wr *wireRequest, req ChatRequest, dialect string) {
 			wr.Thinking = &wireThinking{Type: "adaptive"}
 			wr.ReasoningSplit = true // 不带的话思考会以 <think> 内联进正文
 		}
-		wr.Temperature = &temp
-	case DialectQwen:
+		sample = true
+	case shapeEnableThinking:
 		et := !off
 		wr.EnableThinking = &et
-		wr.Temperature = &temp
-	case DialectEffort:
+		sample = true
+	case shapeEffortOnly:
 		if off {
-			wr.Temperature = &temp
+			// offLevel 非空表示对方有一个「不思考」的档位（OpenAI 的 none）；
+			// 没有的话就什么都不发，让它按自己的默认来。
+			wr.ReasoningEffort = spec.offLevel
+			sample = true
 		} else {
-			wr.ReasoningEffort = req.Thinking
-			// OpenAI 系推理模型拒绝采样参数，不发送
+			wr.ReasoningEffort = snapEffort(spec.levels, req.Thinking)
 		}
-	case DialectNone:
+	case shapeNothing:
+		sample = true
+	}
+
+	if sample && !spec.noSampling {
 		wr.Temperature = &temp
 	}
 }
@@ -249,7 +269,11 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	// 本地推理服务（Ollama 等）不做鉴权，密钥为空时干脆不发这个头，
+	// 免得对面把 "Bearer " 当成一个真的空密钥去校验。
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := p.client.Do(httpReq)

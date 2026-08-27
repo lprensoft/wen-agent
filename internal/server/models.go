@@ -81,7 +81,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 			req.APIKey = p.APIKey
 		}
 	}
-	if req.APIKey == "" {
+	if req.APIKey == "" && modelcfg.RequiresKey(req.BaseURL) {
 		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.need_api_key", "请填写 API Key"))
 		return
 	}
@@ -181,6 +181,9 @@ func (s *Server) modelsView(lang string) map[string]any {
 		"current":   view.Current,
 		"types":     modelcfg.TypeOptions(lang),
 		"dialects":  modelcfg.DialectOptions(lang),
+		// 预置随这一份下发而不是另开一个接口：它只在「添加提供商」那一步用得上，
+		// 而那一步之前必然已经取过这份文档，多一次往返换不来什么。
+		"presets": modelcfg.PresetOptions(lang, view.Providers),
 		"defaults": map[string]any{
 			"temperature":    def.Temperature,
 			"max_tokens":     def.MaxTokens,

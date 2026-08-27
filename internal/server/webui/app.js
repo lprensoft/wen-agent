@@ -1357,7 +1357,8 @@ $("#btn-settings-back").addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   // 弹窗盖在设置页之上，Esc 先关最上层的弹窗
-  if (!providerModal.classList.contains("hidden")) closeProviderModal();
+  if (!presetModal.classList.contains("hidden")) closePresetModal();
+  else if (!providerModal.classList.contains("hidden")) closeProviderModal();
   else if (!modelModal.classList.contains("hidden")) closeModelModal();
   else if (!actionModal.classList.contains("hidden")) closePluginAction();
   else if (!configModal.classList.contains("hidden")) closePluginConfig();
@@ -1727,7 +1728,9 @@ let modelsDoc = null; // 最近一次 /api/models 的响应
 async function loadModels() {
   modelsEl.textContent = t("common.loading");
   try {
-    renderModels(await fetch("/api/models").then((r) => r.json()));
+    // 带上语言：这份响应里的 API 模式、思考参数方言与预置提供商的说明都是
+    // 服务端按请求语言取的，不带的话页内切了语言这几处仍留在原来那门语言上。
+    renderModels(await fetch(withLang("/api/models")).then((r) => r.json()));
   } catch (e) {
     modelsEl.textContent = t("models.loadFailed", { msg: e.message });
   }
@@ -1944,14 +1947,77 @@ const providerTitleEl = $("#provider-modal-title");
 let providerEditing = null; // 正在编辑的提供商名，null 表示新增
 let providerInputs = {};
 
-function openProviderModal(name) {
+// ---------- 预置提供商 ----------
+
+const presetModal = $("#preset-modal");
+const presetListEl = $("#preset-list");
+// pendingPresetModels 是刚挑中的预置带来的模型清单，等这条提供商保存时一并写进去。
+// 走一个模块级变量而不是塞进表单，是因为它不是用户能编辑的字段——表单里没有它的位置。
+let pendingPresetModels = null;
+
+function openPresetModal() {
+  if (!modelsDoc) return; // /api/models 还没回来，这一步没有原料
+  presetListEl.textContent = "";
+  for (const preset of modelsDoc.presets || []) {
+    presetListEl.appendChild(presetRow(preset));
+  }
+  // 「自定义」压在最后：挑不到才手工填
+  presetListEl.appendChild(customPresetRow());
+  presetModal.classList.remove("hidden");
+  const first = presetListEl.querySelector("button");
+  if (first) first.focus();
+}
+
+function closePresetModal() {
+  presetModal.classList.add("hidden");
+}
+
+function presetRow(preset) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "preset-row";
+  const name = document.createElement("span");
+  name.className = "preset-row-name";
+  name.textContent = preset.name;
+  const desc = document.createElement("span");
+  desc.className = "preset-row-desc";
+  desc.textContent = preset.description;
+  btn.append(name, desc);
+  btn.addEventListener("click", () => {
+    closePresetModal();
+    openProviderModal(null, preset);
+  });
+  return btn;
+}
+
+function customPresetRow() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "preset-row is-custom";
+  const name = document.createElement("span");
+  name.className = "preset-row-name";
+  name.textContent = t("preset.custom");
+  const desc = document.createElement("span");
+  desc.className = "preset-row-desc";
+  desc.textContent = t("preset.customDesc");
+  btn.append(name, desc);
+  btn.addEventListener("click", () => {
+    closePresetModal();
+    openProviderModal(null, null);
+  });
+  return btn;
+}
+
+// preset 非空表示这是从预置表挑来的一条：表单预填好，模型清单随保存一并写入。
+function openProviderModal(name, preset) {
   providerEditing = name || null;
+  pendingPresetModels = preset ? preset.models || [] : null;
   const p = name ? modelsDoc.providers.find((x) => x.name === name) : null;
   providerTitleEl.textContent = p ? t("provider.edit", { name: p.name }) : t("provider.add");
   providerForm.textContent = "";
   showProviderError("");
 
-  const nameInput = textInput(p ? p.name : "");
+  const nameInput = textInput((p && p.name) || (preset && preset.name) || "");
   const typeSelect = document.createElement("select");
   for (const t of modelsDoc.types || []) {
     const opt = document.createElement("option");
@@ -1959,8 +2025,8 @@ function openProviderModal(name) {
     opt.textContent = t.label;
     typeSelect.appendChild(opt);
   }
-  typeSelect.value = p ? p.type : (modelsDoc.types[0] || {}).value;
-  const urlInput = textInput(p ? p.base_url : defaultBaseURL(typeSelect.value));
+  typeSelect.value = (p && p.type) || (preset && preset.type) || (modelsDoc.types[0] || {}).value;
+  const urlInput = textInput((p && p.base_url) || (preset && preset.base_url) || "");
   const keyInput = textInput("");
   keyInput.type = "password";
   keyInput.placeholder = p && p.has_api_key
@@ -1975,7 +2041,7 @@ function openProviderModal(name) {
     opt.textContent = d.label;
     dialectSelect.appendChild(opt);
   }
-  dialectSelect.value = (p && p.thinking_dialect) || "deepseek";
+  dialectSelect.value = (p && p.thinking_dialect) || (preset && preset.thinking_dialect) || "deepseek";
   const dialectField = fieldEl(t("provider.dialect"), dialectSelect, t("provider.dialectDesc"));
 
   // 提示词缓存：仅 Anthropic 需要在请求里显式打断点，故只在该模式下出现。
@@ -1988,21 +2054,29 @@ function openProviderModal(name) {
     cacheField.classList.toggle("hidden", typeSelect.value !== "anthropic");
   };
 
-  // 切换 API 模式时，若地址还是另一模式的默认值就跟着换
-  typeSelect.addEventListener("change", () => {
-    const defaults = (modelsDoc.types || []).map((t) => t.default_base_url);
-    if (!urlInput.value.trim() || defaults.includes(urlInput.value.trim())) {
-      urlInput.value = defaultBaseURL(typeSelect.value);
-    }
-    syncTypeFields();
-  });
+  typeSelect.addEventListener("change", syncTypeFields);
+
+  // 预置带来的取密钥地址：省得用户自己去搜控制台在哪儿，这一步正是新手最容易卡住的。
+  const keyField = fieldEl(t("provider.apiKey"), keyInput, t("provider.apiKeyDesc"));
+  if (preset && preset.console_url) {
+    const link = document.createElement("a");
+    link.className = "field-link";
+    link.href = preset.console_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = t("preset.getKey", { name: preset.name });
+    keyField.appendChild(link);
+  }
+  if (preset && preset.requires_key === false) {
+    keyInput.placeholder = t("preset.noKeyNeeded");
+  }
 
   providerForm.append(
     fieldEl(t("provider.name"), nameInput, t("provider.nameDesc")),
     fieldEl(t("provider.type"), typeSelect, t("provider.typeDesc")),
     dialectField,
     fieldEl(t("provider.baseUrl"), urlInput, t("provider.baseUrlDesc")),
-    fieldEl(t("provider.apiKey"), keyInput, t("provider.apiKeyDesc")),
+    keyField,
     cacheField,
   );
   syncTypeFields();
@@ -2013,14 +2087,10 @@ function openProviderModal(name) {
   nameInput.focus();
 }
 
-function defaultBaseURL(type) {
-  const t = (modelsDoc.types || []).find((x) => x.value === type);
-  return t ? t.default_base_url : "";
-}
-
 function closeProviderModal() {
   providerModal.classList.add("hidden");
   providerEditing = null;
+  pendingPresetModels = null;
 }
 
 // kind：error（默认，红）/ info（进行中，蓝）/ ok（成功，绿）
@@ -2049,7 +2119,7 @@ async function saveProvider() {
     Object.assign(p, values, { models: p.models });
     if (payload.current.provider === providerEditing) payload.current.provider = values.name;
   } else {
-    payload.providers.push({ ...values, models: [] });
+    payload.providers.push({ ...values, models: pendingPresetModels || [] });
   }
   try {
     await putModels(payload);
@@ -2284,7 +2354,13 @@ function fieldEl(label, input, desc) {
   return wrap;
 }
 
-$("#btn-add-provider").addEventListener("click", () => openProviderModal(null));
+// 添加提供商先进预置列表，挑不到再走「自定义」到手工表单
+$("#btn-add-provider").addEventListener("click", openPresetModal);
+$("#btn-preset-cancel").addEventListener("click", closePresetModal);
+$("#btn-preset-close").addEventListener("click", closePresetModal);
+presetModal.addEventListener("mousedown", (e) => {
+  if (e.target === presetModal) closePresetModal();
+});
 $("#btn-provider-save").addEventListener("click", saveProvider);
 $("#btn-provider-test").addEventListener("click", testProvider);
 $("#btn-provider-cancel").addEventListener("click", closeProviderModal);

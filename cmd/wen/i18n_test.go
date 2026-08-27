@@ -8,6 +8,7 @@ import (
 
 	"wen/internal/config"
 	"wen/internal/i18n"
+	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 )
 
@@ -49,6 +50,11 @@ func metadataStrings(t *testing.T) map[string]string {
 			return // 没有原文就没有要翻的东西（说明是可选字段，插件没写）
 		}
 		out[key] = zh
+	}
+	// 预置提供商的说明文字：键由提供商 Key 拼出来，静态扫描看不见，
+	// 与插件元数据同属「推导」这一档。
+	for key, zh := range modelcfg.PresetDescs() {
+		put(key, zh)
 	}
 	for _, st := range m.List() {
 		put(plugin.DescKey(st.Name), st.Description)

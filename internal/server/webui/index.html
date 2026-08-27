@@ -216,6 +216,25 @@
     </div>
   </div>
 
+  <div id="preset-modal" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="preset-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="preset-modal-title" data-i18n="preset.modalTitle"></span>
+        <button id="btn-preset-close" class="btn-icon btn-square" type="button" data-i18n-title="common.close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="preset-hint" data-i18n="preset.hint"></p>
+        <div id="preset-list" class="preset-list"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="modal-foot-gap"></span>
+        <button id="btn-preset-cancel" class="btn-ghost" type="button" data-i18n="common.cancel"></button>
+      </div>
+    </div>
+  </div>
+
   <div id="provider-modal" class="modal-overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
       <div class="modal-head">

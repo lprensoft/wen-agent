@@ -31,6 +31,9 @@ model:
   context_length: 1000000    # context window in tokens; the oldest turns are trimmed past it
 
 # The provider registry — adding OpenAI, Ollama and the like means adding an entry here
+# Rather not type it? "Add provider" on the settings page opens a list of presets
+# (DeepSeek, Zhipu, Kimi, Qwen, Doubao, OpenAI, Anthropic, Ollama and more) that fills
+# in the endpoint and the common models for you.
 providers:
   deepseek:
     type: openai_compat      # openai_compat / anthropic

@@ -48,6 +48,39 @@ Providers and models can be added, edited and removed on the settings page, and 
 - Each model entry can override `context_length` / `max_tokens` / `thinking` / `temperature` on its own; left empty, the global values from the `model:` section apply.
 - **Note**: once a key that came from `${VAR}` has been written into models.json it is fixed there, and changing the environment variable afterwards has no effect.
 
+### Adding a provider
+
+"Add provider" on the settings page opens a list of presets first: pick one and the endpoint, thinking-parameter dialect and common models are all filled in — the only thing left is an API key, and the form links you to the page that issues it. If the vendor you want is not there, the last entry is "Custom" and takes you to the manual form as before. The `wen config` terminal interface follows the same flow.
+
+A preset is only a **set of starting values for the form**, not a third source of configuration: what you save is an ordinary entry of your own, with no further connection to the preset table. A later release that adds a model to the table will not grow one in your entry, and will not change yours back. That is deliberate, for the same reason as the config.yaml / models.json override rule: as soon as two places can configure the same thing, "which one wins" becomes a rule you have to remember.
+
+Where a vendor runs separate accounts inside and outside mainland China (Zhipu, Kimi, Qwen, MiniMax, SiliconFlow), the list carries both, and the China one has `(CN)` in its name. The keys are not interchangeable — a China key will not authenticate against the international host.
+
+The `Ollama` entry points at your own machine and therefore asks for no key; no provider whose `base_url` points at `localhost` / `127.0.0.1` does. It also deliberately ships without models: only your machine knows which ones you have. Run `ollama pull` first, then add the model under that provider.
+
+Model IDs in the presets do expire — vendors retire old models fairly often — so they are reviewed against the changelog at release time. If one stops working, edit it in the UI.
+
+### Thinking-parameter dialects
+
+The OpenAI-compatible protocol only standardises the messages / tools / stream layer. **Thinking parameters are each vendor's own extension** and are mutually incompatible, so a "dialect" is chosen per provider. Presets already pick one; only a custom provider needs you to choose:
+
+| Dialect | On the wire | Levels accepted |
+|---|---|---|
+| `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | all five |
+| `glm` | same as above | `low` / `high` / `max` |
+| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split` | on/off only |
+| `qwen` | `enable_thinking` boolean | on/off only |
+| `kimi` | `reasoning_effort` | `low` / `high` / `max` |
+| `openai` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | all six (`off` is sent as `none`) |
+| `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
+| `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |
+| `effort` | `reasoning_effort` | all five, sent as-is |
+| `none` | no thinking parameters sent | — |
+
+The six levels in the UI (`off` / `low` / `medium` / `high` / `xhigh` / `max`) come from Anthropic, and no other vendor accepts all of them. When you pick a level the provider does not have, it is **rounded up**: the lowest level that is not below your choice, or the highest one available if there is none. Someone who picks `medium` wants "a bit more thought than low", and giving them low gives less than asked. So `medium` under the `glm` dialect goes out as `high`, and `max` under `gemini` goes out as `high`.
+
+One case rounding cannot save: `glm-5.3` always thinks, and setting the level to "off" makes it fail outright. The preset pins `high` on that model — leave it alone.
+
 Two API modes are supported:
 
 | Mode | Description |

@@ -106,6 +106,24 @@ func validateModels(lang, provider string, ms []Model) error {
 	return nil
 }
 
+// RequiresKey 回答「这个地址要不要 API Key」。
+//
+// 判据是 base_url 指不指向本机：Ollama、LM Studio、llama.cpp、本地 vLLM 都不做鉴权，
+// OpenAI SDK 那边填的是个任意占位串。之所以按地址判而不是给提供商加一个「无需密钥」
+// 开关，是因为那个开关会出现在设置页上，而它对着一个远端地址勾上就是一次误配；
+// 地址本身已经把这件事说清楚了，不需要用户再声明一遍。
+func RequiresKey(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return true
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return false
+	}
+	return true
+}
+
 // MaskKey 把 API Key 掩码成可安全展示的形式。
 func MaskKey(key string) string {
 	if key == "" {

@@ -28,17 +28,6 @@ func TypeLabel(lang, typ string) string {
 	return typ
 }
 
-// DefaultBaseURL 返回该 API 模式常用的默认地址，供界面预填。
-func DefaultBaseURL(typ string) string {
-	switch typ {
-	case TypeOpenAICompat:
-		return "https://api.deepseek.com"
-	case TypeAnthropic:
-		return "https://api.anthropic.com"
-	}
-	return ""
-}
-
 func IsKnownType(typ string) bool { return slices.Contains(KnownTypes, typ) }
 
 // Config 是创建 Provider 所需的提供商级参数。用结构体而不是一串位置参数：

@@ -209,6 +209,13 @@
       "models.deleteModelConfirm": "确定删除模型「{id}」？",
       "models.deleteFailed": "删除失败：{msg}",
 
+      "preset.modalTitle": "选择提供商",
+      "preset.hint": "挑一家即可，地址与常用模型都已填好，你只要补上 API Key。",
+      "preset.custom": "自定义",
+      "preset.customDesc": "上面没有你要的那家，手工填写地址与参数。",
+      "preset.getKey": "去 {name} 拿 API Key",
+      "preset.noKeyNeeded": "本机服务，不需要密钥",
+
       "provider.modalTitle": "提供商",
       "provider.edit": "编辑提供商 · {name}",
       "provider.add": "新增提供商",
@@ -449,6 +456,13 @@
       "models.deleteProviderConfirm": "Delete the provider “{name}”?",
       "models.deleteModelConfirm": "Delete the model “{id}”?",
       "models.deleteFailed": "Couldn't delete: {msg}",
+
+      "preset.modalTitle": "Choose a provider",
+      "preset.hint": "Pick one and the address and common models are filled in for you — all you add is an API key.",
+      "preset.custom": "Custom",
+      "preset.customDesc": "Not listed above? Enter the address and settings yourself.",
+      "preset.getKey": "Get an API key from {name}",
+      "preset.noKeyNeeded": "Runs on this machine — no key needed",
 
       "provider.modalTitle": "Provider",
       "provider.edit": "Edit provider · {name}",
