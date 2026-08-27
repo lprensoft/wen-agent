@@ -44,6 +44,9 @@ type backend interface {
 type modelsDoc struct {
 	Providers []providerView     `json:"providers"`
 	Current   modelcfg.Selection `json:"current"`
+	// Presets 是「添加提供商」时可以直接挑的那张表，随 /api/models 一起下发。
+	// 名字已由服务端错开重名，拿来即填。
+	Presets []modelcfg.PresetView `json:"presets"`
 }
 
 type providerView struct {
@@ -202,7 +205,7 @@ func (b *offlineBackend) pluginActionState(string, string) (plugin.ActionState, 
 
 func (b *offlineBackend) loadModels() (modelsDoc, error) {
 	view := b.models.Snapshot()
-	doc := modelsDoc{Current: view.Current}
+	doc := modelsDoc{Current: view.Current, Presets: modelcfg.PresetOptions(uiLang, view.Providers)}
 	for _, p := range view.Providers {
 		models := p.Models
 		if models == nil {

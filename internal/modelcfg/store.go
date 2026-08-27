@@ -251,7 +251,7 @@ func (s *Store) SetCurrent(lang string, sel Selection) (File, error) {
 	if _, ok := findModel(p.Models, sel.Model); !ok {
 		return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), sel.Provider, sel.Model)
 	}
-	if strings.TrimSpace(p.APIKey) == "" {
+	if strings.TrimSpace(p.APIKey) == "" && RequiresKey(p.BaseURL) {
 		return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_api_key", "提供商 %q 尚未配置 API Key，无法使用"), sel.Provider)
 	}
 
@@ -334,10 +334,11 @@ func cloneFile(f File) File {
 func TypeOptions(lang string) []map[string]string {
 	out := make([]map[string]string, 0, len(llm.KnownTypes))
 	for _, t := range llm.KnownTypes {
+		// 不给 default_base_url：地址由预置条目带来（见 presets.go），
+		// 而「自定义」这一支预填任何一家的地址都是误导。
 		out = append(out, map[string]string{
-			"value":            t,
-			"label":            llm.TypeLabel(lang, t),
-			"default_base_url": llm.DefaultBaseURL(t),
+			"value": t,
+			"label": llm.TypeLabel(lang, t),
 		})
 	}
 	return out

@@ -53,12 +53,12 @@ func modelsSection(b backend) error {
 		case choice == "current":
 			opErr = switchCurrent(b, doc)
 		case choice == "add":
-			opErr = editProvider(b, doc, providerView{Type: "openai_compat"}, true)
+			opErr = addProvider(b, doc)
 		case strings.HasPrefix(choice, "edit:"):
 			name := strings.TrimPrefix(choice, "edit:")
 			for _, p := range doc.Providers {
 				if p.Name == name {
-					opErr = editProvider(b, doc, p, false)
+					opErr = editProvider(b, doc, p, "", false)
 					break
 				}
 			}
@@ -127,7 +127,49 @@ func switchCurrent(b backend, doc modelsDoc) error {
 // 单个模型上的参数覆盖（context_length、thinking 等）在这里改不了，但会原样保留；
 // 只有把某行删掉时，那条覆盖才随之消失。需要逐项调参就去 Web UI——
 // 在终端里铺开每个模型的六个可选覆盖，翻找的代价大于收益。
-func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
+// addProvider 是「新增提供商」那一步：先从预置表里挑一家，挑不到才手工填。
+// 预置带来的地址、方言与模型清单都是填好的，用户通常只需要补一个密钥。
+func addProvider(b backend, doc modelsDoc) error {
+	opts := make([]huh.Option[string], 0, len(doc.Presets)+2)
+	for _, p := range doc.Presets {
+		opts = append(opts, huh.NewOption(fit(p.Name+" — "+p.Description), p.Key))
+	}
+	// 「自定义」压在最后：它不是第十九家提供商，是另一条路
+	opts = append(opts,
+		huh.NewOption(fit(tr("cli.models.presetCustom", "自定义 — 上面没有你要的那家，手工填写")), "custom"),
+		huh.NewOption(tr("cli.back", "← 返回"), back))
+
+	choice := ""
+	if len(opts) > 0 {
+		choice = opts[0].Value // 光标停在第一项，见 topMenu 的说明
+	}
+	if err := run(huh.NewSelect[string]().
+		Title(tr("cli.models.presetTitle", "选择提供商")).
+		Description(fitLines(tr("cli.models.presetDesc", "挑一家即可，地址与常用模型都已填好，你只要补上 API Key。"))).
+		Height(listHeight(len(opts), 3)). // chrome：标题 1 行 + 说明 2 行
+		Options(opts...).
+		Value(&choice)); err != nil {
+		return err
+	}
+	switch choice {
+	case back:
+		return nil
+	case "custom":
+		return editProvider(b, doc, providerView{Type: "openai_compat"}, "", true)
+	}
+	for _, p := range doc.Presets {
+		if p.Key == choice {
+			return editProvider(b, doc, providerView{
+				Name: p.Name, Type: p.Type, BaseURL: p.BaseURL,
+				Dialect: p.Dialect, Models: p.Models,
+			}, p.ConsoleURL, true)
+		}
+	}
+	return nil
+}
+
+// consoleURL 非空时接在 API Key 那一栏的说明后面 —— 「去哪儿拿密钥」正是新手最容易卡住的一步。
+func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, isNew bool) error {
 	name := p.Name
 	typ := p.Type
 	baseURL := p.BaseURL
@@ -140,6 +182,9 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 	keyDesc := tr("cli.models.keyKeep", "留空表示不修改")
 	if !p.HasAPIKey {
 		keyDesc = tr("cli.models.keyNone", "尚未配置")
+	}
+	if consoleURL != "" {
+		keyDesc = trf("cli.models.keyFrom", "%s，去这里拿：%s", keyDesc, consoleURL)
 	}
 
 	typeOpts := make([]huh.Option[string], 0)

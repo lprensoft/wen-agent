@@ -26,7 +26,7 @@ The goal is **someone you can keep company with**, not a window that only exists
 - **[It speaks first — and knows when not to](docs/en/plugins/background.md)** — a heartbeat wakes the model up on the most recently active session, and the character sets the timing of its next opening itself: closer when the conversation is lively, paused until morning when you say you are going to bed. Things like rain that has just started become a reason to speak. Scheduled tasks can be created mid-conversation and run in the background, writing their results back into the session
 - **[Remote channels](docs/en/plugins/im.md)** — QQ, WeChat, Feishu, Lark and Telegram, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
 - **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; twenty-nine built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
-- **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; OpenAI-compatible and Anthropic Messages API are both supported
+- **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; adding a provider starts from a list of presets (DeepSeek, Zhipu, Kimi, Qwen, Doubao, MiniMax, SiliconFlow, OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, with separate China and international entries) that fills in the endpoint and the common models, leaving only an API key to add; OpenAI-compatible and Anthropic Messages API are both supported
 - **[A human in the loop for commands](docs/en/plugins/tools.md)** — `exec_command` intercepts before execution and asks you; the most destructive commands are refused outright. No path sandbox that could be trivially bypassed
 - **Web UI** — a single-page chat interface embedded with `go:embed`, SSE streaming, visible thinking and tool calls; background activity shows up in the session in real time
 - **[It updates itself](docs/en/plugins/self-update.md)** — checks GitHub for a new release once a day; one click on the settings page downloads, verifies (SHA256), test-runs, replaces and restarts. No package manager needed on Windows, macOS or Linux. It only checks — installing is always your click
@@ -48,6 +48,8 @@ go run ./cmd/wen
 # 3. Open your browser
 # http://127.0.0.1:8080
 ```
+
+Using a different vendor? Leave the `providers:` block in the example alone: start the server, then pick one from "Add provider" on the settings page — the endpoint, thinking-parameter dialect and common models come filled in, and all you add is an API key.
 
 There is nothing to configure first: nineteen of the twenty-nine plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The ten that are off either need something filled in (trigger phrases, a city, bot credentials) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
 

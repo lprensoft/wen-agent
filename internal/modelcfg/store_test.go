@@ -36,8 +36,7 @@ func newStore(t *testing.T, cfg *config.Config) (*Store, string) {
 	return s, path
 }
 
-func intp(v int) *int           { return &v }
-func strp(v string) *string     { return &v }
+// intp / strp 在 presets.go 里（非测试代码同样要拼可选字段），这里只补 float 那个
 func floatp(v float64) *float64 { return &v }
 
 func TestInitFromConfigWhenFileMissing(t *testing.T) {
