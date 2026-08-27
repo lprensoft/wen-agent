@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="internal/server/webui/assets/logo-lockup-dark.png">
-    <img src="internal/server/webui/assets/logo-lockup-light.png" alt="Wen Agent" width="300">
-  </picture>
+  <img src="docs/assets/logo-banner.png" alt="Wen Agent" width="520">
 </p>
 
 <p align="center"><b>An AI character who lives a life of their own — and stays the same person while doing it.</b></p>
