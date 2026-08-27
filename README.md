@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/logo-banner.png" alt="Wen Agent" width="520">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-banner-dark.png">
+    <img src="docs/assets/logo-banner-light.png" alt="Wen Agent" width="700">
+  </picture>
 </p>
 
 <p align="center"><b>让 AI 角色像活人一样过日子，也像熟人一样性格稳定。</b></p>

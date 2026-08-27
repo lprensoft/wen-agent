@@ -102,7 +102,7 @@ body {
 }
 
 /* Logo 与新建按钮上下两行，不并排。并排时两者的总宽由界面语言决定：侧栏 260px
-   减去内边距只剩 236px，Logo 占掉 135px，「＋ 新会话」正好塞下，「＋ New chat」
+   减去内边距只剩 236px，Logo 占掉 139px，「＋ 新会话」正好塞下，「＋ New chat」
    差 4px，日语的「＋ 新規チャット」差 22px——每加一种语言就得回来调一次 Logo 的
    像素，而调到装得下最长的那种语言，中文界面下就白白小了一圈。整宽一行与文案
    长度无关，一次了结，顺带把点击目标从一个小按钮扩成整条。 */
@@ -120,8 +120,8 @@ body {
    读屏也会把同一个名字念两遍。宽度由原图比例算出，不写死数值。 */
 .logo {
   align-self: flex-start; /* 不跟着列拉满，宽度仍由下面的比例算出 */
-  height: 32px;
-  aspect-ratio: 558 / 132;
+  height: 56px;
+  aspect-ratio: 1802 / 724;
   background: url("assets/logo-lockup-light.png") left center / contain no-repeat;
 }
 [data-theme="dark"] .logo { background-image: url("assets/logo-lockup-dark.png"); }
