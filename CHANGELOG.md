@@ -9,6 +9,48 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v0.8.2] - 2026-08-27
+
+### 新增
+
+- 新增提供商时先从预置列表挑一家，地址与常用模型已填好
+- 预置覆盖十三家提供商，国内与国际站各出一条
+- 预置的表单里给出该提供商领取 API Key 的链接
+- 本机推理服务（如 Ollama）不再要求填写 API Key
+
+### 变更
+
+- Logo 与图标换成新的一套视觉，侧栏、标签页与 exe 共用
+- 思考档位选到提供商不支持的一档时，自动落到最近的可用档
+- 思考参数方言按厂商细分，新增智谱、Kimi、OpenAI、Gemini、xAI 五种
+- 手工新增提供商时不再预填接口地址
+
+### 修复
+
+- OpenAI 的 GPT-5 系模型可以正常调用了
+- 页内切换语言后，模型设置页的下拉文字跟着切换
+
+---
+
+### Added
+
+- Adding a provider starts from a preset list with the endpoint and common models filled in
+- The presets cover thirteen providers, with separate China and international entries
+- Each preset links to the page where that provider issues an API key
+- A local inference server such as Ollama no longer asks for an API key
+
+### Changed
+
+- A new logo and icon set, shared by the sidebar, the browser tab and the exe
+- A thinking level the provider does not support now falls to the nearest one it does
+- Thinking-parameter dialects split by vendor, adding Zhipu, Kimi, OpenAI, Gemini and xAI
+- Adding a provider by hand no longer prefills an endpoint
+
+### Fixed
+
+- OpenAI's GPT-5 family of models can now be called
+- Switching language in the page now also switches the dropdowns in model settings
+
 ## [v0.8.1] - 2026-08-26
 
 ### 新增
