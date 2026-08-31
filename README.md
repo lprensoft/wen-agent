@@ -37,7 +37,7 @@
 
 ## 快速开始
 
-预编译的二进制在 [Releases](https://github.com/lprensoft/project-wen/releases)（windows / linux / darwin × amd64 / arm64，附 SHA256）；标着 `dev` 的那个是滚动更新的预发布，版本号形如 `v0.6.0-3-gxxxxxxx`，读作「上一个正式版之后的第 3 个提交」。也可以自己构建：
+预编译的二进制在 [Releases](https://github.com/lprensoft/wen-agent/releases)（windows / linux / darwin × amd64 / arm64，附 SHA256）；标着 `dev` 的那个是滚动更新的预发布，版本号形如 `v0.6.0-3-gxxxxxxx`，读作「上一个正式版之后的第 3 个提交」。也可以自己构建：
 
 ```bash
 # 1. 准备配置：复制示例并填入所用提供商的 api_key（示例里是 providers.deepseek）

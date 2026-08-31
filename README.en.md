@@ -35,7 +35,7 @@ The goal is **someone you can keep company with**, not a window that only exists
 
 ## Quick start
 
-Prebuilt binaries are on the [Releases](https://github.com/lprensoft/project-wen/releases) page (windows / linux / darwin × amd64 / arm64, with SHA256). The one tagged `dev` is a rolling prerelease whose version reads like `v0.6.0-3-gxxxxxxx` — "the 3rd commit after the last stable release". Or build it yourself:
+Prebuilt binaries are on the [Releases](https://github.com/lprensoft/wen-agent/releases) page (windows / linux / darwin × amd64 / arm64, with SHA256). The one tagged `dev` is a rolling prerelease whose version reads like `v0.6.0-3-gxxxxxxx` — "the 3rd commit after the last stable release". Or build it yourself:
 
 ```bash
 # 1. Config: copy the example and fill in the api_key of the provider you use

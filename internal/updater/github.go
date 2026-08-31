@@ -29,7 +29,7 @@ import (
 )
 
 // DefaultRepo 是发布仓库。见包注释：它不做成配置项。
-const DefaultRepo = "lprensoft/project-wen"
+const DefaultRepo = "lprensoft/wen-agent"
 
 // defaultAPI 是 GitHub API 的根地址，测试里替换成本地服务。
 const defaultAPI = "https://api.github.com"
