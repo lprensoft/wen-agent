@@ -197,9 +197,12 @@ func Load(path string) (*Config, error) {
 //
 // 旧版的内置默认是 model.provider: deepseek、model.name: deepseek-v4-flash，于是一份
 // 只写了 providers.deepseek、没写 model: 段（或只写了一半）的 config.yaml 也能用。
-// 新版的 Default() 不再带它们（选哪家归首次运行向导），这里按原样补回来，否则那些
+// 新版的 Default() 不再带它们（选哪家归首次运行向导），这里把它们补回来，否则那些
 // 配置升级后会突然要求重新配置——systemd 下就是服务起不来。范围收得和旧行为一样窄：
 // 只认名叫 deepseek 的提供商，别的名字旧版本来也不会自动选中。
+//
+// 模型名补的是 deepseek-flash 而不是旧版那个 deepseek-v4-flash：后者已经下线，
+// DeepSeek 只是暂时把它转到 deepseek-flash（V4.1-Flash），补一个迟早失效的名字没有意义。
 func legacyModelDefaults(c *Config) {
 	if c.Model.Provider == "" {
 		if _, ok := c.Providers["deepseek"]; ok {
@@ -207,7 +210,7 @@ func legacyModelDefaults(c *Config) {
 		}
 	}
 	if c.Model.Provider == "deepseek" && c.Model.Name == "" {
-		c.Model.Name = "deepseek-v4-flash"
+		c.Model.Name = "deepseek-flash"
 	}
 }
 

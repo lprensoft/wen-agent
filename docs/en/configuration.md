@@ -39,7 +39,7 @@ You only need it to change the start-up settings below. Put it in the config dir
 | `server.host` | The listen address, `127.0.0.1` by default. Set an access password before changing it to an external address (see [Deployment and access control](deployment.md)) |
 | `server.port` | The listen port, `8080` by default. The `-p` command-line flag takes precedence |
 | `server.trust_loopback` | Whether requests from loopback skip authentication, on by default. It **must** be turned off behind a reverse proxy (see [Deployment and access control](deployment.md)) |
-| `model.provider` / `model.name` | The provider and model id to start with (the settings page's "Models" section takes over from here; see below). If they are omitted and `providers` has an entry named `deepseek`, the old defaults `deepseek` / `deepseek-v4-flash` still apply |
+| `model.provider` / `model.name` | The provider and model id to start with (the settings page's "Models" section takes over from here; see below). If they are omitted and `providers` has an entry named `deepseek`, it is selected, with the model `deepseek-flash` (the old default `deepseek-v4-flash` has been retired) |
 | `model.temperature` | `0.7` by default. It has no effect while thinking is on |
 | `model.max_tokens` | The output cap for one reply, `4096` by default |
 | `model.thinking` | Thinking effort: `off` / `low` / `medium` / `high` / `xhigh` / `max`, `high` by default (the reasoning is shown as a collapsible block in the web UI) |
@@ -57,7 +57,7 @@ Values may contain `${VAR}`, which is replaced with the environment variable at 
 ```yaml
 model:
   provider: deepseek
-  name: deepseek-v4-flash
+  name: deepseek-flash
 providers:
   deepseek:
     type: openai_compat
@@ -101,6 +101,8 @@ Providers and models can be added, edited and removed on the settings page, and 
 A preset is only a **set of starting values for the form**, not a third source of configuration: what you save is an ordinary entry of your own, with no further connection to the preset table. A later release that adds a model to the table will not grow one in your entry, and will not change yours back. That is deliberate, for the same reason as the config.yaml / models.json override rule: as soon as two places can configure the same thing, "which one wins" becomes a rule you have to remember.
 
 Where a vendor runs separate accounts inside and outside mainland China (Zhipu, Kimi, Qwen, MiniMax, SiliconFlow), the list carries both, and the China one has `(CN)` in its name. The keys are not interchangeable — a China key will not authenticate against the international host.
+
+The Qwen presets use the two general `dashscope` domains. Alibaba Cloud now recommends workspace-specific domains (`{WorkspaceId}.{region}.maas.aliyuncs.com`). The general domains get no new features after 2026-09-30 but keep working. A workspace domain contains your own workspace ID, so it cannot be a preset. To use one, change the Base URL of that provider to the address your console shows.
 
 The `Ollama` entry points at your own machine and therefore asks for no key; no provider whose `base_url` points at `localhost` / `127.0.0.1` does. It also deliberately ships without models: only your machine knows which ones you have. Run `ollama pull` first, then add the model under that provider.
 

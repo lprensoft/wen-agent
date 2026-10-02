@@ -158,7 +158,7 @@
 - 端口一项存在的理由是 8080 被占用时服务起不来，所以向导只在默认端口确实被占时才把预填值换掉；`serve` 也先 `net.Listen` 再宣布「已启动」，占用时给出该怎么改的提示。
 - 不在终端里（`isInteractive` 为假）不进向导：打一行提示后退出，不能卡着等一个永远不来的输入。
 - **向导解决不了的不进向导**：当前提供商来自 config.yaml、只是密钥为空（几乎总是 `${VAR}` 没设）时直接点名报错——进向导只能再加一家、把明文密钥存进 models.json，从此永久压过 config.yaml；同一配置目录已有实例在跑时也报错，离线改 models.json 会被它下一次保存整个盖掉。
-- 旧版 `Default()` 带的 `model.provider: deepseek` / `name: deepseek-v4-flash` 由 `config.legacyModelDefaults` 按原样补回（只对写了 config.yaml 的人、只认名叫 deepseek 的提供商），否则只写了 `providers.deepseek` 的老配置升级后会起不来。
+- 旧版 `Default()` 带的 `model.provider: deepseek` / `name: deepseek-v4-flash` 由 `config.legacyModelDefaults` 补回（只对写了 config.yaml 的人、只认名叫 deepseek 的提供商；模型名补成 `deepseek-flash`，旧名已下线），否则只写了 `providers.deepseek` 的老配置升级后会起不来。
 - 试连与设置页的「测试连接」共用 `llm.Probe`，判据只有一份。
 
 新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口（构造参数走 `llm.Config`）。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。

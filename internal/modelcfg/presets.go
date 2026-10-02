@@ -15,7 +15,7 @@ import (
 // 自己长出来。这是刻意的：config.yaml 与 plugins.state.json 已经演示过「两处
 // 都能配」会怎样，那条规则得被记住，而界面的改动又不回写，久了就成误导。
 //
-// 表里的每一项都是照官方文档核过的（2026-08）。模型 ID 是这份表里最短命的东西，
+// 表里的每一项都是照官方文档核过的（2026-10）。模型 ID 是这份表里最短命的东西，
 // 发版时随 CHANGELOG 一起复核一遍——新手拿到的「开箱即用」不该在某一版之后
 // 变成「开箱报错」。
 //
@@ -58,15 +58,16 @@ var presets = []Preset{
 		ConsoleURL: "https://platform.deepseek.com/api_keys",
 		Desc:       "深度求索。注册即用，思考与非思考同一个模型。",
 		Models: []Model{
-			{ID: "deepseek-v4-flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
+			// deepseek-flash 是 V4.1-Flash，原生看图；旧的 deepseek-v4-flash 与
+			// deepseek-v4-flash-vision-exp 已下线，官方只是暂时把它们转到这里
+			{ID: "deepseek-flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 			{ID: "deepseek-v4-pro", ContextLength: intp(1000000), MaxTokens: intp(65536)},
-			{ID: "deepseek-v4-flash-vision-exp", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 		},
 	},
 	{
 		Key: "zai_cn", Name: "Z.AI" + cnSuffix, Type: llm.TypeOpenAICompat,
 		BaseURL: "https://open.bigmodel.cn/api/paas/v4", Dialect: llm.DialectGLM,
-		ConsoleURL: "https://bigmodel.cn/usercenter/apikeys",
+		ConsoleURL: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
 		Desc:       "智谱 GLM，国内站。glm-5.3 强制思考，关不掉。",
 		Models:     glmModels(),
 	},
@@ -80,54 +81,56 @@ var presets = []Preset{
 	{
 		Key: "kimi_cn", Name: "Kimi" + cnSuffix, Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.moonshot.cn/v1", Dialect: llm.DialectKimi,
-		ConsoleURL: "https://platform.moonshot.cn/console/api-keys",
+		ConsoleURL: "https://platform.kimi.com/console/api-keys",
 		Desc:       "月之暗面 Kimi，国内站。K3 长上下文，原生视觉。",
 		Models:     kimiModels(),
 	},
 	{
 		Key: "kimi", Name: "Kimi", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.moonshot.ai/v1", Dialect: llm.DialectKimi,
-		ConsoleURL: "https://platform.moonshot.ai/console/api-keys",
+		ConsoleURL: "https://platform.kimi.ai/console/api-keys",
 		Desc:       "月之暗面 Kimi，国际站。与国内站是两套账号，密钥不通用。",
 		Models:     kimiModels(),
 	},
 	{
 		Key: "qwen_cn", Name: "Qwen" + cnSuffix, Type: llm.TypeOpenAICompat,
 		BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", Dialect: llm.DialectQwen,
-		ConsoleURL: "https://bailian.console.aliyun.com/?tab=model#/api-key",
+		ConsoleURL: "https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key",
 		Desc:       "通义千问，阿里云百炼。思考只有开关，没有档位。",
 		Models:     qwenModels(),
 	},
 	{
 		Key: "qwen", Name: "Qwen", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", Dialect: llm.DialectQwen,
-		ConsoleURL: "https://bailian.console.alibabacloud.com/?tab=model#/api-key",
+		ConsoleURL: "https://modelstudio.console.alibabacloud.com/ap-southeast-1/model/settings/api-key",
 		Desc:       "通义千问，新加坡站。与国内站是两套账号，密钥不通用。",
 		Models:     qwenModels(),
 	},
 	{
 		Key: "doubao", Name: "Doubao", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://ark.cn-beijing.volces.com/api/v3", Dialect: llm.DialectDeepSeek,
-		ConsoleURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+		ConsoleURL: "https://ark.volcengine.com/region:cn-beijing/apiKey",
 		Desc:       "字节豆包，火山方舟。模型 ID 带版本日期，去掉就调不通。",
 		Models: []Model{
 			// 日期后缀是必须的，方舟不认不带日期的别名。这也意味着这两行
 			// 会随版本过期，属于发版时该复核的部分。
-			{ID: "doubao-seed-2-1-pro-260628", ContextLength: intp(262144), MaxTokens: intp(65536)},
+			// pro 的上下文官方写作 1024k，精确的 token 数没有给出，取 1M 保守值
+			{ID: "doubao-seed-2-1-pro-260915", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 			{ID: "doubao-seed-2-1-turbo-260628", ContextLength: intp(262144), MaxTokens: intp(65536)},
 		},
 	},
 	{
 		Key: "minimax_cn", Name: "MiniMax" + cnSuffix, Type: llm.TypeOpenAICompat,
-		BaseURL: "https://api.minimaxi.com/v1", Dialect: llm.DialectMiniMax,
-		ConsoleURL: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+		// 国内站的域名已换成 minimax.cn；旧的 api.minimaxi.com 仍能用，但文档里已不再出现
+		BaseURL: "https://api.minimax.cn/v1", Dialect: llm.DialectMiniMax,
+		ConsoleURL: "https://platform.minimax.cn/console/access?tab=api-keys",
 		Desc:       "MiniMax，国内站。模型 ID 大小写敏感。",
 		Models:     minimaxModels(),
 	},
 	{
 		Key: "minimax", Name: "MiniMax", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.minimax.io/v1", Dialect: llm.DialectMiniMax,
-		ConsoleURL: "https://platform.minimax.io/user-center/basic-information/interface-key",
+		ConsoleURL: "https://platform.minimax.io/console/access",
 		Desc:       "MiniMax，国际站。与国内站是两套账号，密钥不通用。",
 		Models:     minimaxModels(),
 	},
@@ -150,6 +153,8 @@ var presets = []Preset{
 		BaseURL: "https://api.openai.com/v1", Dialect: llm.DialectOpenAI,
 		ConsoleURL: "https://platform.openai.com/api-keys",
 		Desc:       "OpenAI。这一系拒绝 temperature，思考档位六档全收。",
+		// 刻意不放 GPT-6：官方指南说 gpt-6-astra 与 gpt-6.1-sol 走 Chat Completions 时
+		// 不能调工具，gpt-6-luna 只有关掉推理时才能调，而我们走的正是 Chat Completions
 		Models: []Model{
 			{ID: "gpt-5.6-terra", ContextLength: intp(1050000), MaxTokens: intp(128000)},
 			{ID: "gpt-5.6-sol", ContextLength: intp(1050000), MaxTokens: intp(128000)},
@@ -162,11 +167,10 @@ var presets = []Preset{
 		ConsoleURL: "https://platform.claude.com/settings/keys",
 		Desc:       "Anthropic Claude。唯一支持提示词缓存开关的一家。",
 		Models: []Model{
-			{ID: "claude-sonnet-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
-			{ID: "claude-opus-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
-			{ID: "claude-fable-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
-			// haiku 4.5 不接受 effort 参数，思考钉在 off，否则一调档就是个 400
-			{ID: "claude-haiku-4-5", ContextLength: intp(200000), MaxTokens: intp(32000), Thinking: strp("off")},
+			// 官方输出上限是 128K，这里取 64K：输出上限要从历史预算里扣掉
+			{ID: "claude-sonnet-5-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
+			{ID: "claude-opus-5-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
+			{ID: "claude-fable-5-1", ContextLength: intp(1000000), MaxTokens: intp(64000)},
 		},
 	},
 	{
@@ -175,16 +179,17 @@ var presets = []Preset{
 		ConsoleURL: "https://aistudio.google.com/apikey",
 		Desc:       "Google Gemini 的 OpenAI 兼容端点。思考只有低中高三档。",
 		Models: []Model{
-			{ID: "gemini-3.7-flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
+			{ID: "gemini-3.8-flash", ContextLength: intp(1048576), MaxTokens: intp(65536)},
 		},
 	},
 	{
 		Key: "xai", Name: "xAI", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.x.ai/v1", Dialect: llm.DialectXAI,
-		ConsoleURL: "https://console.x.ai",
+		ConsoleURL: "https://console.x.ai/team/default/api-keys",
 		Desc:       "xAI Grok。没有 max 档，选到会落回 xhigh。",
 		Models: []Model{
-			{ID: "grok-4.6", ContextLength: intp(500000), MaxTokens: intp(65536)},
+			// xAI 没有公布输出上限，65536 是我们自己定的
+			{ID: "grok-4.7", ContextLength: intp(500000), MaxTokens: intp(65536)},
 			{ID: "grok-4.3", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 		},
 	},
@@ -192,12 +197,15 @@ var presets = []Preset{
 		Key: "openrouter", Name: "OpenRouter", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://openrouter.ai/api/v1", Dialect: llm.DialectEffort,
 		ConsoleURL: "https://openrouter.ai/keys",
-		Desc:       "一个密钥通吃各家。下面这些是始终指向最新旗舰的别名。",
+		Desc:       "一个密钥通吃各家。带 ~ 的是始终指向该系列最新版的别名。",
 		Models: []Model{
-			// 用别名而不是具体版本：这张表本来就会过期，而别名不会。
-			{ID: "~openai/gpt-latest"},
-			{ID: "~anthropic/claude-latest"},
-			{ID: "~google/gemini-latest"},
+			// 能用别名就用别名：这张表本来就会过期，而别名不会。别名是按系列分的
+			// （~vendor/family-latest），没有跨系列的「最新旗舰」。
+			{ID: "~anthropic/claude-opus-latest"},
+			{ID: "~google/gemini-flash-latest"},
+			// OpenAI 这一条写死版本：它那几个系列的别名会指到 GPT-6，而 GPT-6 走
+			// Chat Completions 调工具受限（见上面 OpenAI 那条）
+			{ID: "openai/gpt-5.6-sol"},
 		},
 	},
 	{
@@ -222,9 +230,9 @@ func glmModels() []Model {
 
 func kimiModels() []Model {
 	return []Model{
+		// 只放 K3：K2.x 的思考参数是 thinking:{type, keep}，不认 reasoning_effort，
+		// 而方言是按提供商定的，同一家里分不出两种写法
 		{ID: "kimi-k3", ContextLength: intp(1000000), MaxTokens: intp(65536)},
-		{ID: "kimi-k2.7-code", ContextLength: intp(262144), MaxTokens: intp(65536)},
-		{ID: "kimi-k2.6", ContextLength: intp(262144), MaxTokens: intp(65536)},
 	}
 }
 
@@ -248,7 +256,8 @@ func siliconflowModels() []Model {
 	return []Model{
 		{ID: "deepseek-ai/DeepSeek-V4-Flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 		{ID: "deepseek-ai/DeepSeek-V4-Pro", ContextLength: intp(1000000), MaxTokens: intp(65536)},
-		{ID: "zai-org/GLM-5.3-Flash", ContextLength: intp(1000000), MaxTokens: intp(131072)},
+		// 两站共用一张清单，只放两边都有的：GLM-5.3-Flash 国内站查不到
+		{ID: "zai-org/GLM-5.3", ContextLength: intp(1000000), MaxTokens: intp(131072)},
 	}
 }
 

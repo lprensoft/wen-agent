@@ -39,7 +39,7 @@
 | `server.host` | 监听地址，默认 `127.0.0.1`。改成对外地址前先设访问口令（见[部署与访问控制](deployment.md)） |
 | `server.port` | 监听端口，默认 `8080`；命令行的 `-p` 优先于它 |
 | `server.trust_loopback` | 回环来源是否免认证，默认开启；套反向代理时必须关掉（见[部署与访问控制](deployment.md)） |
-| `model.provider` / `model.name` | 初始使用的提供商与模型 id（之后由设置页的「模型」栏目接管，见下）。不写时，若 `providers` 里有名为 `deepseek` 的条目，沿用旧版的默认值 `deepseek` / `deepseek-v4-flash` |
+| `model.provider` / `model.name` | 初始使用的提供商与模型 id（之后由设置页的「模型」栏目接管，见下）。不写时，若 `providers` 里有名为 `deepseek` 的条目，默认选它，模型为 `deepseek-flash`（旧版默认的 `deepseek-v4-flash` 已下线） |
 | `model.temperature` | 默认 `0.7`；思考开启时不生效 |
 | `model.max_tokens` | 单次回复的输出上限，默认 `4096` |
 | `model.thinking` | 思考模式：`off` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `high`（思考过程在 Web UI 以可折叠块展示） |
@@ -57,7 +57,7 @@
 ```yaml
 model:
   provider: deepseek
-  name: deepseek-v4-flash
+  name: deepseek-flash
 providers:
   deepseek:
     type: openai_compat
@@ -101,6 +101,8 @@ providers:
 预置只是**填表单的初值**，不是第三种配置来源：保存下来的就是一条普通的用户条目，此后与预置表再无关系——程序升级后表里多了个模型，你这条不会自己长出来，也不会被改回去。这是刻意的，理由与 config.yaml 和 models.json 那条覆盖规则一样：两处都能配的时候，「哪一份在生效」就成了一条必须记住的规则。
 
 预置里同一家厂商如果国内与国际各有一套账号（智谱、Kimi、通义千问、MiniMax、硅基流动），会各出一条，国内那条名字里缀 `(CN)`。两边的密钥不通用，别拿国内的密钥去连国际站。
+
+通义千问的预置用的是 `dashscope` 那两个通用域名。阿里云现在推荐按工作空间分配的专属域名（`{WorkspaceId}.{region}.maas.aliyuncs.com`），通用域名在 2026-09-30 之后不再加新功能，但仍可使用。专属域名里带着各人自己的工作空间 ID，做不成预置；要用的话，在这条提供商里把 Base URL 改成控制台给你的那个。
 
 `Ollama` 那条指向本机，因此不要求密钥——凡是 `base_url` 指向 `localhost` / `127.0.0.1` 的提供商都不要求。它也刻意不带模型：装了哪些只有你自己的机器知道，先 `ollama pull`，再在这条提供商下把模型添上。
 
