@@ -31,31 +31,30 @@ The goal is **someone you can keep company with**, not a window that only exists
 - **Web UI** — a single-page chat interface embedded with `go:embed`, SSE streaming, visible thinking and tool calls; background activity shows up in the session in real time
 - **[It updates itself](docs/en/plugins/self-update.md)** — checks GitHub for a new release once a day; one click on the settings page downloads, verifies (SHA256), test-runs, replaces and restarts. No package manager needed on Windows, macOS or Linux. It only checks — installing is always your click
 - **Session management** — one JSONL file per session (a meta line followed by one line per message); history survives restarts
-- **One config file** — everything including API keys lives in `config.yaml` (already in .gitignore), and values support `${VAR}` from the environment
+- **No config file to write** — on first run a wizard asks which provider and model to use, and everything else takes its default. You only need a `config.yaml` when you want to change start-up settings such as the port or the language
 
 ## Quick start
 
 Prebuilt binaries are on the [Releases](https://github.com/lprensoft/wen-agent/releases) page (windows / linux / darwin × amd64 / arm64, with SHA256). The one tagged `dev` is a rolling prerelease whose version reads like `v0.6.0-3-gxxxxxxx` — "the 3rd commit after the last stable release". Or build it yourself:
 
 ```bash
-# 1. Config: copy the example and fill in the api_key of the provider you use
-#    (the example uses providers.deepseek)
-cp config.example.en.yaml config.yaml
-
-# 2. Run (or go build -o wen ./cmd/wen and run ./wen)
+# 1. Run (or go build -o wen ./cmd/wen and run ./wen)
 go run ./cmd/wen
+
+# 2. The first run opens a wizard: pick a model provider, enter the API key,
+#    choose a model. It tests the connection, and picks another port if 8080 is taken
 
 # 3. Open your browser
 # http://127.0.0.1:8080
 ```
 
-Using a different vendor? Leave the `providers:` block in the example alone: start the server, then pick one from "Add provider" on the settings page — the endpoint, thinking-parameter dialect and common models come filled in, and all you add is an API key.
+The wizard's providers come from a preset list with the endpoint, thinking-parameter dialect and common models already filled in, so all you add is an API key. To switch models or add providers later, use the settings page or `wen config models`. To go through the wizard again, run `wen onboard`.
 
 There is nothing to configure first: nineteen of the twenty-nine plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The ten that are off either need something filled in (trigger phrases, a city, bot credentials) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
 
-The browser interface's language is chosen at the top right of the settings page. **The prompts sent to the model, the log and the command-line output follow `lang:` in config.yaml**, which falls back to the system locale when unset (see [Configuration and models](docs/en/configuration.md#language)).
+The browser interface's language is chosen at the top right of the settings page. **The prompts sent to the model, the log and the command-line output follow `lang:` in config.yaml**, which falls back to the system locale when unset. If you pick a language in the wizard that differs from the system locale, the wizard writes it into `config.yaml` for you (see [Configuration and models](docs/en/configuration.md#language)).
 
-Config lookup order: the path given to `-c` → `config.yaml` in the current directory → `~/.wen/config.yaml`.
+The config directory is `~/.wen/` by default. It holds the model configuration, the sessions and the plugin state. If the current directory contains a `config.yaml`, the current directory is used instead, and `-c` points somewhere else entirely.
 
 ```bash
 wen -c /path/to/config.yaml -p 9000   # explicit config and port
@@ -64,7 +63,8 @@ wen -c /path/to/config.yaml -p 9000   # explicit config and port
 The main commands (see [CLI](docs/en/cli.md) for the full list):
 
 ```
-wen                        start the server (same as wen serve)
+wen                        start the server (same as wen serve); runs the wizard first if no model is set up
+wen onboard                run the setup wizard again
 wen config [section]       guided configuration (sections: plugins / models / server)
 wen status                 print the current configuration and runtime state
 wen eval <script.json>     replay a scripted conversation, report style and consistency
@@ -73,7 +73,7 @@ wen update [--check] [-y]  check for and install a new version
 
 ## Configuration
 
-`config.yaml` holds only start-up configuration — model, server, sessions. The essentials are in [Configuration and models](docs/en/configuration.md); the full example is [config.example.en.yaml](config.example.en.yaml).
+A fresh install needs no config file at all. The wizard writes the model into `<config dir>/models.json`, and everything else uses defaults. Only when you want to change start-up settings such as the port, listen address, language or working directory do you put a `config.yaml` in the config directory, containing just the options you are changing. Each option is described in [Configuration and models](docs/en/configuration.md). An existing `config.yaml` keeps working as before.
 
 **Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page (or `wen config plugins` on a remote machine) and stored only in `<config dir>/plugins.state.json`; each plugin's own data lives in `<config dir>/plugins/<plugin>/`.
 
@@ -97,7 +97,7 @@ Twenty-nine built-in plugins, grouped by function, all toggleable and configurab
 ## Documentation
 
 - [CLI](docs/en/cli.md) — the subcommands, and how to change plugin settings on a headless machine
-- [Configuration and models](docs/en/configuration.md) — every option in config.yaml, and provider/model management
+- [Configuration and models](docs/en/configuration.md) — the setup wizard, every option in config.yaml, and provider/model management
 - [Plugin overview](docs/en/plugins/README.md) — what each of the twenty-nine plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script

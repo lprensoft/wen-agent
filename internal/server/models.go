@@ -1,11 +1,8 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"time"
 
 	"wen/internal/agent"
 	"wen/internal/llm"
@@ -95,36 +92,11 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := probe(r.Context(), reqLang(r), provider, req.Model); err != nil {
+	if err := llm.Probe(r.Context(), reqLang(r), provider, req.Model); err != nil {
 		writeError(w, http.StatusBadRequest, i18n.Tf(reqLang(r), "server.err.probe_failed", "连接失败：%s", err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// probe 发起一次最小请求，收到首个事件即视为连通。
-func probe(ctx context.Context, lang string, provider llm.Provider, model string) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	events, err := provider.ChatStream(ctx, llm.ChatRequest{
-		Model:     model,
-		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "ping"}},
-		MaxTokens: 16,
-		Thinking:  "off",
-	})
-	if err != nil {
-		return err
-	}
-	// 收到首个事件即视为连通，随后 cancel 关闭剩余的流
-	ev, ok := <-events
-	if !ok {
-		return fmt.Errorf("%s", i18n.T(lang, "server.err.empty_reply", "模型没有返回任何内容"))
-	}
-	if ev.Type == llm.EventError {
-		return ev.Err
-	}
-	return nil
 }
 
 // applyCurrentModel 按当前选中项重建 provider 并热切换到 Agent。

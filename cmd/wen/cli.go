@@ -34,6 +34,15 @@ func commands() []command {
 			run: func(args []string) error { runServe(args); return nil },
 		},
 		{
+			name:    "onboard",
+			usage:   tr("cli.cmd.onboard.usage", "wen onboard [-c 配置文件]"),
+			summary: tr("cli.cmd.onboard.summary", "首次配置向导：选模型提供商与模型"),
+			detail: tr("cli.cmd.onboard.detail", "第一次运行 wen 且还没有可用的模型时会自动进入，也可以随时手动重跑。\n"+
+				"只问模型提供商、API Key 与模型，配置目录里还没有 config.yaml 时再问一句端口；\n"+
+				"其余全部使用默认值。重跑时会新增一家提供商并切换过去，已有的不会动。"),
+			run: runOnboard,
+		},
+		{
 			name:    "config",
 			usage:   tr("cli.cmd.config.usage", "wen config [plugins|models|server] [-c 配置文件]"),
 			summary: tr("cli.cmd.config.summary", "引导式修改配置"),

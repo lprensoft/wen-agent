@@ -2,22 +2,68 @@
 
 [← 返回 README](../README.md)　·　中文　·　[English](en/configuration.md)
 
-## 配置说明
+## 首次运行
 
-见 [config.example.yaml](../config.example.yaml)。要点：
+新装的人不需要写任何配置文件。第一次运行 `wen` 时，如果还没有能用的模型，会先进入一个终端向导：
+
+1. 选语言。界面、发给模型的提示词与运行日志都用它。
+2. 选模型提供商。列表就是设置页「新增提供商」那张预置表（见下文[添加提供商](#添加提供商)），最后一项是「自定义」。
+3. 填 API Key，并选一个模型。指向本机的提供商（如 Ollama）不要求密钥。
+4. 试连一次。连不上可以重新填、换一家，或者照样保存。
+5. 确认监听端口。默认 8080，被别的程序占用时会预先换成下一个空着的端口。
+
+答完就接着启动服务。之后要换模型或加提供商，用设置页或 `wen config models`；想重走一遍向导就运行 `wen onboard`，它会新增一家提供商并切换过去，已有的不动。
+
+向导的答案各归各的去处，不另开文件：
+
+- 模型写进 `<配置目录>/models.json`，与设置页、`wen config` 改的是同一份。
+- 端口与语言只在**与默认值不同**、且配置目录里还没有 `config.yaml` 时，才写进一份只含这几项的 `config.yaml`。都取默认值的话，就一个配置文件都没有。
+- 已有的 `config.yaml` 向导从不改写。
+
+不在终端里运行时（systemd、容器、`nohup`）没法提问，还没配模型的话会打一行提示后退出。这种部署先在终端里跑一次 `wen onboard`，或者照下文在 `config.yaml` 里写好 `model:` 与 `providers:` 两段。
+
+另有两种情况即使在终端里也不进向导，而是直接报错，因为向导解决不了它们：
+
+- 当前提供商写在 `config.yaml` 里、只是 `api_key` 为空。这几乎总是 `${VAR}` 引用的环境变量没设，报错会点名是哪个提供商。进向导的话只能再加一家提供商，并把明文密钥存进 `models.json`。
+- 同一配置目录下已经有实例在跑。这时该用 `wen onboard` 或设置页，改动会经运行中的实例当场生效。
+
+**配置目录**默认是 `~/.wen/`；当前目录下有 `config.yaml` 时改用当前目录；`-c` 指定的配置文件所在的目录也就是配置目录。模型配置、会话、插件状态与访问口令都放在这里。
+
+## config.yaml（可选）
+
+只有想改下面这些启动期配置时才需要它，放在配置目录里，只写要改的那几项，其余取默认值。早先写好的完整 `config.yaml` 照常生效。
 
 | 配置项 | 说明 |
 |---|---|
-| `lang` | 界面与运行信息的语言：`zh` / `en`，不填则跟随系统区域（见下） |
-| `model.provider` / `model.name` | 初始使用的 Provider 与模型 id（之后由设置页的「模型」栏目接管，见下） |
-| `model.thinking` | 思考模式：`off` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `high`（开启时 `temperature` 不生效；思考过程在 Web UI 以可折叠块展示） |
-| `model.context_length` | 模型上下文窗口（token），默认 1000000；超出预算时自动从最旧对话轮次整轮裁剪；会话实测占用达到 90% 时自动压缩为摘要 |
+| `lang` | 这个服务用哪门语言：`zh` / `en`，不填则跟随系统区域（见下） |
+| `server.host` | 监听地址，默认 `127.0.0.1`。改成对外地址前先设访问口令（见[部署与访问控制](deployment.md)） |
+| `server.port` | 监听端口，默认 `8080`；命令行的 `-p` 优先于它 |
 | `server.trust_loopback` | 回环来源是否免认证，默认开启；套反向代理时必须关掉（见[部署与访问控制](deployment.md)） |
-| `providers.<name>` | Provider 注册表：`type`（`openai_compat` / `anthropic`）、`base_url`、`api_key` |
-| `agent.system_prompt` | 系统提示词（当前留空；运行时会自动在其前注入 `[系统环境]` 块：操作系统、Shell、工作目录、区域语言） |
-| `agent.max_turns` | 单次请求内工具循环上限 |
+| `model.provider` / `model.name` | 初始使用的提供商与模型 id（之后由设置页的「模型」栏目接管，见下）。不写时，若 `providers` 里有名为 `deepseek` 的条目，沿用旧版的默认值 `deepseek` / `deepseek-v4-flash` |
+| `model.temperature` | 默认 `0.7`；思考开启时不生效 |
+| `model.max_tokens` | 单次回复的输出上限，默认 `4096` |
+| `model.thinking` | 思考模式：`off` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `high`（思考过程在 Web UI 以可折叠块展示） |
+| `model.context_length` | 模型上下文窗口（token），默认 1000000；超出预算时自动从最旧对话轮次整轮裁剪；会话实测占用达到 90% 时自动压缩为摘要 |
+| `providers.<name>` | 提供商注册表：`type`（`openai_compat` / `anthropic`）、`base_url`、`api_key`，可选 `thinking_dialect` 与 `prompt_cache`（见下） |
+| `agent.system_prompt` | 系统提示词，默认留空（运行时会自动在其前注入 `[系统环境]` 块：操作系统、Shell、工作目录、区域语言） |
+| `agent.max_turns` | 单次请求内工具循环上限，默认 `20` |
 | `agent.workdir` | 插件与环境块共用的工作目录，空 = 进程当前目录 |
 | `session.dir` | 会话存储目录，默认 `<配置目录>/sessions` |
+
+`model.temperature`、`max_tokens`、`thinking`、`context_length` 四项同时是全局默认值：模型条目没有单独覆盖时回落到它们。
+
+值里可以写 `${VAR}`，加载时替换成环境变量。容器这类没有终端的部署可以这样配模型，不必进向导：
+
+```yaml
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}
+```
 
 插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下十个除外：
 
@@ -33,7 +79,7 @@
 
 `lang:` 决定**这个服务**用哪门语言：发给模型的提示词与工具说明、插件的状态行、写进会话的注记、运行日志，以及 `wen status`、`wen plugins` 这类命令的输出。取值 `zh` / `en`；不填则跟随系统区域，判不出来时用中文。填了个不认识的语言名按没填算，不会让服务起不来。启动日志与 `wen status` 各打一行说明当前是哪门语言、是配的还是猜的。
 
-它只能手改 config.yaml——设置页不写这一项，理由与模型配置相反：`lang` 只有一个值、几乎不会改，而配置文件从不回写（回写会固化 `${VAR}` 的明文并丢掉注释）。
+首次运行向导里选的语言与系统区域不同时，向导会把它写进新建的 `config.yaml`。此后只能手改这个文件——设置页不写这一项，理由与模型配置相反：`lang` 只有一个值、几乎不会改，而配置文件从不回写（回写会固化 `${VAR}` 的明文并丢掉注释）。
 
 **浏览器界面的语言是另一件事**，在设置页右上角选（`跟随浏览器 / 中文 / English`），只存在浏览器里。同一个服务可能一台电脑一台手机各用一种语言，而 `lang:` 是共享的，所以这两件事分开：一个管这张网页，一个管发给模型的与写进日志的。
 
@@ -44,7 +90,7 @@
 提供商与模型可以在 Web UI 的设置页里增删改，并切换当前使用的组合，保存后**下一次对话请求即生效**，无需重启。
 
 - 改动写入 `<配置目录>/models.json`（权限 0600，已在 `.gitignore` 中），**不回写 config.yaml**——因为 `api_key` 里的 `${VAR}` 在解析前就被展开，回写会把明文密钥固化进文件并丢掉全部注释。
-- config.yaml 的 `providers:` 与 `model:` 段是初始值：同名条目由 models.json 完全覆盖；config.yaml 里**新增**的提供商仍会出现在列表中（标记「来自配置文件」），在界面上删除它会记一条删除坠碑，重启不会复活；从未在界面上改过的条目不写进 models.json，继续跟随配置文件。
+- config.yaml 的 `providers:` 与 `model:` 段（如果写了）是初始值：同名条目由 models.json 完全覆盖；config.yaml 里**新增**的提供商仍会出现在列表中（标记「来自配置文件」），在界面上删除它会记一条删除坠碑，重启不会复活；从未在界面上改过的条目不写进 models.json，继续跟随配置文件。
 - 每个模型条目可单独覆盖 `context_length` / `max_tokens` / `thinking` / `temperature`，留空则回退到 `model:` 段的全局值。
 - **注意**：`${VAR}` 展开后的密钥一旦被写进 models.json 就固定下来，此后修改环境变量不再生效。
 

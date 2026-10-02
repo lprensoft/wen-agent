@@ -32,11 +32,14 @@ func modelsSection(b backend) error {
 			opts[i] = huh.NewOption(fit(o.Key), o.Value)
 		}
 
+		current := trf("cli.models.current", "当前：%s / %s\n%s", doc.Current.Provider, doc.Current.Model, b.mode())
+		if doc.Current.Provider == "" {
+			current = trf("cli.models.currentNone", "当前：未配置\n%s", b.mode())
+		}
 		choice := "current" // 光标停在第一项，见 topMenu 的说明
 		if err := run(huh.NewSelect[string]().
 			Title(tr("cli.models.title", "模型")).
-			Description(fitLines(trf("cli.models.current", "当前：%s / %s\n%s",
-								doc.Current.Provider, doc.Current.Model, b.mode()))).
+			Description(fitLines(current)).
 			Height(listHeight(len(opts), 3)). // chrome：标题 1 行 + 说明 2 行
 			Options(opts...).
 			Value(&choice)); err != nil {

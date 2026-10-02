@@ -120,16 +120,17 @@ func (b *onlineBackend) pluginActionState(name, key string) (plugin.ActionState,
 
 func (b *onlineBackend) loadModels() (modelsDoc, error) {
 	var out modelsDoc
-	err := b.c.get("/api/models", &out)
+	// 语言随请求带过去，理由同 listPlugins：预置的说明与保存时的报错都按它取
+	err := b.c.get("/api/models?lang="+url.QueryEscape(uiLang), &out)
 	return out, err
 }
 
 func (b *onlineBackend) saveModels(f modelcfg.File) error {
-	return b.c.do("PUT", "/api/models", f, nil)
+	return b.c.do("PUT", "/api/models?lang="+url.QueryEscape(uiLang), f, nil)
 }
 
 func (b *onlineBackend) setCurrentModel(sel modelcfg.Selection) error {
-	return b.c.do("PUT", "/api/models/current", sel, nil)
+	return b.c.do("PUT", "/api/models/current?lang="+url.QueryEscape(uiLang), sel, nil)
 }
 
 func (b *onlineBackend) loadAuth() (authState, error) {

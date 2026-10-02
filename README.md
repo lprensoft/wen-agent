@@ -33,30 +33,30 @@
 - **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，思考过程与工具调用可视化，后台任务的动静也会实时出现在会话里
 - **[自己更新自己](docs/plugins/self-update.md)**：每天查一次 GitHub 上的新版本，设置页上一键完成下载、校验（SHA256）、试运行、替换与重启，Windows / macOS / Linux 都不需要包管理器；只查不装，装不装由你点
 - **Session 管理**：每个会话一个 JSONL 文件（首行 meta + 逐行消息），重启不丢历史
-- **单一配置文件**：全部配置（含 API Key）统一在 `config.yaml`（已被 .gitignore 保护），值支持 `${VAR}` 从环境变量读取
+- **不用写配置文件**：第一次运行时由向导问一句用哪家的哪个模型，其余全部取默认值；端口、语言这类启动期配置要改时才需要一份 `config.yaml`
 
 ## 快速开始
 
 预编译的二进制在 [Releases](https://github.com/lprensoft/wen-agent/releases)（windows / linux / darwin × amd64 / arm64，附 SHA256）；标着 `dev` 的那个是滚动更新的预发布，版本号形如 `v0.6.0-3-gxxxxxxx`，读作「上一个正式版之后的第 3 个提交」。也可以自己构建：
 
 ```bash
-# 1. 准备配置：复制示例并填入所用提供商的 api_key（示例里是 providers.deepseek）
-cp config.example.yaml config.yaml
-
-# 2. 运行（或 go build -o wen ./cmd/wen 后直接跑 ./wen）
+# 1. 运行（或 go build -o wen ./cmd/wen 后直接跑 ./wen）
 go run ./cmd/wen
+
+# 2. 第一次运行会进入向导：选一家模型提供商、填 API Key、选模型
+#    向导会试连一次，8080 被占用时还会顺带换个端口
 
 # 3. 打开浏览器
 # http://127.0.0.1:8080
 ```
 
-用别家模型的话，示例里那段 `providers:` 可以不管：先跑起来，再到设置页的「新增提供商」里挑一家——地址、思考参数方言与常用模型都是填好的，你只要补一个 API Key。
+向导里的提供商来自一张预置列表，地址、思考参数方言与常用模型都已填好，你只需要补一个 API Key。之后想换模型或加提供商，去设置页或用 `wen config models`；想重走一遍向导就运行 `wen onboard`。
 
 打开之后不需要配置任何东西：二十九个插件里默认开着十九个，角色、记忆、日程、心情、心跳都在里面，对面是一个有性格、有生活、会主动开口的人。默认关着的十个要么得先填点什么（触发词、城市、机器人凭据），要么权限过大——`read_file` 能读任意文件、`exec_command` 能执行任意命令，那是「拿它当干活的 Agent」时才要的东西，去设置页打开。
 
-界面语言在设置页右上角选；**发给模型的提示词、日志与命令行输出跟着 config.yaml 的 `lang:` 走**，不填则跟随系统区域（见[配置与模型](docs/configuration.md#语言)）。
+界面语言在设置页右上角选；**发给模型的提示词、日志与命令行输出跟着 config.yaml 的 `lang:` 走**，没写则跟随系统区域；向导里选了与系统区域不同的语言时，会替你把它写进 `config.yaml`（见[配置与模型](docs/configuration.md#语言)）。
 
-配置文件查找顺序：`-c` 指定路径 → 当前目录 `config.yaml` → `~/.wen/config.yaml`。
+配置目录默认是 `~/.wen/`，模型配置、会话与插件状态都在里面；当前目录下有 `config.yaml` 时改用当前目录，`-c` 可以指定别的位置。
 
 ```bash
 wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
@@ -65,7 +65,8 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 主要的几条命令（完整说明见[命令行](docs/cli.md)）：
 
 ```
-wen                        启动服务（等价于 wen serve）
+wen                        启动服务（等价于 wen serve），还没配模型时先进向导
+wen onboard                重走首次配置向导
 wen config [栏目]          引导式修改配置（栏目：plugins / models / server）
 wen status                 打印当前配置与运行状态
 wen eval <脚本.json>       回放一段脚本对话，生成文风与角色一致性报告
@@ -74,7 +75,7 @@ wen update [--check] [-y]  检查并安装新版本
 
 ## 配置
 
-config.yaml 只放模型、服务与会话这类启动期配置，要点见[配置与模型](docs/configuration.md)，完整示例见 [config.example.yaml](config.example.yaml)。
+新装的话不需要任何配置文件：模型由向导写进 `<配置目录>/models.json`，其余全部取默认值。端口、监听地址、语言、工作目录这类启动期配置要改时，才在配置目录里放一份 `config.yaml`，只写想改的那几项，各项说明见[配置与模型](docs/configuration.md)。早先写好的 `config.yaml` 照常生效。
 
 **插件的开关与配置不在 config.yaml 里**：它们由设置页（或远程机器上的 `wen config plugins`）维护，只存 `<配置目录>/plugins.state.json`，插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
 
@@ -98,7 +99,7 @@ config.yaml 只放模型、服务与会话这类启动期配置，要点见[配�
 ## 文档
 
 - [命令行](docs/cli.md) —— 各子命令，以及远程机器上怎么改插件配置
-- [配置与模型](docs/configuration.md) —— config.yaml 的各项、提供商与模型管理
+- [配置与模型](docs/configuration.md) —— 首次运行向导、config.yaml 的各项、提供商与模型管理
 - [插件总览](docs/plugins/README.md) —— 二十九个插件的说明与配置项，以及开箱默认开着哪些
 - [部署与访问控制](docs/deployment.md) —— 认证模型、启停脚本与 systemd
 - [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本

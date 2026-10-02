@@ -3,8 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"strings"
 
 	"wen/internal/config"
+	"wen/internal/modelcfg"
 	"wen/internal/runlock"
 	"wen/internal/version"
 )
@@ -27,7 +30,11 @@ func runStatus(args []string) error {
 	}
 
 	fmt.Printf("Wen Agent %s\n", version.Version)
-	fmt.Print(trf("cli.status.config_file", "配置文件  %s\n", path))
+	if _, err := os.Stat(path); err == nil {
+		fmt.Print(trf("cli.status.config_file", "配置文件  %s\n", path))
+	} else {
+		fmt.Print(tr("cli.status.no_config_file", "配置文件  无（全部使用默认值）\n"))
+	}
 	fmt.Print(trf("cli.status.config_dir", "配置目录  %s\n", cfg.BaseDir))
 	fmt.Print(trf("cli.status.lang", "界面语言  %s\n", langSummary(cfg)))
 
@@ -42,7 +49,14 @@ func runStatus(args []string) error {
 	}
 
 	if doc, err := b.loadModels(); err == nil {
-		fmt.Print(trf("cli.status.model", "当前模型  %s / %s\n", doc.Current.Provider, doc.Current.Model))
+		if doc.Current.Provider == "" {
+			fmt.Print(tr("cli.status.no_model", "当前模型  未配置（运行 wen onboard）\n"))
+		} else if p, ok := findProviderView(doc, doc.Current.Provider); ok && !p.HasAPIKey && modelcfg.RequiresKey(p.BaseURL) {
+			// 选中了但缺密钥，服务起不来——照常报一行「当前模型」会让人以为一切正常
+			fmt.Print(trf("cli.status.model_no_key", "当前模型  %s / %s（缺 API Key，无法使用）\n", doc.Current.Provider, doc.Current.Model))
+		} else {
+			fmt.Print(trf("cli.status.model", "当前模型  %s / %s\n", doc.Current.Provider, doc.Current.Model))
+		}
 	}
 
 	list, err := b.listPlugins()
@@ -85,4 +99,13 @@ func describeAuth(a authState) string {
 	default:
 		return tr("cli.auth.localOnly", "已设置口令，但当前只监听本机，不会被外部访问")
 	}
+}
+
+func findProviderView(doc modelsDoc, name string) (providerView, bool) {
+	for _, p := range doc.Providers {
+		if strings.EqualFold(p.Name, name) {
+			return p, true
+		}
+	}
+	return providerView{}, false
 }
