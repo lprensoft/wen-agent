@@ -104,7 +104,7 @@ providers:
 
 通义千问的预置用的是 `dashscope` 那两个通用域名。阿里云现在推荐按工作空间分配的专属域名（`{WorkspaceId}.{region}.maas.aliyuncs.com`），通用域名在 2026-09-30 之后不再加新功能，但仍可使用。专属域名里带着各人自己的工作空间 ID，做不成预置；要用的话，在这条提供商里把 Base URL 改成控制台给你的那个。
 
-`Ollama` 那条指向本机，因此不要求密钥——凡是 `base_url` 指向 `localhost` / `127.0.0.1` 的提供商都不要求。它也刻意不带模型：装了哪些只有你自己的机器知道，先 `ollama pull`，再在这条提供商下把模型添上。
+`Ollama` 那条指向本机，因此不要求密钥——凡是 `base_url` 指向 `localhost` / `127.0.0.1` 的提供商都不要求。它也刻意不带模型：装了哪些只有你自己的机器知道，先 `ollama pull`，再在这条提供商下把模型添上。它的思考参数方言是「不发送」：Ollama 给不支持思考的模型带上思考参数会直接报 400（`does not support thinking`），而支持思考的模型不带参数也会默认思考。你装的都是思考模型、又想调档位的话，把这条的方言改成「通用 reasoning_effort」。
 
 预置里的模型 ID 是会过期的东西（各家下线旧模型相当频繁），发版时会随更新日志复核一遍；发现哪条调不通，在界面上把它改掉即可。
 
@@ -116,9 +116,9 @@ OpenAI 兼容协议只统一了 messages / tools / stream 这一层，**思考�
 |---|---|---|
 | `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | 五档全收 |
 | `glm` | 同上 | `low` / `high` / `max` |
-| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split` | 只有开关 |
+| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split`；用 `max_completion_tokens` | 只有开关 |
 | `qwen` | `enable_thinking` 布尔 | 只有开关 |
-| `kimi` | `reasoning_effort` | `low` / `high` / `max` |
+| `kimi` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | `low` / `high` / `max`（`off` 发成 `low`：K3 的思考关不掉） |
 | `openai` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | 六档全收（`off` 发成 `none`） |
 | `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
 | `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |
@@ -134,7 +134,9 @@ OpenAI 兼容协议只统一了 messages / tools / stream 这一层，**思考�
 | 模式 | 说明 |
 |---|---|
 | `openai_compat` | OpenAI 兼容协议（DeepSeek 等） |
-| `anthropic` | Anthropic Messages API。思考档位映射为 `thinking:{type:"adaptive"}` + `output_config.effort`（`off` 则为 `disabled`）；当前世代 Claude 模型不接受采样参数，故不发送 `temperature`，模型条目里的该项对 Anthropic 无效 |
+| `anthropic` | Anthropic Messages API。思考档位映射为 `thinking:{type:"adaptive"}` + `output_config.effort`，并要求返回思考摘要（新一代模型默认不返回思考文本）；`off` 先发 `disabled`，模型不接受时按报错改用 `between_tools`（Sonnet 5.5），或退到最低档 `low`（Fable 5.1、Opus 5.5 这类思考常开的模型：在它们上面选「关闭」仍会思考并计费，只是想得最少），学到的写法在进程内记住；当前世代 Claude 模型不接受采样参数，故不发送 `temperature`，模型条目里的该项对 Anthropic 无效 |
 
 Anthropic 模式下多一个**提示词缓存**开关（默认开启）：开启时把请求里不变的部分（工具、system、已有历史）标为可缓存，命中的部分按约十分之一的价格计费。代价是未命中时的写入要多付约四分之一，而缓存有效期只有几分钟——如果你的对话节奏比这更慢（比如通过 IM 断断续续地聊），关掉更省。OpenAI 兼容模式没有这个开关：DeepSeek 与 OpenAI 的缓存都是服务端自动维护的，命中与否只取决于请求前缀稳不稳定（见[上下文的组织](context.md)）。
+
+Anthropic 模式只回传**本轮**的思考块，已经结束的轮次只保留正文与工具调用。新一代模型（Fable 5.1、Opus 5.5、Sonnet 5.5）只接受「之前的内容一字没改」的思考块，而本项目的历史在轮次之间是会变的：本轮状态块只拼在当轮输入上，心跳这类一次性输入事后剔除，日界线事后补上，还有压缩。原样回传上一轮的思考块就会整个请求 400，剥掉它们是官方给出的做法之一。代价是：Opus 4.5 起、Sonnet 4.6 起的模型默认会保留之前各轮的思考，现在看不到了；Haiku 4.5 与更早的模型本来就只保留最后一轮。本轮之内若前缀也变了（预算裁剪、工具列表在轮中变化），收到这个 400 时会剥掉全部思考块自动重发一次。
 

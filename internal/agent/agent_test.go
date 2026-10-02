@@ -223,6 +223,31 @@ func TestThinkingEventsAndPersistence(t *testing.T) {
 	}
 }
 
+// TestReasoningCarriedIntoNextTurn：上一轮的思考内容要随历史进入下一轮的请求。
+// DeepSeek 在请求带工具时要求回传所有之前轮次的 reasoning_content，漏了就是 400；
+// 剥不剥由各 provider 自己决定（Anthropic 只回传本轮的），核心不替它们丢。
+func TestReasoningCarriedIntoNextTurn(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{
+		{reasoning: "第一轮的思考", content: "第一答"},
+		{content: "第二答"},
+	}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test", Thinking: "high", MaxTurns: 5})
+	ag.Run(context.Background(), meta.ID, "第一问", func(Event) {})
+	ag.Run(context.Background(), meta.ID, "第二问", func(Event) {})
+
+	for _, m := range provider.reqs[1].Messages {
+		if m.Role == llm.RoleAssistant && m.Content == "第一答" {
+			if m.Reasoning != "第一轮的思考" {
+				t.Errorf("上一轮的思考没有带进下一轮: %+v", m)
+			}
+			return
+		}
+	}
+	t.Fatal("第二轮的请求里找不到上一轮的助手消息")
+}
+
 func TestTrimToBudget(t *testing.T) {
 	big := strings.Repeat("字", 3000) // ≈3000 token
 	msgs := []llm.Message{

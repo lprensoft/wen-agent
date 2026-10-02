@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"wen/internal/i18n"
@@ -27,14 +29,30 @@ type Anthropic struct {
 	// 因此它是提供商上一个看得见的开关，不由这里替用户决定。
 	cache  bool
 	client *http.Client
+
+	// offModes 记着各模型「关闭思考」实际该怎么写，见 offMode。
+	mu       sync.Mutex
+	offModes map[string]string
 }
+
+// 「关闭思考」的三种写法。各代模型对它的接受程度不一：较早的接受 disabled；
+// Sonnet 5.5 拒绝 disabled，要写 between_tools；Fable 5.1、Opus 5.5 等思考常开，
+// 任何关闭写法都是 400，只能退到「adaptive + 最低档 low」——那是这类模型上离
+// 「关闭」最近的写法。压缩、记忆提炼这些内部调用都以 off 发起，图的就是快和省，
+// 若只是不发 thinking 字段，模型会按默认档位（medium 甚至 high）去想。
+const (
+	offDisabled     = "disabled"
+	offBetweenTools = "between_tools"
+	offAdaptiveLow  = "adaptive_low"
+)
 
 func NewAnthropic(lang, baseURL, apiKey string, promptCache bool) *Anthropic {
 	return &Anthropic{
-		lang:    lang,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		cache:   promptCache,
+		lang:     lang,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		apiKey:   apiKey,
+		cache:    promptCache,
+		offModes: map[string]string{},
 		// 与 openai_compat 一致：总超时不设上限（长思考+长输出），连接阶段单独限时
 		client: &http.Client{Transport: &http.Transport{
 			ResponseHeaderTimeout: 60 * time.Second,
@@ -65,7 +83,11 @@ type antRequest struct {
 }
 
 type antThinking struct {
-	Type string `json:"type"` // adaptive / disabled
+	Type string `json:"type"` // adaptive / disabled / between_tools
+	// Display 控制思考文本返不返回。新一代模型默认 omitted（只给签名、文本为空），
+	// 界面上的思考过程因此是空的；显式要 summarized 才拿得到摘要。
+	// 它只能与 adaptive 同发：disabled 与 between_tools 带上它都是 400。
+	Display string `json:"display,omitempty"`
 }
 
 type antOutput struct {
@@ -83,9 +105,12 @@ type antBlock struct {
 
 	Text string `json:"text,omitempty"` // text
 
-	Thinking  string `json:"thinking,omitempty"`  // thinking
-	Signature string `json:"signature,omitempty"` // thinking 的签名，必须原样回传
-	Data      string `json:"data,omitempty"`      // redacted_thinking 的密文
+	// Thinking 用指针：思考块的 thinking 字段可能是空串（display 为 omitted 时、
+	// Sonnet 5.5 的工具间进度块），回传时也得照样带上这个空字段；而它与别的块类型
+	// 共用这个结构，普通字符串加 omitempty 会把它吞掉。
+	Thinking  *string `json:"thinking,omitempty"`  // thinking
+	Signature string  `json:"signature,omitempty"` // thinking 的签名，必须原样回传
+	Data      string  `json:"data,omitempty"`      // redacted_thinking 的密文
 
 	ID    string          `json:"id,omitempty"`    // tool_use
 	Name  string          `json:"name,omitempty"`  // tool_use
@@ -142,7 +167,17 @@ type antDelta struct {
 
 // ---------- 请求装配 ----------
 
-func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
+// antBuild 是装配请求时 ChatRequest 之外的几样选择。
+type antBuild struct {
+	cache bool
+	// off 是「关闭思考」在这个模型上的写法（offDisabled / offBetweenTools /
+	// offAdaptiveLow），只在 req.Thinking 为关闭时用到。
+	off string
+	// stripAll 为真时连本轮的思考块也一并剥掉，见 ChatStream 里那次签名失败的重发。
+	stripAll bool
+}
+
+func buildAnthropicRequest(req ChatRequest, o antBuild) antRequest {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -157,10 +192,39 @@ func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
 	// 当前世代 Claude 模型不接受 temperature 等采样参数，一律不发送。
 	switch req.Thinking {
 	case "", "off":
-		wr.Thinking = &antThinking{Type: "disabled"}
+		switch o.off {
+		case offAdaptiveLow:
+			wr.Thinking = &antThinking{Type: "adaptive", Display: "summarized"}
+			wr.OutputConfig = &antOutput{Effort: "low"}
+		case offBetweenTools:
+			wr.Thinking = &antThinking{Type: offBetweenTools}
+		default:
+			wr.Thinking = &antThinking{Type: offDisabled}
+		}
 	default:
-		wr.Thinking = &antThinking{Type: "adaptive"}
+		wr.Thinking = &antThinking{Type: "adaptive", Display: "summarized"}
 		wr.OutputConfig = &antOutput{Effort: req.Thinking}
+	}
+
+	// 已经结束的轮次不回传思考块，只保留本轮（最后一条用户消息之后）的。
+	//
+	// 新一代模型（Fable 5.1、Opus 5.5、Sonnet 5.5）只接受「前缀没变」的思考块：
+	// system、tools 与它之前的每一条消息都要与生成它时逐字节一致，否则整个请求
+	// 400。我们的历史不是只追加的——本轮状态块只拼在当轮输入上、下一轮就去掉，
+	// 一次性输入（心跳提示）事后剔除，日界线与间隔标注事后补上，还有压缩——
+	// 所以上一轮的思考块到了这一轮必然对不上。官方给的两条出路之一正是把它们剥掉，
+	// 其余块原样保留；较早的模型本来就只保留最后一轮，服务端会自动剥。
+	// 代价是 Opus 4.5 起、Sonnet 4.6 起的模型默认本会保留之前各轮的思考，现在看不到了；
+	// Haiku 4.5 与更早的模型本来就只保留最后一轮。
+	//
+	// 本轮之内（工具循环的多次请求）消息通常只追加不改，思考块照常回传，这也是工具
+	// 调用必需的。「通常」是因为预算裁剪或工具列表在轮中变化时前缀也会变，那种情况
+	// 由 ChatStream 按官方做法剥掉全部思考块重发一次（stripAll）。
+	lastUser := -1
+	for i, m := range req.Messages {
+		if m.Role == RoleUser {
+			lastUser = i
+		}
 	}
 
 	var system []string
@@ -176,7 +240,7 @@ func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
 		wr.Messages = append(wr.Messages, antMessage{Role: role, Content: blocks})
 	}
 
-	for _, m := range req.Messages {
+	for i, m := range req.Messages {
 		switch m.Role {
 		case RoleSystem:
 			if m.Content != "" {
@@ -196,12 +260,19 @@ func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
 			appendBlocks("user", []antBlock{{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content}})
 		case RoleAssistant:
 			var blocks []antBlock
-			for _, b := range m.ReasoningBlocks {
+			reasoning := m.ReasoningBlocks
+			if i < lastUser || o.stripAll {
+				reasoning = nil
+			}
+			for _, b := range reasoning {
 				switch {
 				case b.Type == "redacted_thinking" && b.Data != "":
 					blocks = append(blocks, antBlock{Type: "redacted_thinking", Data: b.Data})
-				case b.Signature != "" && b.Text != "":
-					blocks = append(blocks, antBlock{Type: "thinking", Thinking: b.Text, Signature: b.Signature})
+				case b.Signature != "":
+					// 文本为空也要回传（omitted 或工具间进度块）：签名里才是完整的思考，
+					// 本轮的思考块少回一个就是「部分丢弃」，API 会拒绝
+					text := b.Text
+					blocks = append(blocks, antBlock{Type: "thinking", Thinking: &text, Signature: b.Signature})
 				}
 				// 无签名的思考块一律丢弃：跨 provider 的历史会被 API 拒绝
 			}
@@ -229,7 +300,7 @@ func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
 		}
 		wr.Tools = append(wr.Tools, antTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
-	if cache {
+	if o.cache {
 		markCacheBreakpoints(&wr)
 	}
 	return wr
@@ -272,28 +343,69 @@ type partialBlock struct {
 	data      string
 }
 
-func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	body, err := json.Marshal(buildAnthropicRequest(req, p.cache))
-	if err != nil {
-		return nil, err
+// offMode 返回这个模型上「关闭思考」该用的写法，没学到过就先试 disabled。
+func (p *Anthropic) offMode(model string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if m, ok := p.offModes[model]; ok {
+		return m
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", p.apiKey)
-	httpReq.Header.Set("Anthropic-Version", anthropicVersion)
-	httpReq.Header.Set("Accept", "text/event-stream")
+	return offDisabled
+}
 
-	resp, err := p.client.Do(httpReq)
+// nextOffMode 根据一次 400 的报错决定换哪种写法再试；返回空串表示这次失败与此无关。
+//
+// 靠报错学而不是维护一张「哪个模型认哪种写法」的表：那张表每出一代模型就要跟着改，
+// 漏一次就是关掉思考的用户整轮报错。报错原文由官方文档给出：Sonnet 5.5 的那句里
+// 点名要 between_tools，思考常开的模型说 "thinking.type.disabled" is not supported。
+// 只看这两个关键词、不比对整句——官方提醒过措辞会变。
+func nextOffMode(current, body string) string {
+	switch {
+	case current == offDisabled && strings.Contains(body, "between_tools"):
+		return offBetweenTools
+	case current != offAdaptiveLow && strings.Contains(body, "thinking.type."+current):
+		return offAdaptiveLow
+	}
+	return ""
+}
+
+// isSignatureMismatch 认出「回传的思考块与前缀对不上」的 400。只看报错开头那半句：
+// 官方说结尾那句点名改了什么的话措辞会变，不要拿来匹配。
+func isSignatureMismatch(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest &&
+		strings.Contains(apiErr.Body, "Invalid `signature` in `thinking` block")
+}
+
+func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	b := antBuild{cache: p.cache, off: p.offMode(req.Model)}
+	resp, err := p.send(ctx, buildAnthropicRequest(req, b))
+	// 关闭思考被这个模型拒绝：换成它接受的写法重发，并记住，以后不再白挨这一次 400。
+	// 最多换两次（disabled → between_tools → 不发），不会无限重试。
+	for tries := 0; tries < 2 && (req.Thinking == "" || req.Thinking == "off"); tries++ {
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+			break
+		}
+		next := nextOffMode(b.off, apiErr.Body)
+		if next == "" {
+			break
+		}
+		b.off = next
+		p.mu.Lock()
+		p.offModes[req.Model] = b.off
+		p.mu.Unlock()
+		resp, err = p.send(ctx, buildAnthropicRequest(req, b))
+	}
+	// 回传的思考块与前缀对不上：本轮之内本该只追加，但预算裁剪或工具列表在轮中变化
+	// 时前缀也会变。官方给的做法是剥掉全部思考块（其余块原样留着）重发一次。
+	// 原样重发没用，官方也说了同一请求体重试不会好。
+	if isSignatureMismatch(err) {
+		b.stripAll = true
+		resp, err = p.send(ctx, buildAnthropicRequest(req, b))
+	}
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(errBody))}
 	}
 
 	ch := make(chan StreamEvent)
@@ -413,6 +525,33 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 		finish()
 	}()
 	return ch, nil
+}
+
+// send 发出一次请求；非 200 时读出报错正文，作为 *APIError 返回。
+func (p *Anthropic) send(ctx context.Context, wr antRequest) (*http.Response, error) {
+	body, err := json.Marshal(wr)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Api-Key", p.apiKey)
+	httpReq.Header.Set("Anthropic-Version", anthropicVersion)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(errBody))}
+	}
+	return resp, nil
 }
 
 // assembleBlocks 按 content block 下标顺序还原思考块。

@@ -157,6 +157,34 @@ func TestReasoningContentSentBack(t *testing.T) {
 	}
 }
 
+// TestReasoningContentSentBackForEveryTurn：DeepSeek 要求请求带工具时「所有之前轮次」的
+// reasoning_content 都回传，漏了就是 400——不只是本轮工具循环里的那几条。
+// 我们每轮都带工具，所以已经结束的轮次（没有工具调用的那种）也要带上。
+func TestReasoningContentSentBackForEveryTurn(t *testing.T) {
+	var got map[string]any
+	srv := sseServer(t, []string{`{"choices":[{"delta":{"content":"ok"}}]}`}, &got)
+	defer srv.Close()
+
+	p := NewOpenAICompat("", srv.URL, "sk-test", DialectDeepSeek)
+	msgs := []Message{
+		{Role: RoleUser, Content: "第一问"},
+		{Role: RoleAssistant, Content: "第一答", Reasoning: "第一轮的思考"},
+		{Role: RoleUser, Content: "第二问"},
+	}
+	tools := []ToolSpec{{Name: "read_file", Schema: json.RawMessage(`{"type":"object"}`)}}
+	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: msgs, Tools: tools, Thinking: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	sent, _ := got["messages"].([]any)
+	assistant, _ := sent[1].(map[string]any)
+	if assistant["reasoning_content"] != "第一轮的思考" {
+		t.Errorf("上一轮的 reasoning_content 没有回传: %v", assistant)
+	}
+}
+
 func TestUsageParsedAndStreamOptionsSent(t *testing.T) {
 	var got map[string]any
 	srv := sseServer(t, []string{

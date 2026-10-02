@@ -104,7 +104,7 @@ Where a vendor runs separate accounts inside and outside mainland China (Zhipu, 
 
 The Qwen presets use the two general `dashscope` domains. Alibaba Cloud now recommends workspace-specific domains (`{WorkspaceId}.{region}.maas.aliyuncs.com`). The general domains get no new features after 2026-09-30 but keep working. A workspace domain contains your own workspace ID, so it cannot be a preset. To use one, change the Base URL of that provider to the address your console shows.
 
-The `Ollama` entry points at your own machine and therefore asks for no key; no provider whose `base_url` points at `localhost` / `127.0.0.1` does. It also deliberately ships without models: only your machine knows which ones you have. Run `ollama pull` first, then add the model under that provider.
+The `Ollama` entry points at your own machine and therefore asks for no key; no provider whose `base_url` points at `localhost` / `127.0.0.1` does. It also deliberately ships without models: only your machine knows which ones you have. Run `ollama pull` first, then add the model under that provider. Its thinking-parameter dialect is "send nothing": Ollama answers a thinking parameter sent to a model without thinking support with a 400 (`does not support thinking`), while models that do support thinking think by default without one. If every model you have is a thinking model and you want to set the effort, change this entry's dialect to "generic reasoning_effort".
 
 Model IDs in the presets do expire — vendors retire old models fairly often — so they are reviewed against the changelog at release time. If one stops working, edit it in the UI.
 
@@ -116,9 +116,9 @@ The OpenAI-compatible protocol only standardises the messages / tools / stream l
 |---|---|---|
 | `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | all five |
 | `glm` | same as above | `low` / `high` / `max` |
-| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split` | on/off only |
+| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split`; uses `max_completion_tokens` | on/off only |
 | `qwen` | `enable_thinking` boolean | on/off only |
-| `kimi` | `reasoning_effort` | `low` / `high` / `max` |
+| `kimi` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | `low` / `high` / `max` (`off` is sent as `low`, because K3 cannot turn thinking off) |
 | `openai` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | all six (`off` is sent as `none`) |
 | `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
 | `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |
@@ -134,6 +134,8 @@ Two API modes are supported:
 | Mode | Description |
 |---|---|
 | `openai_compat` | The OpenAI-compatible protocol (DeepSeek and others) |
-| `anthropic` | The Anthropic Messages API. Thinking effort maps to `thinking:{type:"adaptive"}` plus `output_config.effort` (`off` becomes `disabled`); current-generation Claude models do not accept sampling parameters, so `temperature` is not sent and that field of a model entry has no effect here |
+| `anthropic` | The Anthropic Messages API. Thinking effort maps to `thinking:{type:"adaptive"}` plus `output_config.effort`, with the thinking summary requested (newer models return no thinking text by default). `off` is sent as `disabled` first. If the model rejects it, the error decides the fallback: `between_tools` on Sonnet 5.5, or the lowest effort, `low`, on always-thinking models such as Fable 5.1 and Opus 5.5. On those models "off" still thinks and is still billed, just as little as possible. The working form is remembered for the rest of the process. current-generation Claude models do not accept sampling parameters, so `temperature` is not sent and that field of a model entry has no effect here |
 
 Anthropic mode has one extra switch: **prompt caching** (on by default). With it on, the unchanging parts of a request (tools, system, the history so far) are marked cacheable, and whatever hits the cache is billed at roughly a tenth of the price. The cost is that a miss pays about a quarter extra for the write, and the cache only lives a few minutes — if your conversation moves more slowly than that (chatting on and off through an IM channel, say), turning it off is cheaper. OpenAI-compatible mode has no such switch: caching at DeepSeek and OpenAI is maintained server-side, and whether you hit it depends only on how stable your request prefix is (see [How the context is organized](context.md)).
+
+Anthropic mode sends back thinking blocks from the **current** turn only. Finished turns keep their text and tool calls. Newer models (Fable 5.1, Opus 5.5, Sonnet 5.5) accept a thinking block only if everything before it is unchanged, and this project's history does change between turns: the per-turn status block is attached to that turn's input only, one-time inputs such as the heartbeat prompt are removed afterwards, day markers are added later, and there is compaction. Sending an earlier turn's thinking blocks back would make the whole request fail with a 400. Stripping them is one of the fixes the official docs give. The cost is that Opus 4.5 and later and Sonnet 4.6 and later, which keep earlier turns' thinking by default, no longer see it. Haiku 4.5 and earlier models only ever kept the last turn's thinking. If the prefix changes within the current turn too (budget trimming, or the tool list changing mid-turn), that 400 triggers one automatic retry with every thinking block stripped.
