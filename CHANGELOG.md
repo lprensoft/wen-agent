@@ -9,6 +9,72 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v0.9.0] - 2026-10-02
+
+### 破坏性变更
+
+- 不再支持只设 `DEEPSEEK_API_KEY`、不写配置文件就启动
+- 删除样例配置 `config.example.yaml` 与 `config.example.en.yaml`
+
+### 新增
+
+- 首次运行时由向导配置模型提供商、API Key 与模型
+- 向导保存前会试连一次所选模型
+- 向导会确认端口，8080 被占用时自动换成空闲端口
+- 新增 `wen onboard`，随时重走一遍首次配置
+- `wen status` 标出未配置模型与缺 API Key 的情况
+
+### 变更
+
+- `config.yaml` 改为可选，只在改端口、语言等启动期配置时需要
+- 只写了 `providers.deepseek` 的旧配置默认使用 `deepseek-flash`
+- 预置的模型清单与领取 API Key 的链接按各家官方文档更新
+- MiniMax 国内站预置的接口地址改为 `api.minimax.cn`
+- Anthropic 不再回传已经结束的轮次里的思考内容
+- Kimi 关闭思考时改用最低一档，且不再发送 `temperature`
+
+### 修复
+
+- 没有配置文件时 `wen config` 与 `wen status` 也能正常进入
+- OpenRouter 预置的模型别名改为实际存在的写法
+- Anthropic 新一代模型的思考过程在界面上不再为空
+- Anthropic 新一代模型关闭思考时不再报错
+- Anthropic 新一代模型的多轮对话不再因思考签名报错
+- 端口被占用时不再先提示已启动、随后退出
+
+---
+
+### Breaking changes
+
+- Starting with only `DEEPSEEK_API_KEY` set and no config file is no longer supported
+- The sample configs `config.example.yaml` and `config.example.en.yaml` are removed
+
+### Added
+
+- On first run a wizard sets up the model provider, API key and model
+- The wizard tests the chosen model once before saving
+- The wizard confirms the port and picks a free one if 8080 is taken
+- New `wen onboard` command to go through the setup again at any time
+- `wen status` points out a missing model or a missing API key
+
+### Changed
+
+- `config.yaml` is optional and only needed to change start-up settings such as the port or language
+- An old config with only `providers.deepseek` now defaults to `deepseek-flash`
+- Preset model lists and API key links are updated from each provider's official docs
+- The MiniMax China preset now uses the endpoint `api.minimax.cn`
+- Anthropic no longer receives the thinking from turns that have already finished
+- Kimi uses its lowest effort when thinking is off and no longer receives `temperature`
+
+### Fixed
+
+- `wen config` and `wen status` now work without a config file
+- The OpenRouter preset now uses model aliases that actually exist
+- Thinking from newer Anthropic models is no longer blank in the interface
+- Turning thinking off no longer fails on newer Anthropic models
+- Multi-turn conversations with newer Anthropic models no longer fail on thinking signatures
+- A busy port no longer reports a successful start right before exiting
+
 ## [v0.8.2] - 2026-08-27
 
 ### 新增
