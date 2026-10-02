@@ -105,8 +105,8 @@ jobs:
             echo "==> $goos/$goarch"
             GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "$work/$binary" ./cmd/wen
 
-            # 只给二进制的话，用户拿到手不知道配置从哪来
-            cp config.example.yaml config.example.en.yaml README.md README.en.md CHANGELOG.md LICENSE "$work/"
+            # 不带样例配置：第一次运行由向导配好模型，config.yaml 是可选的
+            cp README.md README.en.md CHANGELOG.md LICENSE "$work/"
             # README 里的细节都在 docs/，不一并打包的话包里的链接全是死的
             cp -r docs "$work/"
 
@@ -141,7 +141,7 @@ jobs:
             echo "| macOS | \`darwin-arm64\`（M 系列）、\`darwin-amd64\`（Intel） |"
             echo "| Linux | \`linux-amd64\`、\`linux-arm64\` |"
             echo ""
-            echo "解压后把 \`config.example.yaml\` 复制为 \`config.yaml\`，填上 API Key 再运行。"
+            echo "解压后直接运行，第一次运行会进入向导：选模型提供商、填 API Key、选模型。"
             echo "校验和见 \`SHA256SUMS.txt\`。"
             echo ""
             echo "macOS 与 Linux 上首次运行需要加执行权限：\`chmod +x wen\`。"
@@ -155,7 +155,7 @@ jobs:
             echo "| macOS | \`darwin-arm64\` (Apple silicon), \`darwin-amd64\` (Intel) |"
             echo "| Linux | \`linux-amd64\`, \`linux-arm64\` |"
             echo ""
-            echo "Unpack it, copy \`config.example.en.yaml\` to \`config.yaml\`, fill in your API key and run it."
+            echo "Unpack it and run it. The first run opens a wizard where you pick a model provider, enter the API key and choose a model."
             echo "Checksums are in \`SHA256SUMS.txt\`."
             echo ""
             echo "On macOS and Linux the binary needs the executable bit the first time: \`chmod +x wen\`."
@@ -202,13 +202,13 @@ jobs:
             echo ""
             echo "---"
             echo ""
-            echo "下载与运行方式同正式版：解压后把 \`config.example.yaml\` 复制为 \`config.yaml\`，"
-            echo "填上 API Key 再运行；校验和见 \`SHA256SUMS.txt\`。"
+            echo "下载与运行方式同正式版：解压后直接运行，第一次运行会进入向导配置模型；"
+            echo "校验和见 \`SHA256SUMS.txt\`。"
             echo "macOS 与 Linux 首次运行需要 \`chmod +x wen\`；macOS 还需"
             echo "\`xattr -d com.apple.quarantine wen\` 解除隔离。"
             echo ""
-            echo "Download and run it the same way as a stable release: unpack it, copy \`config.example.en.yaml\`"
-            echo "to \`config.yaml\`, fill in your API key and run it; checksums are in \`SHA256SUMS.txt\`."
+            echo "Download and run it the same way as a stable release: unpack it and run it, and the first run"
+            echo "opens a wizard to set up the model. Checksums are in \`SHA256SUMS.txt\`."
             echo "On macOS and Linux the binary needs \`chmod +x wen\` the first time; on macOS also run"
             echo "\`xattr -d com.apple.quarantine wen\` to clear the quarantine flag."
           } > release-notes.md

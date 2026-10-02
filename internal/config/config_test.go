@@ -7,17 +7,55 @@ import (
 )
 
 func TestLoadDefaultsWhenFileMissing(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "sk-test-default")
-
+	// 没有配置文件不是错误：模型由首次运行向导配进 models.json，这里只给启动期默认值
 	cfg, err := Load(filepath.Join(t.TempDir(), "config.yaml"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Server.Port != 8080 || cfg.Model.Name != "deepseek-v4-flash" {
+	if cfg.Server.Port != 8080 || cfg.Model.Thinking != "high" || cfg.Model.MaxTokens != 4096 {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
-	if got := cfg.Providers["deepseek"].APIKey; got != "sk-test-default" {
-		t.Errorf("api_key env expansion failed, got %q", got)
+	// 不再内置任何提供商：此前写死的 DeepSeek + ${DEEPSEEK_API_KEY} 是一条没写进
+	// 文档的第二入口
+	if len(cfg.Providers) != 0 || cfg.Model.Provider != "" {
+		t.Errorf("默认配置不该带提供商: %+v / %+v", cfg.Providers, cfg.Model)
+	}
+}
+
+func TestLoadAcceptsEmptyAPIKey(t *testing.T) {
+	// 密钥为空不再在这一层报错：models.json 里可能已经配好了别的提供商，
+	// 「有没有能用的模型」要等两层合并之后才判得了
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${WEN_TEST_UNSET_KEY}
+`), 0o644)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err != nil {
+		t.Fatalf("空密钥不该让 Load 失败: %v", err)
+	}
+}
+
+func TestCreateMinimal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.yaml")
+	if err := CreateMinimal(path, "第一行\n第二行", 8090, "en"); err != nil {
+		t.Fatalf("CreateMinimal: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.Port != 8090 || cfg.Lang != "en" {
+		t.Errorf("写进去的值没读回来: port=%d lang=%q", cfg.Server.Port, cfg.Lang)
+	}
+	// 只新建、不改写
+	if err := CreateMinimal(path, "x", 9000, ""); err == nil {
+		t.Error("文件已存在时应拒绝，不该覆盖用户的配置")
 	}
 }
 
@@ -149,7 +187,6 @@ providers:
 }
 
 func TestSessionDirDefault(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "sk-x")
 	dir := t.TempDir()
 	cfg, err := Load(filepath.Join(dir, "config.yaml"))
 	if err != nil {

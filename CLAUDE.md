@@ -149,7 +149,17 @@
 
 ## 模型配置约定
 
-提供商与模型由 `internal/modelcfg` 管理：config.yaml 的 `model:` / `providers:` 段是初始值，Web UI 的改动写入 `<配置目录>/models.json` 覆盖层（0600 权限，含明文密钥，不入库），**永不回写 config.yaml**（`${VAR}` 在解析前展开，回写会固化明文并丢注释）。同名条目由覆盖层完全覆盖，config.yaml 新增的提供商仍可见（`source=config`），界面删除写「删除坠碑」，未改动过的条目不落盘。保存与切换后由 `Agent.SetModel` 热生效，一轮请求全程使用入口处取的同一份快照。
+提供商与模型由 `internal/modelcfg` 管理：config.yaml 的 `model:` / `providers:` 段（可选）是初始值，Web UI 的改动写入 `<配置目录>/models.json` 覆盖层（0600 权限，含明文密钥，不入库），**永不回写 config.yaml**（`${VAR}` 在解析前展开，回写会固化明文并丢注释）。同名条目由覆盖层完全覆盖，config.yaml 新增的提供商仍可见（`source=config`），界面删除写「删除坠碑」，未改动过的条目不落盘。保存与切换后由 `Agent.SetModel` 热生效，一轮请求全程使用入口处取的同一份快照。
+
+**config.yaml 整个是可选的，新用户一个配置文件都没有。** 第一次运行 `wen` 且没有能用的模型时进首次运行向导（`cmd/wen/onboard.go`，也可 `wen onboard` 重跑），只问模型提供商、API Key、模型与端口，其余全取默认值。几条必须守住的：
+
+- **「有没有能用的模型」只由 `modelcfg.Store.Resolve` 判**（含缺密钥），不在 `config.Load` 里判。Load 只校验 config.yaml 里**写了**的东西——此前它在合并 models.json 之前就查密钥，于是 models.json 配好了的人照样起不来，连 `wen config` 都进不去。`config.Default()` 因此不带任何提供商，`modelcfg.NewStore` 载入时也放行零个提供商（「至少保留一个」只在保存时把关）。
+- **向导的答案各归原处，不新开文件**：模型走 `modelsBackend.saveModels` 进 models.json（服务在跑时经接口，当场生效）；端口与语言只在与默认值不同、且还没有 config.yaml 时由 `config.CreateMinimal` **新建**一份只含这几项的文件。已有的 config.yaml 一律不改写，那时向导也不问端口。
+- 端口一项存在的理由是 8080 被占用时服务起不来，所以向导只在默认端口确实被占时才把预填值换掉；`serve` 也先 `net.Listen` 再宣布「已启动」，占用时给出该怎么改的提示。
+- 不在终端里（`isInteractive` 为假）不进向导：打一行提示后退出，不能卡着等一个永远不来的输入。
+- **向导解决不了的不进向导**：当前提供商来自 config.yaml、只是密钥为空（几乎总是 `${VAR}` 没设）时直接点名报错——进向导只能再加一家、把明文密钥存进 models.json，从此永久压过 config.yaml；同一配置目录已有实例在跑时也报错，离线改 models.json 会被它下一次保存整个盖掉。
+- 旧版 `Default()` 带的 `model.provider: deepseek` / `name: deepseek-v4-flash` 由 `config.legacyModelDefaults` 按原样补回（只对写了 config.yaml 的人、只认名叫 deepseek 的提供商），否则只写了 `providers.deepseek` 的老配置升级后会起不来。
+- 试连与设置页的「测试连接」共用 `llm.Probe`，判据只有一份。
 
 新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口（构造参数走 `llm.Config`）。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。
 
@@ -186,11 +196,11 @@
 
 `README.md` 是门面，只到「这是什么、怎么跑起来、有哪些东西」为止；每个功能的细节、配置项表格与设计取舍一律放 `docs/`，README 里只留一句话与一个链接。判据是「读的人是刚来的还是已经在用的」——刚来的人要在一屏内决定值不值得试，配置项表格对他是噪声。新增插件时在 `docs/plugins/` 对应的分组文件里加一节，并在 `docs/plugins/README.md` 的总览表里补一行（分组与设置页的 `Category()` 一致），README 的插件表只在多出一个分组时才动。
 
-**每篇文档都有中英两版，改一处就要改另一处**：`README.md` / `README.en.md`、`config.example.yaml` / `config.example.en.yaml`，以及 `docs/<名>.md` / `docs/en/<名>.md`（插件文档同理落在 `docs/plugins/` 与 `docs/en/plugins/`）。中文是主版本，英文跟着它走——只改中文的话，英文那边会慢慢变成另一个项目的介绍。两边的导航行末尾都挂着语言切换链接（`中文　·　[English](...)`），新增文档时一并补上，否则读者从英文首页点进去就再也回不到英文了。英文版按英语的语法与用词写，不做逐句直译。**块名与枚举值在英文文档里写英文那一份**（`[Character]`、`[Today's Plan]`、`preference` / `boundary`）：程序发给英文用户的模型的就是那些字面量，写中文反而对不上——这条从前是反过来的，那时提示词只有中文。落盘的枚举值仍以中文为规范形式（见「国际化约定」的 `prompt.Enum`），文档里要提到磁盘上存的是什么时才说中文那一份。英文措辞以 `internal/i18n/locales/en.json` 与 `internal/prompt/locales/en.json` 为准，别在文档里另起一套说法。
+**每篇文档都有中英两版，改一处就要改另一处**：`README.md` / `README.en.md`，以及 `docs/<名>.md` / `docs/en/<名>.md`（插件文档同理落在 `docs/plugins/` 与 `docs/en/plugins/`）。中文是主版本，英文跟着它走——只改中文的话，英文那边会慢慢变成另一个项目的介绍。两边的导航行末尾都挂着语言切换链接（`中文　·　[English](...)`），新增文档时一并补上，否则读者从英文首页点进去就再也回不到英文了。英文版按英语的语法与用词写，不做逐句直译。**块名与枚举值在英文文档里写英文那一份**（`[Character]`、`[Today's Plan]`、`preference` / `boundary`）：程序发给英文用户的模型的就是那些字面量，写中文反而对不上——这条从前是反过来的，那时提示词只有中文。落盘的枚举值仍以中文为规范形式（见「国际化约定」的 `prompt.Enum`），文档里要提到磁盘上存的是什么时才说中文那一份。英文措辞以 `internal/i18n/locales/en.json` 与 `internal/prompt/locales/en.json` 为准，别在文档里另起一套说法。
 
-两份**样例配置**是这里唯一能上测试的一对：散文没法比对，而配置是结构化的，因此 `TestConfigExamplesMatch` 把说明文字剥掉，逐行比对生效的配置行与被注释掉的选项（`lang:` 本身就是注释掉的，只比生效行等于漏掉它们）。说明文字各写各的——英文比中文长，硬要求行数对齐等于绑住译者的手；但配置本身不许分叉，加了一项只加在中文那份里，英文用户照着复制就少一项，而这既不报错也没人看得出来。样例里只写「这一项是什么」，详细说明归 `docs/configuration.md`，与 README 那条判据相同。
+**不再提供样例配置**（`config.example*.yaml` 已删除）：新用户由首次运行向导配置，config.yaml 只在改启动期配置时才需要，各项说明集中在 `docs/configuration.md` 的表格里。新增 config.yaml 配置项时补那张表（中英两份），不要再造一份样例文件——样例与表格各写一遍，迟早会分叉。
 
-发布包里带的是 `README.md` + `README.en.md` + 两份样例配置 + 整个 `docs/`（含 `docs/en/`，见 `.github/workflows/release.yml`）：README 里的链接全指向 docs，不一并打包的话下载下来的包里全是死链。
+发布包里带的是 `README.md` + `README.en.md` + 整个 `docs/`（含 `docs/en/`，见 `.github/workflows/release.yml`）：README 里的链接全指向 docs，不一并打包的话下载下来的包里全是死链。
 
 ## 国际化约定
 
@@ -248,7 +258,7 @@
 ```bash
 go build -o wen.exe ./cmd/wen   # 构建
 go test ./...                   # 测试
-go run ./cmd/wen                # 运行（读取 ./config.yaml，密钥也在其中）
+go run ./cmd/wen                # 运行（没配过模型时先进首次运行向导）
 ```
 
 改了文案、提示词、配置项或日志之后，两份语言包各查一次：

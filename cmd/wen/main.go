@@ -8,9 +8,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -73,6 +75,17 @@ func runServe(args []string) {
 	// 语言要在第一行日志之前定下——启动日志本身就是要跟着它走的东西之一
 	adoptLang(cfg)
 
+	// 还没有能用的模型时先走首次运行向导（不在终端里就报一句该怎么办）。
+	// 向导可能改了端口与语言，所以之后再定一次语言。
+	if err := ensureModel(cfg, path, *port != 0); err != nil {
+		if errors.Is(err, errOnboardAborted) {
+			fmt.Print(tr("cli.onboard.aborted_serve", "已退出向导，服务没有启动。随时再运行 wen 或 wen onboard 重新开始。\n"))
+			os.Exit(1)
+		}
+		log.Fatal(err)
+	}
+	adoptLang(cfg)
+
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
@@ -126,7 +139,11 @@ func runServe(args []string) {
 	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	logf("log.serve.config_file", "配置文件: %s", path)
+	if _, err := os.Stat(path); err == nil {
+		logf("log.serve.config_file", "配置文件: %s", path)
+	} else {
+		logf("log.serve.no_config_file", "配置文件: 无（全部使用默认值），配置目录 %s", cfg.BaseDir)
+	}
 	logf("log.serve.language", "语言: %s", langSummary(cfg))
 	logf("log.serve.model", "模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
 	// 插件说明按语言取一次再打：日志与设置页看到的该是同一句话
@@ -138,6 +155,14 @@ func runServe(args []string) {
 		logf("log.serve.plugin", "插件: %-12s [%s] %s", st.Name, state, st.Description)
 	}
 	logf("log.serve.access", "访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
+
+	// 先把端口拿到手再宣布「已启动」：此前监听放在 goroutine 里，端口被占用时
+	// 日志先说启动成功、紧接着进程退出，读的人得自己把两行拼起来。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		plugins.StopAll()
+		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
+	}
 	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
@@ -164,7 +189,7 @@ func runServe(args []string) {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()

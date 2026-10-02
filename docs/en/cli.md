@@ -6,7 +6,8 @@
 
 ```
 wen                          start the server (same as wen serve)
-wen serve [-c config] [-p port]  start the server
+wen serve [-c config] [-p port]  start the server; runs the setup wizard first if no model is usable
+wen onboard [-c config]          run the setup wizard again: add a provider and switch to it
 wen config [section] [-c config] guided configuration (sections: plugins / models / server)
 wen plugins [subcommand] [-c config]  manage external plugin bundles (list / install / uninstall / info)
 wen status [-c config]           print the current configuration and runtime state
@@ -15,6 +16,14 @@ wen update [--check] [-y]    check for and install a new version
 wen version                  print the version
 wen help [command]           show help
 ```
+
+## wen onboard: the setup wizard
+
+The first time you run `wen` without a usable model, the wizard comes up on its own. You pick a language, a model provider, an API key and a model. The connection is tested once, and finally you confirm the port. It defaults to 8080, and if that port is taken the next free one is suggested. Once you answer, the service starts. Where the answers are stored, and when a `config.yaml` gets created, is described in [Configuration and models](configuration.md#first-run).
+
+You can go through it again any time with `wen onboard`. It adds another provider and switches to it, leaving existing ones alone. If the service is running, it saves through the service's API and the change takes effect at once. In that case it does not ask for the port. It also skips the port when the config directory already has a `config.yaml`, because the wizard never rewrites an existing config file. Change the port there instead.
+
+The wizard needs a terminal. If the service starts outside one (systemd, containers, `nohup`) and no model is configured yet, the program prints a hint and exits instead of waiting for input.
 
 ## wen config: changing plugin settings from a terminal
 
@@ -29,7 +38,7 @@ Why going through the API is mandatory while the service is up: the plugin state
 
 In offline mode plugins are **registered but not initialized**: reading their config-field declarations and changing toggles and parameters does not require them to actually run, whereas initializing them as usual would bring up every chat channel's long-lived connection along with the heartbeat and the scheduler — and all you wanted was to change one number.
 
-The first item on the top-level menu is `Language`. It changes **this run only** and is forgotten on exit — `wen config` is something you open once every few months, with a person sitting right there at the terminal, so two extra keypresses beat one more state file. To change the language for good, edit `lang:` in config.yaml (see [Configuration and models](configuration.md#language)). The word "Language" and the language names themselves are never translated: once the interface is in a language you cannot read, that is the one line you can still recognise.
+The first item on the top-level menu is `Language`. It changes **this run only** and is forgotten on exit — `wen config` is something you open once every few months, with a person sitting right there at the terminal, so two extra keypresses beat one more state file. To change the language for good, edit `lang:` in config.yaml, creating the file with just that line if it does not exist (see [Configuration and models](configuration.md#language)). The word "Language" and the language names themselves are never translated: once the interface is in a language you cannot read, that is the one line you can still recognise.
 
 The form is generated from the config fields the plugins declare themselves, the same source the settings page uses, so a new plugin gets both interfaces at once. Plugin actions are here too: select the WeChat channel and a "bind by QR code" action appears, with the code drawn as text right in the terminal (black and white regardless of your color scheme, so it scans under a dark theme too), the raw link printed underneath as a fallback, and an automatic refresh and redraw when it expires — no need to open the web UI on a remote server just to scan a code.
 

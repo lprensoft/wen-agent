@@ -2,22 +2,68 @@
 
 [← Back to README](../../README.en.md)　·　[中文](../configuration.md)　·　English
 
-## The config file
+## First run
 
-See [config.example.en.yaml](../../config.example.en.yaml). The essentials:
+A fresh install needs no config file. The first time you run `wen` without a usable model, a terminal wizard comes up first:
+
+1. Pick a language. It is used for the interface, the prompts sent to the model and the runtime log.
+2. Pick a model provider. The list is the same preset table as "Add provider" on the settings page (see [Adding a provider](#adding-a-provider) below), with "Custom" as the last entry.
+3. Enter the API key and choose a model. Providers pointing at your own machine, such as Ollama, need no key.
+4. The connection is tested once. If it fails you can fill it in again, pick another provider, or save it anyway.
+5. Confirm the listen port. It defaults to 8080. If another program is using that port, the next free one is suggested instead.
+
+Once you answer, the service starts. To switch models or add providers later, use the settings page or `wen config models`. To go through the wizard again, run `wen onboard`. It adds another provider and switches to it, leaving existing ones alone.
+
+Each answer goes where that kind of setting already lives. No new file is introduced:
+
+- The model goes into `<config dir>/models.json`, the same file the settings page and `wen config` edit.
+- The port and language are written only when they **differ from the defaults** and the config directory has no `config.yaml` yet. In that case the wizard creates a `config.yaml` holding just those options. If both are left at their defaults, there is no config file at all.
+- The wizard never rewrites an existing `config.yaml`.
+
+When not running in a terminal (systemd, containers, `nohup`), there is nobody to ask. Without a configured model the program prints a hint and exits. For such deployments, run `wen onboard` once in a terminal first, or write the `model:` and `providers:` sections in `config.yaml` as shown below.
+
+In two other cases the wizard does not start even in a terminal. The program reports an error instead, because the wizard cannot fix them:
+
+- The current provider is defined in `config.yaml` but its `api_key` is empty. This almost always means the environment variable behind `${VAR}` is not set, and the error names the provider. The wizard could only add another provider and store a plaintext key in `models.json`.
+- An instance using the same config directory is already running. Use `wen onboard` or the settings page instead, and the change takes effect at once through the running instance.
+
+**The config directory** is `~/.wen/` by default. If the current directory contains a `config.yaml`, the current directory is used instead. With `-c`, the directory of the given file is the config directory. The model configuration, sessions, plugin state and access password all live there.
+
+## config.yaml (optional)
+
+You only need it to change the start-up settings below. Put it in the config directory and write just the options you are changing. The rest take their defaults. An existing full `config.yaml` keeps working as before.
 
 | Option | Description |
 |---|---|
-| `lang` | The language of the interface and of everything the program reports: `zh` / `en`. Left empty it follows the system locale (see below) |
-| `model.provider` / `model.name` | The provider and model id to start with (the settings page's "Models" section takes over from here; see below) |
-| `model.thinking` | Thinking effort: `off` / `low` / `medium` / `high` / `xhigh` / `max`, `high` by default (`temperature` has no effect while thinking is on; the reasoning is shown as a collapsible block in the web UI) |
-| `model.context_length` | The model's context window in tokens, 1000000 by default. Over budget, whole turns are trimmed starting from the oldest; once measured usage reaches 90% of it, the session is compacted into a summary |
+| `lang` | Which language this service speaks: `zh` / `en`. Left empty it follows the system locale (see below) |
+| `server.host` | The listen address, `127.0.0.1` by default. Set an access password before changing it to an external address (see [Deployment and access control](deployment.md)) |
+| `server.port` | The listen port, `8080` by default. The `-p` command-line flag takes precedence |
 | `server.trust_loopback` | Whether requests from loopback skip authentication, on by default. It **must** be turned off behind a reverse proxy (see [Deployment and access control](deployment.md)) |
-| `providers.<name>` | The provider registry: `type` (`openai_compat` / `anthropic`), `base_url`, `api_key` |
-| `agent.system_prompt` | The system prompt (empty by default; at runtime a `[system environment]` block — OS, shell, working directory, locale — is injected in front of it) |
-| `agent.max_turns` | The cap on tool-loop iterations within one request |
+| `model.provider` / `model.name` | The provider and model id to start with (the settings page's "Models" section takes over from here; see below). If they are omitted and `providers` has an entry named `deepseek`, the old defaults `deepseek` / `deepseek-v4-flash` still apply |
+| `model.temperature` | `0.7` by default. It has no effect while thinking is on |
+| `model.max_tokens` | The output cap for one reply, `4096` by default |
+| `model.thinking` | Thinking effort: `off` / `low` / `medium` / `high` / `xhigh` / `max`, `high` by default (the reasoning is shown as a collapsible block in the web UI) |
+| `model.context_length` | The model's context window in tokens, 1000000 by default. Over budget, whole turns are trimmed starting from the oldest; once measured usage reaches 90% of it, the session is compacted into a summary |
+| `providers.<name>` | The provider registry: `type` (`openai_compat` / `anthropic`), `base_url`, `api_key`, and optionally `thinking_dialect` and `prompt_cache` (see below) |
+| `agent.system_prompt` | The system prompt, empty by default (at runtime a `[system environment]` block — OS, shell, working directory, locale — is injected in front of it) |
+| `agent.max_turns` | The cap on tool-loop iterations within one request, `20` by default |
 | `agent.workdir` | The working directory shared by the plugins and the environment block; empty means the process's current directory |
 | `session.dir` | Where sessions are stored, `<config dir>/sessions` by default |
+
+`model.temperature`, `max_tokens`, `thinking` and `context_length` are also the global defaults. A model entry without its own override falls back to them.
+
+Values may contain `${VAR}`, which is replaced with the environment variable at load time. Deployments without a terminal, such as containers, can configure the model this way instead of using the wizard:
+
+```yaml
+model:
+  provider: deepseek
+  name: deepseek-v4-flash
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}
+```
 
 **Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page and stored only in `<config dir>/plugins.state.json`. On a first run every plugin is enabled with the defaults it declares, except for these ten:
 
@@ -33,7 +79,7 @@ Everything else is on, **the whole roleplay group and `heartbeat` included** —
 
 `lang:` decides which language **this service** speaks: the prompts and tool descriptions sent to the model, the plugins' status lines, the notes written into sessions, the runtime log, and the output of commands like `wen status` and `wen plugins`. It takes `zh` or `en`; left empty it follows the system locale, and falls back to Chinese when that cannot be read. A language name it does not recognise is treated as if you had left it empty rather than stopping the service. The start-up log and `wen status` each print a line saying which language is in use and whether it was configured or guessed.
 
-It can only be changed by editing config.yaml — the settings page does not write this one, for the opposite reason to the model settings: `lang` has a single value that almost never changes, and the config file is never written back to (writing back would freeze the plaintext behind `${VAR}` into the file and lose every comment).
+If the language you pick in the setup wizard differs from the system locale, the wizard writes it into the `config.yaml` it creates. After that it can only be changed by editing that file — the settings page does not write this one, for the opposite reason to the model settings: `lang` has a single value that almost never changes, and the config file is never written back to (writing back would freeze the plaintext behind `${VAR}` into the file and lose every comment).
 
 **The browser interface's language is a separate thing**, chosen at the top right of the settings page (`Follow browser / 中文 / English`) and stored only in that browser. One service may be open on a computer and a phone in two different languages, while `lang:` is shared — so the two are kept apart: one governs this web page, the other governs what is sent to the model and written to the log.
 
@@ -44,7 +90,7 @@ It can only be changed by editing config.yaml — the settings page does not wri
 Providers and models can be added, edited and removed on the settings page, and the combination in use switched there, with **the next request** picking up the change — no restart.
 
 - Changes are written to `<config dir>/models.json` (mode 0600, already in `.gitignore`) and **never back to config.yaml** — `${VAR}` in an `api_key` is expanded before parsing, so writing back would freeze the plaintext key into the file and lose every comment.
-- The `providers:` and `model:` sections of config.yaml are initial values: an entry of the same name is fully overridden by models.json, while a provider **newly added** to config.yaml still shows up in the list (marked "from the config file"). Deleting it in the UI records a tombstone, so it does not come back after a restart; an entry you have never touched in the UI is not written to models.json at all and keeps following the config file.
+- The `providers:` and `model:` sections of config.yaml, if you wrote them, are initial values: an entry of the same name is fully overridden by models.json, while a provider **newly added** to config.yaml still shows up in the list (marked "from the config file"). Deleting it in the UI records a tombstone, so it does not come back after a restart; an entry you have never touched in the UI is not written to models.json at all and keeps following the config file.
 - Each model entry can override `context_length` / `max_tokens` / `thinking` / `temperature` on its own; left empty, the global values from the `model:` section apply.
 - **Note**: once a key that came from `${VAR}` has been written into models.json it is fixed there, and changing the environment variable afterwards has no effect.
 

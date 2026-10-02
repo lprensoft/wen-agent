@@ -47,11 +47,13 @@ WEN_AUTH_PASSWORD=<口令> wen
 
 ## 服务器部署（Linux）
 
-两种方式：临时或简单场景用启停脚本，长期跑用 systemd（开机自启、崩溃自动拉起、journald 管日志）。两者的共同点：**工作目录必须是 `config.yaml` 所在目录**——wen 从工作目录读配置，会话与插件状态也落在由它推导的目录里，目录不对的表现是「像全新安装一样什么配置都没有」。
+两种方式：临时或简单场景用启停脚本，长期跑用 systemd（开机自启、崩溃自动拉起、journald 管日志）。两者的共同点：**用 `-c` 把配置目录钉死**。`-c` 指向的 `config.yaml` 不存在也没关系（全部取默认值），它所在的目录就是配置目录，模型配置、会话与插件状态都落在那里。不钉死的话，当前目录没有 `config.yaml` 时会落到运行用户的 `~/.wen/`，换个用户或换个目录启动，表现就是「像全新安装一样什么配置都没有」。
+
+服务在后台跑时没有终端可以提问，所以**第一次启动之前**先在终端里用同一个 `-c` 跑一次首次运行向导，把模型配好（见[命令行](cli.md#wen-onboard首次运行向导)）。
 
 ### 启停脚本
 
-放在 wen 二进制与 `config.yaml` 同目录，保存为 `wen.sh` 并 `chmod +x wen.sh`：
+放在 wen 二进制同目录，保存为 `wen.sh` 并 `chmod +x wen.sh`。第一次启动前先在这个目录里执行 `./wen onboard -c ./config.yaml` 配好模型：
 
 ```sh
 #!/bin/sh
@@ -71,7 +73,7 @@ start() {
         echo "wen 已在运行（pid $(cat "$PIDFILE")）"
         exit 0
     fi
-    nohup ./wen >>"$LOGFILE" 2>&1 &
+    nohup ./wen -c ./config.yaml >>"$LOGFILE" 2>&1 &
     echo $! >"$PIDFILE"
     sleep 1
     if running; then
@@ -142,7 +144,7 @@ Type=simple
 User=wen
 Group=wen
 WorkingDirectory=/opt/wen
-ExecStart=/opt/wen/wen
+ExecStart=/opt/wen/wen -c /opt/wen/config.yaml
 
 # 崩溃自动拉起；正常 stop 不算失败
 Restart=on-failure
@@ -175,6 +177,9 @@ WantedBy=multi-user.target
 sudo useradd --system --home /opt/wen --shell /usr/sbin/nologin wen
 sudo chown -R wen:wen /opt/wen
 
+# 以同一用户、同一个 -c 配好模型（交互式向导，只此一次）
+sudo -u wen /opt/wen/wen onboard -c /opt/wen/config.yaml
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now wen
 ```
@@ -190,6 +195,6 @@ journalctl -u wen --since today    # 看今天的日志
 
 两点注意：
 
-- 用了 `User=wen` 之后，终端配置工具要以同一用户、同一目录执行才能连上运行中的实例：`cd /opt/wen && sudo -u wen ./wen config`。
+- 用了 `User=wen` 之后，终端配置工具要以同一用户、同一个 `-c` 执行才能连上运行中的实例：`sudo -u wen /opt/wen/wen config -c /opt/wen/config.yaml`。
 - `config.yaml` 若放在 `/opt/wen` 之外，把那个目录一并加进 `ReadWritePaths`。
 

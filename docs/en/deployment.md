@@ -49,11 +49,13 @@ An instance that used to be configured with `host: 0.0.0.0` will, after upgradin
 
 ## Server deployment (Linux)
 
-Two ways: a start/stop script for temporary or simple cases, systemd for anything long-running (start on boot, restart on crash, logs in journald). What they have in common: **the working directory must be the one containing `config.yaml`** — wen reads its configuration from the working directory, and sessions and plugin state land in directories derived from it. Getting it wrong looks exactly like a fresh install with no configuration at all.
+Two ways: a start/stop script for temporary or simple cases, systemd for anything long-running (start on boot, restart on crash, logs in journald). What they have in common: **pin the config directory with `-c`**. The `config.yaml` that `-c` points at does not have to exist (everything then takes its default). Its directory is the config directory, where the model configuration, sessions and plugin state are stored. Without `-c`, a missing `config.yaml` in the current directory sends everything to the running user's `~/.wen/`. Start it as another user or from another directory and it looks exactly like a fresh install with no configuration at all.
+
+A service running in the background has no terminal to ask questions in. So **before the first start**, run the setup wizard once in a terminal with the same `-c` to configure the model (see [CLI](cli.md#wen-onboard-the-setup-wizard)).
 
 ### A start/stop script
 
-Put it beside the wen binary and `config.yaml`, save it as `wen.sh` and `chmod +x wen.sh`:
+Put it beside the wen binary, save it as `wen.sh` and `chmod +x wen.sh`. Before the first start, run `./wen onboard -c ./config.yaml` in that directory to configure the model:
 
 ```sh
 #!/bin/sh
@@ -73,7 +75,7 @@ start() {
         echo "wen is already running (pid $(cat "$PIDFILE"))"
         exit 0
     fi
-    nohup ./wen >>"$LOGFILE" 2>&1 &
+    nohup ./wen -c ./config.yaml >>"$LOGFILE" 2>&1 &
     echo $! >"$PIDFILE"
     sleep 1
     if running; then
@@ -145,7 +147,7 @@ Type=simple
 User=wen
 Group=wen
 WorkingDirectory=/opt/wen
-ExecStart=/opt/wen/wen
+ExecStart=/opt/wen/wen -c /opt/wen/config.yaml
 
 # Restart on crash; a normal stop is not a failure
 Restart=on-failure
@@ -180,6 +182,9 @@ First deployment:
 sudo useradd --system --home /opt/wen --shell /usr/sbin/nologin wen
 sudo chown -R wen:wen /opt/wen
 
+# Configure the model as the same user with the same -c (an interactive wizard, once)
+sudo -u wen /opt/wen/wen onboard -c /opt/wen/config.yaml
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now wen
 ```
@@ -195,5 +200,5 @@ journalctl -u wen --since today    # today's log
 
 Two notes:
 
-- With `User=wen`, the terminal configuration tool has to run as the same user in the same directory to reach the running instance: `cd /opt/wen && sudo -u wen ./wen config`.
+- With `User=wen`, the terminal configuration tool has to run as the same user with the same `-c` to reach the running instance: `sudo -u wen /opt/wen/wen config -c /opt/wen/config.yaml`.
 - If `config.yaml` lives outside `/opt/wen`, add that directory to `ReadWritePaths` as well.

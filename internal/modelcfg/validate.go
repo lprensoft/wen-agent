@@ -70,6 +70,12 @@ func checkCurrent(lang string, ps []Provider, want Selection) error {
 	return nil
 }
 
+// CheckBaseURL 是保存时那条 Base URL 校验的对外入口：首次运行向导在表单上就用它把关，
+// 不必等到保存才报错。
+func CheckBaseURL(lang, raw string) error {
+	return validateBaseURL(lang, raw)
+}
+
 func validateBaseURL(lang, raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

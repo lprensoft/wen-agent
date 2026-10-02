@@ -83,30 +83,32 @@ type SessionConfig struct {
 }
 
 // Default 返回内置默认配置。
+//
+// 这里**不带任何提供商**：选哪家、填哪个密钥是首次运行向导（wen onboard）的事，
+// 结果存 models.json。此前这里写死了一个 DeepSeek、密钥取 ${DEEPSEEK_API_KEY}，
+// 于是「设了这个环境变量就能不写配置启动」成了一条没写进文档的第二入口，
+// 而没设的人连 wen config 都进不去——校验在合并 models.json 之前就把进程拦下了。
+// model 段只留全局默认参数，模型条目没有覆盖时回落到它们。
 func Default() *Config {
 	return &Config{
-		Server: ServerConfig{Host: "127.0.0.1", Port: 8080},
+		Server: ServerConfig{Host: "127.0.0.1", Port: DefaultPort},
 		Model: ModelConfig{
-			Provider:      "deepseek",
-			Name:          "deepseek-v4-flash",
 			Temperature:   0.7,
 			MaxTokens:     4096,
 			Thinking:      "high",
 			ContextLength: 1000000,
 		},
-		Providers: map[string]ProviderConfig{
-			"deepseek": {
-				Type:    "openai_compat",
-				BaseURL: "https://api.deepseek.com",
-				APIKey:  "${DEEPSEEK_API_KEY}",
-			},
-		},
+		Providers: map[string]ProviderConfig{},
 		Agent: AgentConfig{
 			SystemPrompt: "",
 			MaxTurns:     20,
 		},
 	}
 }
+
+// DefaultPort 是不写配置文件时的监听端口。首次运行向导发现它被占用时会另挑一个，
+// 并把选定的端口写进一份只有这一项的 config.yaml。
+const DefaultPort = 8080
 
 // warnLegacyPlugins 提醒用户配置文件里的 plugins 段已不再生效。
 //
@@ -129,7 +131,8 @@ func warnLegacyPlugins(path string, raw []byte) {
 }
 
 // ResolvePath 确定配置文件路径：显式 flag > ./config.yaml > ~/.wen/config.yaml。
-// 返回路径可能不存在（此时 Load 使用默认配置）。
+// 返回路径可能不存在（此时 Load 使用默认配置）——配置文件是可选的，它所在的目录
+// 照样是配置目录：models.json、会话与插件状态都落在那里。
 func ResolvePath(flagPath string) string {
 	if flagPath != "" {
 		return flagPath
@@ -149,9 +152,8 @@ func ResolvePath(flagPath string) string {
 // PeekLang 只把配置文件里的 lang: 读出来，不做任何校验，出任何差错都答空串。
 //
 // 给参数分发之前的那一步用：帮助文本与未知命令的提示要在 Load 之前打出来，而 Load
-// 会校验模型配置（缺 api_key 直接报错）、还会为遗留的 plugins: 段打一行警告——为了
-// 认一个语言名把这些副作用提前触发一遍是不划算的，况且 wen help 本来就该在配置还
-// 不完整时也能用。
+// 会校验配置、还会为遗留的 plugins: 段打一行警告——为了认一个语言名把这些副作用
+// 提前触发一遍是不划算的。
 func PeekLang(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -177,7 +179,6 @@ func Load(path string) (*Config, error) {
 
 	raw, err := os.ReadFile(abs)
 	if os.IsNotExist(err) {
-		expandInPlace(cfg)
 		return cfg, cfg.validate()
 	}
 	if err != nil {
@@ -188,21 +189,43 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	warnLegacyPlugins(path, raw)
-	expandInPlace(cfg)
+	legacyModelDefaults(cfg)
 	return cfg, cfg.validate()
 }
 
+// legacyModelDefaults 补回旧版 Default() 给的那两个模型默认值，只对写了 config.yaml 的人生效。
+//
+// 旧版的内置默认是 model.provider: deepseek、model.name: deepseek-v4-flash，于是一份
+// 只写了 providers.deepseek、没写 model: 段（或只写了一半）的 config.yaml 也能用。
+// 新版的 Default() 不再带它们（选哪家归首次运行向导），这里按原样补回来，否则那些
+// 配置升级后会突然要求重新配置——systemd 下就是服务起不来。范围收得和旧行为一样窄：
+// 只认名叫 deepseek 的提供商，别的名字旧版本来也不会自动选中。
+func legacyModelDefaults(c *Config) {
+	if c.Model.Provider == "" {
+		if _, ok := c.Providers["deepseek"]; ok {
+			c.Model.Provider = "deepseek"
+		}
+	}
+	if c.Model.Provider == "deepseek" && c.Model.Name == "" {
+		c.Model.Name = "deepseek-v4-flash"
+	}
+}
+
+// validate 只校验 config.yaml 里**写了**的东西，并补齐缺省值。
+//
+// 「有没有一个能用的模型」不在这里判：模型配置是 config.yaml 与 models.json 两层
+// 合并的结果，只看前一层就会把 models.json 里配好了的人拦在门外（此前正是如此）。
+// 那件事归 modelcfg.Store.Resolve，判不过时由命令入口决定是进向导还是报错。
 func (c *Config) validate() error {
-	p, ok := c.Providers[c.Model.Provider]
-	if !ok {
-		return fmt.Errorf("model.provider %q not found in providers", c.Model.Provider)
-	}
-	if !llm.IsKnownType(p.Type) {
-		return fmt.Errorf("provider %q: unsupported type %q (%s)",
-			c.Model.Provider, p.Type, strings.Join(llm.KnownTypes, "/"))
-	}
-	if p.APIKey == "" {
-		return fmt.Errorf("provider %q: api_key is empty (set it in config.yaml)", c.Model.Provider)
+	if c.Model.Provider != "" {
+		p, ok := c.Providers[c.Model.Provider]
+		if !ok {
+			return fmt.Errorf("model.provider %q not found in providers", c.Model.Provider)
+		}
+		if !llm.IsKnownType(p.Type) {
+			return fmt.Errorf("provider %q: unsupported type %q (%s)",
+				c.Model.Provider, p.Type, strings.Join(llm.KnownTypes, "/"))
+		}
 	}
 	if c.Agent.MaxTurns <= 0 {
 		c.Agent.MaxTurns = 20
@@ -216,6 +239,9 @@ func (c *Config) validate() error {
 	}
 	if c.Model.ContextLength <= 0 {
 		c.Model.ContextLength = 1000000
+	}
+	if c.Server.Port <= 0 {
+		c.Server.Port = DefaultPort
 	}
 	return nil
 }
@@ -241,11 +267,33 @@ func expandEnv(b []byte) []byte {
 	})
 }
 
-// expandInPlace 对默认配置中残留的 ${VAR} 占位符做替换（配置文件缺失或未覆盖该字段时）。
-func expandInPlace(c *Config) {
-	for name, p := range c.Providers {
-		p.APIKey = string(expandEnv([]byte(p.APIKey)))
-		p.BaseURL = string(expandEnv([]byte(p.BaseURL)))
-		c.Providers[name] = p
+// CreateMinimal 新建一份只含给定几项的 config.yaml，供首次运行向导记下它问到的
+// 那几样启动期配置（端口、语言）。port 为 0、lang 为空的项不写。
+//
+// 只新建、不改写：文件已经存在就报错。config.yaml 是用户的文件，里面可能有注释与
+// ${VAR}，程序从不回写它（模型配置因此另存 models.json）；新建一份则不存在这个问题。
+// header 是写在最前面的注释，可以多行，由调用方按语言给出。
+func CreateMinimal(path, header string, port int, lang string) error {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(header, "\n"), "\n") {
+		b.WriteString("# " + line + "\n")
 	}
+	if lang != "" {
+		fmt.Fprintf(&b, "\nlang: %s\n", lang)
+	}
+	if port != 0 {
+		fmt.Fprintf(&b, "\nserver:\n  port: %d\n", port)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

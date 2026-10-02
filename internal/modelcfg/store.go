@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -106,8 +107,12 @@ func NewStore(lang, path string, cfg *config.Config) (*Store, error) {
 		return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.read", "读取 %s 失败: %w"), path, err)
 	}
 
-	if err := validateDoc(lang, s.viewLocked()); err != nil {
-		return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
+	// 一个提供商都没有是合法的初始状态（全新安装、尚未跑过向导），载入时放行；
+	// 能不能用由 Resolve 回答，「至少保留一个」那条只在保存时把关。
+	if view := s.viewLocked(); len(view.Providers) > 0 {
+		if err := validateDoc(lang, view); err != nil {
+			return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
+		}
 	}
 	return s, nil
 }
@@ -170,7 +175,15 @@ func (s *Store) Status() (provider, model, thinking string, contextLength int) {
 	return r.ProviderName, r.ModelID, r.Thinking, r.ContextLength
 }
 
+// resolve 也是「这套配置能不能用」的唯一判据：服务启动前据此决定要不要进首次运行
+// 向导。缺密钥因此也在这里报——此前它由 config.yaml 那一层查，查在合并 models.json
+// 之前，于是只看得见一半配置。
 func resolve(lang string, f File, def config.ModelConfig) (Resolved, error) {
+	// 一个都没有，或者有但哪个都选不上（提供商下没有任何模型）：都报「没配置」，
+	// 而不是下面那句「未找到提供商 ""」
+	if len(f.Providers) == 0 || f.Current.Provider == "" {
+		return Resolved{}, fmt.Errorf("%s", i18n.T(lang, "modelcfg.err.not_configured", "还没有配置模型"))
+	}
 	p, ok := findProvider(f.Providers, f.Current.Provider)
 	if !ok {
 		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_provider", "未找到提供商 %q"), f.Current.Provider)
@@ -178,6 +191,9 @@ func resolve(lang string, f File, def config.ModelConfig) (Resolved, error) {
 	m, ok := findModel(p.Models, f.Current.Model)
 	if !ok {
 		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), p.Name, f.Current.Model)
+	}
+	if strings.TrimSpace(p.APIKey) == "" && RequiresKey(p.BaseURL) {
+		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_api_key", "提供商 %q 尚未配置 API Key，无法使用"), p.Name)
 	}
 	r := Resolved{
 		ProviderName:  p.Name,
@@ -288,6 +304,10 @@ func (s *Store) persistLocked(lang string) error {
 	raw, err := json.MarshalIndent(s.own, "", "  ")
 	if err != nil {
 		return err
+	}
+	// 配置目录可能还不存在：没有 config.yaml 时它是 ~/.wen，首次运行向导是第一个写它的
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf(i18n.T(lang, "modelcfg.err.save", "保存模型配置失败: %w"), err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
