@@ -161,7 +161,12 @@
 - 旧版 `Default()` 带的 `model.provider: deepseek` / `name: deepseek-v4-flash` 由 `config.legacyModelDefaults` 补回（只对写了 config.yaml 的人、只认名叫 deepseek 的提供商；模型名补成 `deepseek-flash`，旧名已下线），否则只写了 `providers.deepseek` 的老配置升级后会起不来。
 - 试连与设置页的「测试连接」共用 `llm.Probe`，判据只有一份。
 
-新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口（构造参数走 `llm.Config`）。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。
+新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口（构造参数走 `llm.Config`）。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。几条随新一代模型（Fable 5.1 / Opus 5.5 / Sonnet 5.5）补上的规矩：
+
+- **只回传本轮的思考块**，已经结束的轮次剥掉（正文与工具调用照留）。新一代模型只接受「之前的 system、tools 与每条消息都没变」的思考块，而我们的历史**不是只追加的**——本轮状态块下一轮就去掉、一次性输入事后剔除、日界线事后补、还有压缩——回传上一轮的就是整个请求 400。改「上下文分层约定」里任何一处让历史在轮次之间变化的做法时，这条仍然成立；反过来，想让历史回到只追加，得先把这几样都挪走。代价要知道：Opus 4.5 起、Sonnet 4.6 起的模型默认本会保留之前各轮的思考。本轮之内**通常**只追加，但预算裁剪与轮中工具列表变化也会改前缀，所以收到「Invalid `signature`」的 400 时剥掉全部思考块重发一次（官方给的做法，原样重发没用）。本轮的签名思考块即使文本为空也要回传（omitted 与工具间进度块），少一个就是「部分丢弃」。
+- 思考开启时要求 `display: "summarized"`：新一代模型默认 omitted，不要的话界面上的思考过程是空的。`display` 只能跟 adaptive 同发。
+- **关闭思考按报错学**：先发 `disabled`，400 里点名 `between_tools` 就换它（Sonnet 5.5），说 `thinking.type.disabled` 不支持就退到 adaptive + `low`（思考常开的模型；只是不发 thinking 的话它按默认档位去想，而压缩、记忆提炼这些内部调用正是以 off 发起的），学到的写法按模型记在 provider 里。不维护「哪个模型认哪种写法」的表——每出一代就要改，漏一次就是关掉思考的用户整轮报错。
+- DeepSeek 相反：请求带工具时要回传**所有**之前轮次的 `reasoning_content`，核心因此不在历史里丢思考内容，剥不剥由各 provider 决定。
 
 提供商级的 `prompt_cache`（config.yaml 的 `providers.<name>.prompt_cache` 与设置页的开关，三态 `*bool`，未设置=开启）只对 anthropic 有意义——只有它要求调用方在请求里显式打断点，且缓存写入单独计费。它必须是个**看得见的开关**而不是默认行为：命中按约十分之一计费，而未命中的写入要多付约四分之一，使用节奏比缓存有效期还慢的人（消息间隔常常超过几分钟）开着就是一直在付写入的钱。openai_compat 那边（DeepSeek、OpenAI）的缓存由服务端自动维护，没有开关可言，命中与否只取决于前缀是否稳定。
 

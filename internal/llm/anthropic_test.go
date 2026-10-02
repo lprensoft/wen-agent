@@ -200,6 +200,8 @@ func TestAnthropicThinkingBlockWithSignature(t *testing.T) {
 	}
 }
 
+// TestAnthropicSignatureSentBack：本轮之内（工具循环）的思考块要带签名原样回传，
+// 工具调用离不开它。
 func TestAnthropicSignatureSentBack(t *testing.T) {
 	got, _ := antRun(t, textFrames("继续"), ChatRequest{
 		Model: "claude-opus-4-5",
@@ -207,8 +209,9 @@ func TestAnthropicSignatureSentBack(t *testing.T) {
 			{Role: RoleSystem, Content: "环境"},
 			{Role: RoleUser, Content: "问题"},
 			{Role: RoleAssistant, Content: "答案", Reasoning: "先想一下",
-				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "先想一下", Signature: "sig-abc"}}},
-			{Role: RoleUser, Content: "再问"},
+				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "先想一下", Signature: "sig-abc"}},
+				ToolCalls:       []ToolCall{{ID: "t1", Name: "read_file", Arguments: json.RawMessage(`{}`)}}},
+			{Role: RoleTool, Content: "结果", ToolCallID: "t1"},
 		},
 		Thinking: "high",
 	})
@@ -219,12 +222,194 @@ func TestAnthropicSignatureSentBack(t *testing.T) {
 	}
 	assistant, _ := msgs[1].(map[string]any)
 	blocks, _ := assistant["content"].([]any)
-	if len(blocks) != 2 {
+	if len(blocks) != 3 {
 		t.Fatalf("assistant blocks = %v", blocks)
 	}
 	first, _ := blocks[0].(map[string]any)
 	if first["type"] != "thinking" || first["thinking"] != "先想一下" || first["signature"] != "sig-abc" {
 		t.Errorf("thinking block = %v", first)
+	}
+}
+
+// TestAnthropicPriorTurnThinkingStripped：已经结束的轮次不回传思考块。新一代模型只
+// 接受前缀没变的思考块，而我们的历史在轮次之间会变（本轮状态块、一次性输入、日界线），
+// 回传必然 400。其余块原样保留。
+func TestAnthropicPriorTurnThinkingStripped(t *testing.T) {
+	got, _ := antRun(t, textFrames("继续"), ChatRequest{
+		Model: "claude-opus-5-5",
+		Messages: []Message{
+			{Role: RoleUser, Content: "问题"},
+			{Role: RoleAssistant, Content: "答案", Reasoning: "先想一下",
+				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "先想一下", Signature: "sig-abc"}}},
+			{Role: RoleUser, Content: "再问"},
+		},
+		Thinking: "high",
+	})
+	msgs, _ := got["messages"].([]any)
+	assistant, _ := msgs[1].(map[string]any)
+	blocks, _ := assistant["content"].([]any)
+	if len(blocks) != 1 {
+		t.Fatalf("上一轮的思考块应当剥掉，只剩正文: %v", blocks)
+	}
+	if b, _ := blocks[0].(map[string]any); b["type"] != "text" || b["text"] != "答案" {
+		t.Errorf("正文应当原样保留: %v", b)
+	}
+}
+
+// TestAnthropicAsksForThinkingSummary：新一代模型默认不返回思考文本（display 默认
+// omitted），不显式要 summarized，界面上的思考过程就是空的。
+func TestAnthropicAsksForThinkingSummary(t *testing.T) {
+	got, _ := antRun(t, textFrames("ok"), ChatRequest{Model: "claude-opus-5-5", Messages: testMessages("hi"), Thinking: "high"})
+	th, _ := got["thinking"].(map[string]any)
+	if th["type"] != "adaptive" || th["display"] != "summarized" {
+		t.Errorf("thinking = %v", th)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+// offServer 先按 rejects 的顺序回 400，之后正常回放；记下每次请求的完整请求体。
+func offServer(t *testing.T, rejects []string, seen *[]map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		*seen = append(*seen, body)
+		if n := len(*seen); n <= len(rejects) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, rejects[n-1])
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, f := range textFrames("ok") {
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", f.event, f.data)
+		}
+	}))
+}
+
+// TestAnthropicOffFallsBackToBetweenTools：Sonnet 5.5 拒绝 disabled、点名要 between_tools。
+// 换写法重发一次，并记住，下一次直接用对的写法。
+func TestAnthropicOffFallsBackToBetweenTools(t *testing.T) {
+	var seen []map[string]any
+	srv := offServer(t, []string{`{"type":"error","error":{"type":"invalid_request_error","message":"To turn thinking off on this model, send \"thinking\": {\"type\": \"between_tools\"} instead of {\"type\": \"disabled\"}."}}`}, &seen)
+	defer srv.Close()
+	p := NewAnthropic("", srv.URL, "sk-ant-test", false)
+	req := ChatRequest{Model: "claude-sonnet-5-5", Messages: testMessages("hi"), Thinking: "off"}
+
+	for i := 0; i < 2; i++ {
+		ch, err := p.ChatStream(context.Background(), req)
+		if err != nil {
+			t.Fatalf("第 %d 次: %v", i+1, err)
+		}
+		antCollect(ch)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("应当是 400 一次、重发一次、之后直接成功，共 3 次请求，实际 %d 次: %v", len(seen), seen)
+	}
+	for i, want := range []string{"disabled", "between_tools", "between_tools"} {
+		th, _ := seen[i]["thinking"].(map[string]any)
+		if th["type"] != want {
+			t.Errorf("第 %d 次请求 thinking = %v，应为 %s", i+1, seen[i], want)
+		}
+		if _, has := th["display"]; has {
+			t.Errorf("关闭思考时不能带 display（会 400）: %v", th)
+		}
+	}
+}
+
+// TestAnthropicOffAdaptiveLowWhenAlwaysOn：思考常开的模型（Fable 5.1、Opus 5.5）任何关闭
+// 写法都是 400，退到「adaptive + 最低档 low」。只是不发 thinking 的话，模型会按默认档位
+// 去想，而压缩、记忆提炼这些以 off 发起的内部调用图的正是快和省。
+func TestAnthropicOffAdaptiveLowWhenAlwaysOn(t *testing.T) {
+	var seen []map[string]any
+	srv := offServer(t, []string{`{"type":"error","error":{"type":"invalid_request_error","message":"\"thinking.type.disabled\" is not supported for this model. Use \"thinking.type.adaptive\" and \"output_config.effort\" to control thinking behavior."}}`}, &seen)
+	defer srv.Close()
+	ch, err := NewAnthropic("", srv.URL, "sk-ant-test", false).ChatStream(context.Background(),
+		ChatRequest{Model: "claude-opus-5-5", Messages: testMessages("hi"), Thinking: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	antCollect(ch)
+	if len(seen) != 2 {
+		t.Fatalf("应当 400 一次后重发，实际 %d 次", len(seen))
+	}
+	th, _ := seen[1]["thinking"].(map[string]any)
+	oc, _ := seen[1]["output_config"].(map[string]any)
+	if th["type"] != "adaptive" || oc["effort"] != "low" {
+		t.Errorf("重发应为 adaptive + effort low: thinking=%v output_config=%v", th, oc)
+	}
+}
+
+// TestAnthropicEmptyThinkingBlockKept：本轮里文本为空的签名思考块（display 为 omitted、
+// 或 Sonnet 5.5 的工具间进度块）也要回传，且带着空的 thinking 字段——少回一个就是
+// 「部分丢弃」，API 会拒绝。
+func TestAnthropicEmptyThinkingBlockKept(t *testing.T) {
+	got, _ := antRun(t, textFrames("继续"), ChatRequest{
+		Model: "claude-sonnet-5-5",
+		Messages: []Message{
+			{Role: RoleUser, Content: "问题"},
+			{Role: RoleAssistant,
+				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "", Signature: "sig-empty"}},
+				ToolCalls:       []ToolCall{{ID: "t1", Name: "read_file", Arguments: json.RawMessage(`{}`)}}},
+			{Role: RoleTool, Content: "结果", ToolCallID: "t1"},
+		},
+		Thinking: "high",
+	})
+	msgs, _ := got["messages"].([]any)
+	assistant, _ := msgs[1].(map[string]any)
+	blocks, _ := assistant["content"].([]any)
+	first, _ := blocks[0].(map[string]any)
+	text, has := first["thinking"]
+	if first["type"] != "thinking" || first["signature"] != "sig-empty" || !has || text != "" {
+		t.Errorf("空文本的签名思考块应当原样回传（含空的 thinking 字段）: %v", first)
+	}
+}
+
+// TestAnthropicSignatureMismatchRetriedStripped：本轮里的思考块与前缀对不上（预算裁剪或
+// 工具列表在轮中变了）时，按官方做法剥掉全部思考块重发一次，其余块原样保留。
+func TestAnthropicSignatureMismatchRetriedStripped(t *testing.T) {
+	var seen []map[string]any
+	srv := offServer(t, []string{"{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.\"}}"}, &seen)
+	defer srv.Close()
+	ch, err := NewAnthropic("", srv.URL, "sk-ant-test", false).ChatStream(context.Background(), ChatRequest{
+		Model: "claude-opus-5-5",
+		Messages: []Message{
+			{Role: RoleUser, Content: "问题"},
+			{Role: RoleAssistant,
+				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "想", Signature: "sig"}},
+				ToolCalls:       []ToolCall{{ID: "t1", Name: "read_file", Arguments: json.RawMessage(`{}`)}}},
+			{Role: RoleTool, Content: "结果", ToolCallID: "t1"},
+		},
+		Thinking: "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	antCollect(ch)
+	if len(seen) != 2 {
+		t.Fatalf("应当 400 一次后重发一次，实际 %d 次", len(seen))
+	}
+	msgs, _ := seen[1]["messages"].([]any)
+	assistant, _ := msgs[1].(map[string]any)
+	blocks, _ := assistant["content"].([]any)
+	if len(blocks) != 1 {
+		t.Fatalf("重发时思考块应当全部剥掉、只留工具调用: %v", blocks)
+	}
+	if b, _ := blocks[0].(map[string]any); b["type"] != "tool_use" {
+		t.Errorf("工具调用应当原样保留: %v", b)
+	}
+}
+
+// TestAnthropicUnrelated400NotRetried：与关闭思考无关的 400 原样报出，不重发。
+func TestAnthropicUnrelated400NotRetried(t *testing.T) {
+	var seen []map[string]any
+	srv := offServer(t, []string{`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}`}, &seen)
+	defer srv.Close()
+	_, err := NewAnthropic("", srv.URL, "sk-ant-test", false).ChatStream(context.Background(),
+		ChatRequest{Model: "claude-opus-5-5", Messages: testMessages("hi"), Thinking: "off"})
+	if err == nil || len(seen) != 1 {
+		t.Errorf("应当一次请求后报错，实际 %d 次，err=%v", len(seen), err)
 	}
 }
 

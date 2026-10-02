@@ -190,11 +190,37 @@ func TestOpenAIDialectAvoidsRejectedParams(t *testing.T) {
 
 // 别家仍然用 max_tokens —— 这条是为了防止上面那个改动漏到所有方言身上。
 func TestOtherDialectsKeepMaxTokens(t *testing.T) {
-	for _, name := range []string{"", DialectDeepSeek, DialectGLM, DialectMiniMax, DialectQwen, DialectKimi, DialectNone} {
+	for _, name := range []string{"", DialectDeepSeek, DialectGLM, DialectQwen, DialectNone} {
 		wr := buildRequest(ChatRequest{Model: "m", Thinking: "high", MaxTokens: 2048}, name)
 		if wr.MaxTokens != 2048 || wr.MaxCompletionTokens != 0 {
 			t.Errorf("方言 %q 的输出上限写错了: max_tokens=%d max_completion_tokens=%d",
 				name, wr.MaxTokens, wr.MaxCompletionTokens)
+		}
+	}
+}
+
+// MiniMax 与 Kimi 已把 max_tokens 标为废弃，改发 max_completion_tokens。
+func TestDeprecatedMaxTokensDialects(t *testing.T) {
+	for _, name := range []string{DialectMiniMax, DialectKimi} {
+		wr := buildRequest(ChatRequest{Model: "m", Thinking: "high", MaxTokens: 2048}, name)
+		if wr.MaxCompletionTokens != 2048 || wr.MaxTokens != 0 {
+			t.Errorf("方言 %q 应发 max_completion_tokens: max_tokens=%d max_completion_tokens=%d",
+				name, wr.MaxTokens, wr.MaxCompletionTokens)
+		}
+	}
+}
+
+// Kimi K3 的思考关不掉：「关闭」落到最低一档 low，而不是什么都不发（那样等于默认的 max）；
+// 采样参数是固定值，任何情况下都不发。
+func TestKimiOffAndSampling(t *testing.T) {
+	for _, thinking := range []string{"off", "high"} {
+		var wr wireRequest
+		applyThinking(&wr, ChatRequest{Thinking: thinking, Temperature: 0.7}, DialectKimi)
+		if wr.Temperature != nil {
+			t.Errorf("thinking=%s 时 Kimi 不该发 temperature", thinking)
+		}
+		if thinking == "off" && wr.ReasoningEffort != "low" {
+			t.Errorf("Kimi 关闭思考应发 effort=low，得到 %q", wr.ReasoningEffort)
 		}
 	}
 }

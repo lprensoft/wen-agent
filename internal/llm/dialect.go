@@ -15,7 +15,7 @@ const (
 	DialectGLM      = "glm"      // 同上，但只认 low/high/max
 	DialectMiniMax  = "minimax"  // thinking:{adaptive|disabled} + reasoning_split，无档位
 	DialectQwen     = "qwen"     // enable_thinking 布尔开关
-	DialectKimi     = "kimi"     // 仅 reasoning_effort，只认 low/high/max
+	DialectKimi     = "kimi"     // 仅 reasoning_effort，只认 low/high/max；关闭落到 low
 	DialectOpenAI   = "openai"   // 仅 reasoning_effort；拒绝采样参数，且要 max_completion_tokens
 	DialectGemini   = "gemini"   // 仅 reasoning_effort，只认 low/medium/high
 	DialectXAI      = "xai"      // 仅 reasoning_effort，只认 low/medium/high/xhigh
@@ -52,9 +52,13 @@ type dialectSpec struct {
 var dialectSpecs = map[string]dialectSpec{
 	DialectDeepSeek: {shape: shapeThinkingEffort, levels: []string{"low", "medium", "high", "xhigh", "max"}},
 	DialectGLM:      {shape: shapeThinkingEffort, levels: []string{"low", "high", "max"}},
-	DialectMiniMax:  {shape: shapeAdaptive},
-	DialectQwen:     {shape: shapeEnableThinking},
-	DialectKimi:     {shape: shapeEffortOnly, levels: []string{"low", "high", "max"}},
+	// MiniMax 与 Kimi 都已把 max_tokens 标为废弃，改用 max_completion_tokens
+	DialectMiniMax: {shape: shapeAdaptive, maxCompletionTokens: true},
+	DialectQwen:    {shape: shapeEnableThinking},
+	// Kimi K3 的思考关不掉，「关闭」落到最低一档 low；它的采样参数是固定值，
+	// 官方要求不发（temperature 等）
+	DialectKimi: {shape: shapeEffortOnly, levels: []string{"low", "high", "max"},
+		offLevel: "low", noSampling: true, maxCompletionTokens: true},
 	DialectOpenAI: {shape: shapeEffortOnly, levels: []string{"low", "medium", "high", "xhigh", "max"},
 		offLevel: "none", noSampling: true, maxCompletionTokens: true},
 	DialectGemini: {shape: shapeEffortOnly, levels: []string{"low", "medium", "high"}},

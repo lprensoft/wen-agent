@@ -67,28 +67,25 @@ func TestAnthropicCacheBreakpoints(t *testing.T) {
 }
 
 // 思考块不接受 cache_control，断点要跳到它前面一个可标记的块上。
+//
+// 直接测 markCacheBreakpoints：上一轮的思考块不再回传（见 buildAnthropicRequest），
+// 经完整请求已经构造不出「倒数第二条消息以思考块结尾」的形状，但规则本身仍要守住。
 func TestAnthropicCacheSkipsThinkingBlock(t *testing.T) {
-	got := antRunCached(t, textFrames("好"), ChatRequest{
-		Model: "claude-opus-4-5",
-		Messages: []Message{
-			{Role: RoleUser, Content: "问"},
-			{Role: RoleAssistant, Content: "答",
-				ReasoningBlocks: []ReasoningBlock{{Type: "thinking", Text: "想", Signature: "sig"}}},
-			{Role: RoleUser, Content: "再问"},
-		},
-		Thinking: "high",
-	})
-	msgs, _ := got["messages"].([]any)
-	assistant, _ := msgs[1].(map[string]any)
-	blocks, _ := assistant["content"].([]any)
-	if len(blocks) != 2 {
-		t.Fatalf("assistant blocks = %v", blocks)
+	wr := antRequest{Messages: []antMessage{
+		{Role: "user", Content: []antBlock{{Type: "text", Text: "问"}}},
+		{Role: "assistant", Content: []antBlock{
+			{Type: "text", Text: "答"},
+			{Type: "thinking", Thinking: strPtr("想"), Signature: "sig"},
+		}},
+		{Role: "user", Content: []antBlock{{Type: "text", Text: "再问"}}},
+	}}
+	markCacheBreakpoints(&wr)
+	blocks := wr.Messages[1].Content
+	if blocks[1].CacheControl != nil {
+		t.Errorf("思考块上不该打断点: %+v", blocks[1])
 	}
-	if think, _ := blocks[0].(map[string]any); think["cache_control"] != nil {
-		t.Errorf("思考块上不该打断点: %v", think)
-	}
-	if text, _ := blocks[1].(map[string]any); text["cache_control"] == nil {
-		t.Errorf("断点应当落在思考块之后的文本块上: %v", text)
+	if blocks[0].CacheControl == nil {
+		t.Errorf("断点应当落在思考块前面那个可标记的块上: %+v", blocks[0])
 	}
 }
 
