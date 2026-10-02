@@ -563,7 +563,7 @@
   "modelcfg.preset.minimax_cn.desc": "MiniMax, China site. Model IDs are case-sensitive.",
   "modelcfg.preset.ollama.desc": "Runs on this machine, no key needed. Pull a model with ollama first, then add it here.",
   "modelcfg.preset.openai.desc": "OpenAI. This family rejects temperature and accepts all six thinking levels.",
-  "modelcfg.preset.openrouter.desc": "One key for every vendor. The models below are aliases that always point at the current flagship.",
+  "modelcfg.preset.openrouter.desc": "One key for every vendor. IDs starting with ~ are aliases that always point at the newest model in that family.",
   "modelcfg.preset.qwen.desc": "Alibaba Qwen, Singapore site. A separate account from the China site; keys are not interchangeable.",
   "modelcfg.preset.qwen_cn.desc": "Alibaba Qwen on Model Studio. Thinking is a switch here, not a set of levels.",
   "modelcfg.preset.siliconflow.desc": "SiliconFlow, international site.",
