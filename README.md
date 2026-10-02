@@ -121,5 +121,5 @@ go vet ./...     # 静态检查
 
 ## 后续规划
 
-- 更多 Provider 类型（Ollama 等）与模型 fallback
+- 接入 OpenAI Responses API（GPT-6 系列走 Chat Completions 时调不了工具）与模型 fallback
 - 外源插件包的自动更新与来源校验

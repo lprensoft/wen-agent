@@ -119,5 +119,5 @@ Released under the [MIT License](LICENSE).
 
 ## Roadmap
 
-- More provider types (Ollama and friends) and model fallback
+- Support for the OpenAI Responses API (the GPT-6 models cannot call tools over Chat Completions) and model fallback
 - Auto-updating external plugin bundles, and verifying where they came from

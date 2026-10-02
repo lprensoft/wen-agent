@@ -254,7 +254,7 @@
 ## Git 工作流约定
 
 1. **功能开发一律先建分支**（`feature/<功能名>`），实现并验证通过后合并回 `main`，不直接在 `main` 上开发。
-2. **敏感与本地文件不入库**：`config.yaml`（本地配置，含 API Key）、`sessions/`（会话数据）、`*.log`、构建产物均已在 `.gitignore` 中，新增此类文件时同步维护忽略列表。
+2. **敏感与本地文件不入库**：`config.yaml`（本地配置，可能含 API Key）、`models.json`（向导与设置页存的模型配置，含明文 API Key）、`auth.json`、`plugins.state.json`、`sessions/`（会话数据）、`*.log`、构建产物均已在 `.gitignore` 中，新增此类文件时同步维护忽略列表。
 3. **推送前必须做一次敏感信息检查**：对 `origin/main..HEAD` 的全部 diff 扫描密钥模式（API Key、token、`Bearer`/JWT 形态的长串）、真实的 AppID/AppSecret/openid、个人身份信息；测试与示例一律用明显的占位值（如 `"123"`），不用任何真实凭据脱敏改造。发现疑似内容先停下与用户确认，不带病推送。
 4. 提交信息用中文，说明"做了什么、为什么"。
 
