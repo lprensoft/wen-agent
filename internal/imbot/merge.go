@@ -120,12 +120,19 @@ func mergeMessages(msgs []Message) Message {
 		}
 	}
 	last := msgs[len(msgs)-1]
-	return Message{
+	out := Message{
 		UserID:  last.UserID,
 		DedupID: last.DedupID,
 		ReplyTo: last.ReplyTo,
 		Text:    strings.Join(texts, "\n"),
 	}
+	// 被扣过的消息与排在它后面的几条并成一轮时，「从何时起没回」按最早的那条算
+	for _, m := range msgs {
+		if !m.heldSince.IsZero() && (out.heldSince.IsZero() || m.heldSince.Before(out.heldSince)) {
+			out.heldSince, out.heldFor, out.heldAsleep = m.heldSince, m.heldFor, m.heldAsleep
+		}
+	}
+	return out
 }
 
 // isCommand 判定一条消息是不是命令：以 / 开头的都算，未知命令也走命令路径（立即回一句未知）。

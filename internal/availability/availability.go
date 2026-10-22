@@ -5,7 +5,7 @@
 // 与 cue 的分别在于存的东西不同：cue 存**事件**（「刚下起雨」），消费即清，按
 // (Source, Key) 幂等；这里存**状态**（「在图书馆查资料，重忙，到 16:30」），查询不清，
 // 每个写入方只有一条，靠 Until 自然过期。相同的部分：只在内存、必须带过期时刻、
-// 单槽位叫醒回调、写入方自己的持久化才是权威——日程插件重启后从当天的表里
+// 有变化就叫醒读取方（这里可以有多个订阅方）、写入方自己的持久化才是权威——日程插件重启后从当天的表里
 // 「进行中」的那一项重建，公告板自己不需要回答「重启后这条还算数吗」。
 package availability
 
@@ -52,16 +52,20 @@ type State struct {
 	Level    Level     // 忙的程度
 	Since    time.Time // 从何时开始
 	Until    time.Time // 预计到几点；过期即视为空闲
+	// Sleeping 表示这段「不回」是在睡觉：消息通道不等到 Until，而是攒一阵就算把人
+	// 吵醒了（多久由通道配置）。会议、电影这类「不回」是真顾不上，没有这一说。
+	Sleeping bool
 }
 
 var (
 	mu     sync.Mutex
 	states []State // 每个 Source 至多一条，按首次写入顺序
-	notify func()
+	subs   = map[int]func(){}
+	nextID int
 )
 
 // Set 写入（或覆盖）一个写入方的状态。Level 为空闲的直接丢弃——「空闲」用 Clear
-// 表达，不占一条记录。随后叫醒读取方（若装了回调）。
+// 表达，不占一条记录。随后叫醒全部订阅方。
 //
 // **写入一侧刻意不看时钟。** 这个包的读取一律由调用方给出「现在」（Current 与它
 // 内部的 pruneLocked），写入却曾拿 time.Now() 判断「Until 是不是还在未来」，于是同一
@@ -88,11 +92,11 @@ func Set(s State) {
 	if !replaced {
 		states = append(states, s)
 	}
-	fn := notify
+	fns := subscribersLocked()
 	mu.Unlock()
 
 	// 回调在锁外：读取方的回调可能取它自己的锁，嵌在这里会定死锁顺序
-	if fn != nil {
+	for _, fn := range fns {
 		fn()
 	}
 }
@@ -109,16 +113,23 @@ func Clear(source string) {
 			break
 		}
 	}
-	fn := notify
+	fns := subscribersLocked()
 	mu.Unlock()
-	if removed && fn != nil {
-		fn()
+	if removed {
+		for _, fn := range fns {
+			fn()
+		}
 	}
 }
 
 // Current 返回此刻生效的状态：未过期的记录里 Level 最高的一条（同级取先写入的）。
 // 没有任何未过期记录时第二个返回值为 false。
-func Current(now time.Time) (State, bool) {
+func Current(now time.Time) (State, bool) { return CurrentExcept(now, "") }
+
+// CurrentExcept 与 Current 相同，但不看 exclude 那个写入方的记录。写入方自己也读的
+// 时候用：心跳把「睡着」写在这里，又按这里压后下一拍，不排除自己就会把醒来那一拍
+// 也压后。
+func CurrentExcept(now time.Time, exclude string) (State, bool) {
 	mu.Lock()
 	defer mu.Unlock()
 	pruneLocked(now)
@@ -127,6 +138,9 @@ func Current(now time.Time) (State, bool) {
 		found bool
 	)
 	for _, s := range states {
+		if exclude != "" && s.Source == exclude {
+			continue
+		}
 		if !found || s.Level > best.Level {
 			best, found = s, true
 		}
@@ -134,12 +148,31 @@ func Current(now time.Time) (State, bool) {
 	return best, found
 }
 
-// SetNotify 安装（或用 nil 卸下）状态变化时的叫醒回调。单槽位：与 cue.SetNotify
-// 同款约定——只有一个按节奏主动开口的读取方。
-func SetNotify(fn func()) {
+// Subscribe 登记一个状态变化时的叫醒回调，返回撤销函数（可重复调用）。
+//
+// 与 cue.SetNotify 的单槽位不同：读这块板的不止一个——心跳按它压后下一拍，每条消息
+// 通道按它扣住入站消息——单槽位会让后装的悄悄顶掉先装的。回调在锁外调用，不得假设
+// 调用顺序。
+func Subscribe(fn func()) (cancel func()) {
 	mu.Lock()
 	defer mu.Unlock()
-	notify = fn
+	nextID++
+	id := nextID
+	subs[id] = fn
+	return func() {
+		mu.Lock()
+		delete(subs, id)
+		mu.Unlock()
+	}
+}
+
+// subscribersLocked 取一份回调快照，供锁外逐个调用。调用方须持 mu。
+func subscribersLocked() []func() {
+	out := make([]func(), 0, len(subs))
+	for _, fn := range subs {
+		out = append(out, fn)
+	}
+	return out
 }
 
 // pruneLocked 清掉已过期的记录。调用方须持 mu。

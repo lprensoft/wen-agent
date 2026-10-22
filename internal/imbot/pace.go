@@ -39,13 +39,21 @@ func ChatStylePrompt(lang string) string {
 	return prompt.T(lang, "prompt.imbot.chat_style", chatStylePromptZH)
 }
 
-// TurnPrompt 返回本轮该注入的说话引导：开关开着且本轮由本通道发起时才有，否则空串。
+// TurnPrompt 返回本轮该注入的片段，只在本通道发起的轮次里出现：开着「像人一样发消息」
+// 时的说话引导，以及被扣过的消息放行那一轮的「回晚了」（见 hold.go）。都没有时为空串。
 // 通道插件的 TurnPrompt 直接转交给它即可。
 func (c *Core) TurnPrompt(ctx context.Context) string {
-	if !c.cfg.HumanPace || plugin.TurnOriginFrom(ctx) != c.cfg.PluginName {
+	if plugin.TurnOriginFrom(ctx) != c.cfg.PluginName {
 		return ""
 	}
-	return ChatStylePrompt(c.cfg.Lang)
+	var parts []string
+	if c.cfg.HumanPace {
+		parts = append(parts, ChatStylePrompt(c.cfg.Lang))
+	}
+	if note := c.heldPrompt(ctx); note != "" {
+		parts = append(parts, note)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // PushReply 把一段「角色在说话」的文本主动推给某个用户（后台轮次的结果落在绑定
@@ -323,9 +331,12 @@ const (
 
 	keyMergeWindow = "merge_window_sec"
 	keyHumanPace   = "human_pace"
+	keyBusyHold    = "busy_hold"
+	keyWakeAfter   = "wake_after_minutes"
 )
 
-// PaceFields 返回「合并连发消息」与「像人一样发消息」两个配置项声明。
+// PaceFields 返回收发节奏的四个配置项声明：合并连发消息、像人一样发消息、
+// 忙时晚点回、睡着时多久被吵醒。
 func PaceFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
@@ -337,7 +348,23 @@ func PaceFields() []plugin.ConfigField {
 			Key: keyHumanPace, Label: "像人一样发消息", Type: plugin.FieldBool, Default: false,
 			Description: "回复按句子分成几条、带打字间隔陆续发出，并提示模型用聊天的口吻说话（短句、口语、不排版）。命令回执、确认请求与过程通知仍原样一条",
 		},
+		{
+			Key: keyBusyHold, Label: "忙时晚点回", Type: plugin.FieldBool, Default: false,
+			Description: "角色按日程正忙或睡着时，消息先收着、过一阵再回：重忙时最多等十分钟（抽空看一眼），" +
+				"完全顾不上时等到忙完，睡着时按下面的时长算被吵醒。回的那一轮会告诉角色消息是多久前发来的。命令不受影响",
+		},
+		{
+			Key: keyWakeAfter, Label: "睡着时多久被吵醒（分钟）", Type: plugin.FieldInt,
+			Default: int(DefaultWakeAfter / time.Minute), Min: plugin.IntPtr(0), Max: plugin.IntPtr(720),
+			Description: "开着「忙时晚点回」时，角色睡着后收到消息，攒这么久才算把人吵醒；到点自然醒得更早就随之回。0 表示一来消息就醒，调得很长就近似「等到睡醒再回」",
+		},
 	}
+}
+
+// HoldConfig 从插件配置里读出「忙时晚点回」开关与「多久被吵醒」。
+func HoldConfig(cfg map[string]any) (holdWhenBusy bool, wakeAfter time.Duration) {
+	return plugin.CfgBool(cfg, keyBusyHold, false),
+		time.Duration(plugin.CfgInt(cfg, keyWakeAfter, int(DefaultWakeAfter/time.Minute))) * time.Minute
 }
 
 // PaceConfig 从插件配置里读出合并窗口与分条开关。
