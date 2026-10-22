@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/availability"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
@@ -46,6 +47,12 @@ type Message struct {
 	// Note 是收到了正文之外的东西时给用户的提示（如「暂不支持该消息类型」）。
 	// Text 为空且 Note 非空时，骨架把 Note 回过去就结束，不进队列。
 	Note string
+
+	// 被「忙时晚点回」扣过的消息带着这三项：从何时起扣着、那时在忙什么、是不是睡着。
+	// 只在骨架内部流转（放行时写、处理那一轮读），通道不必关心。
+	heldSince  time.Time
+	heldFor    string
+	heldAsleep bool
 }
 
 // Config 是构造 Core 所需的一切。字段在 New 之后不再变动——改配置走「重建 Core」，
@@ -77,6 +84,12 @@ type Config struct {
 	// 轮次里注入「像发消息那样说话」的引导（见 pace.go）。命令回执、错误提示、
 	// 确认请求与过程通知不受影响。
 	HumanPace bool
+	// HoldWhenBusy 开启后，角色忙着、睡着时把入站消息先扣住，过一阵再回（见 hold.go）。
+	// WakeAfter 是睡着时攒多久算被吵醒；ReplyWindow 是平台的被动回复窗口，扣留一律
+	// 不超过它（QQ 同一条消息 60 分钟内才能被动回复），0 表示不限。
+	HoldWhenBusy bool
+	WakeAfter    time.Duration
+	ReplyWindow  time.Duration
 	// sleep 是分条发送之间的等待，留空用真实计时；测试注入以免真等。
 	sleep func(ctx context.Context, d time.Duration)
 
@@ -111,10 +124,12 @@ type Core struct {
 	dedup   *Deduper
 	broker  *confirmBroker
 	merge   *merger // 入站合并窗口；MergeWindow 为 0 时为 nil
+	hold    *holder // 忙时扣住的消息；开关关着也在，好把重启前扣下的放出去
 
 	mu      sync.Mutex
 	ctx     context.Context
 	cancel  context.CancelFunc
+	unsub   func() // 撤销对忙碌公告板的订阅
 	workers map[string]chan Message
 	wg      sync.WaitGroup
 }
@@ -151,6 +166,7 @@ func New(cfg Config) (*Core, error) {
 		binding: binding,
 		dedup:   NewDeduper(),
 		broker:  newConfirmBroker(),
+		hold:    newHolder(cfg.StateDir),
 		workers: map[string]chan Message{},
 	}
 	if cfg.MergeWindow > 0 {
@@ -162,21 +178,28 @@ func New(cfg Config) (*Core, error) {
 	return c, nil
 }
 
-// Start 记下生命周期 ctx。worker 是惰性启动的，这里不起 goroutine。
+// Start 记下生命周期 ctx，并起扣留的放行循环（worker 是惰性启动的）。
+// 公告板一有变化（活动提前结束、人被叫醒）就叫醒放行循环重算；回调只投一下，不取锁。
 func (c *Core) Start(ctx context.Context) {
 	c.mu.Lock()
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.unsub = availability.Subscribe(c.hold.poke)
+	c.wg.Add(1)
+	go c.holdLoop(c.ctx)
 	c.mu.Unlock()
 	registerLive(c) // 登记为「活着的通道」，别的通道才能把回复转投过来
 }
 
-// Stop 停掉全部 worker 并等它们退出。可重复调用。
+// Stop 停掉全部 worker 并等它们退出。可重复调用。扣着的消息留在盘上，下次启动接着算。
 func (c *Core) Stop() {
 	unregisterLive(c)
 	c.mu.Lock()
-	cancel := c.cancel
-	c.cancel = nil
+	cancel, unsub := c.cancel, c.unsub
+	c.cancel, c.unsub = nil, nil
 	c.mu.Unlock()
+	if unsub != nil {
+		unsub()
+	}
 	if c.merge != nil {
 		c.merge.stop()
 	}
@@ -297,8 +320,17 @@ func (c *Core) send(ctx context.Context, msg Message, text string) {
 }
 
 // enqueue 把消息放进该用户的串行队列，worker 不存在时惰性启动。队列满说明上一条
-// 还在处理，直接告知稍候而不是无限堆积。
+// 还在处理，直接告知稍候而不是无限堆积。角色忙着时普通消息先扣住（见 hold.go），
+// 不进队列——扣着的时候自然也不会回「上一条还在处理中」。
 func (c *Core) enqueue(ctx context.Context, msg Message) {
+	if c.holdOrPass(msg) {
+		return
+	}
+	c.enqueueNow(ctx, msg)
+}
+
+// enqueueNow 跳过扣留直接入队：扣留到点放行时用。
+func (c *Core) enqueueNow(ctx context.Context, msg Message) {
 	c.mu.Lock()
 	if c.cancel == nil { // 尚未 Start 或已 Stop
 		c.mu.Unlock()

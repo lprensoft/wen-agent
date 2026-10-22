@@ -143,7 +143,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "markdown：按原生 markdown 消息发送（表格与图片会转成文字），平台拒绝时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
 		},
 	}
-	// 收发节奏的两项与别的通道共用一份声明，见 imbot.PaceFields
+	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
 
@@ -175,6 +175,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 
 	mergeWindow, humanPace := imbot.PaceConfig(cfg)
+	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
 
 	p.Stop()
 
@@ -204,6 +205,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
 		MergeWindow:    mergeWindow,
 		HumanPace:      humanPace,
+		HoldWhenBusy:   holdWhenBusy,
+		WakeAfter:      wakeAfter,
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,
@@ -212,6 +215,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		Compact:        ictx.Compact,
 		Status:         ictx.Status,
 		Sessions:       ictx.Sessions,
+		// 扣留要给被动回复留出余地：同一条消息 60 分钟内才能被动回复，放行后那一轮
+		// 还可能跑上 turnTimeout，再留五分钟余量。超了就只能走额度有限的主动消息。
+		ReplyWindow: replyWindow - turnTimeout - 5*time.Minute,
 	})
 	if err != nil {
 		return err

@@ -8,7 +8,7 @@ import (
 func reset() {
 	mu.Lock()
 	states = nil
-	notify = nil
+	subs = map[int]func(){}
 	mu.Unlock()
 }
 
@@ -60,7 +60,8 @@ func TestClearAndNotify(t *testing.T) {
 	reset()
 	t.Cleanup(reset)
 	calls := 0
-	SetNotify(func() { calls++ })
+	cancel := Subscribe(func() { calls++ })
+	defer cancel()
 	now := time.Now()
 	Set(State{Source: "a", Activity: "跑步", Level: Light, Until: now.Add(time.Hour)})
 	if calls != 1 {
@@ -111,5 +112,32 @@ func TestSetDoesNotJudgeByWallClock(t *testing.T) {
 	// 按此刻读，它早就过去了——过期由读取一侧判定
 	if _, ok := Current(time.Now()); ok {
 		t.Fatal("按此刻读应当已过期")
+	}
+}
+
+// 两个订阅方都要被叫醒，撤销之后不再叫；CurrentExcept 不看被排除的写入方。
+func TestSubscribersAndExcept(t *testing.T) {
+	reset()
+	t.Cleanup(reset)
+	a, b := 0, 0
+	cancelA := Subscribe(func() { a++ })
+	cancelB := Subscribe(func() { b++ })
+	defer cancelB()
+	now := time.Now()
+	Set(State{Source: "heartbeat", Activity: "睡觉", Level: Away, Until: now.Add(time.Hour)})
+	if a != 1 || b != 1 {
+		t.Fatalf("两个订阅方都该被叫醒：a=%d b=%d", a, b)
+	}
+	cancelA()
+	cancelA() // 重复撤销无害
+	Set(State{Source: "agenda", Activity: "图书馆", Level: Light, Until: now.Add(time.Hour)})
+	if a != 1 || b != 2 {
+		t.Fatalf("撤销后不该再叫：a=%d b=%d", a, b)
+	}
+	if st, ok := CurrentExcept(now, "heartbeat"); !ok || st.Source != "agenda" {
+		t.Errorf("排除自己后应看到 agenda：%+v %v", st, ok)
+	}
+	if st, _ := Current(now); st.Source != "heartbeat" {
+		t.Errorf("不排除时取档位最高的：%+v", st)
 	}
 }

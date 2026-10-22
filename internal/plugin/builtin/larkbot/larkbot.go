@@ -223,7 +223,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
 		},
 	}
-	// 收发节奏的两项与别的通道共用一份声明，见 imbot.PaceFields
+	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
 
@@ -262,6 +262,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	base := strings.TrimRight(plugin.CfgString(cfg, "api_base", p.v.defaultBase), "/")
 
 	mergeWindow, humanPace := imbot.PaceConfig(cfg)
+	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
 
 	p.Stop()
 
@@ -287,6 +288,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
 		MergeWindow:    mergeWindow,
 		HumanPace:      humanPace,
+		HoldWhenBusy:   holdWhenBusy,
+		WakeAfter:      wakeAfter,
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,

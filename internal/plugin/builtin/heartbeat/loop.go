@@ -8,6 +8,7 @@ import (
 
 	"wen/internal/i18n"
 
+	"wen/internal/availability"
 	"wen/internal/cue"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -59,17 +60,57 @@ func (p *Plugin) loop(ctx context.Context) {
 // 开口不该等满一个常规周期，「刚下起雨」等一小时再说就凉了。只在动态节奏下提前
 // （固定节奏的含义就是雷打不动）；暂停仍然压过一切——睡着的人不为一场雨叫醒，
 // 理由等不到那时自会过期。
+//
+// 忙也压后：忙碌公告板上别的写入方（日程的活动）宣布了「重忙」或「不回」时，下一拍
+// 推到忙完之后再留 busyGrace——人在开会时不会主动找你聊天，有开口理由也一样等着。
+// 「轻忙」不算：能随时回的人也能随手发一句。同样只在动态节奏下生效。
 func (p *Plugin) nextBeatLocked() time.Time {
+	now := time.Now()
 	next := p.lastBeat.Add(p.cur)
-	if p.dynamic && cue.Pending(time.Now()) {
+	if p.dynamic && cue.Pending(now) {
 		if c := p.lastBeat.Add(p.minIv); c.Before(next) {
 			next = c
+		}
+	}
+	if p.dynamic {
+		if t := p.busyHoldoffLocked(now); t.After(next) {
+			next = t
 		}
 	}
 	if p.pausedUntil.After(next) {
 		return p.pausedUntil
 	}
 	return next
+}
+
+// busyHoldoffLocked 返回因为忙而不该早于的时刻（不受限时为零值），并顺手记下忙何时结束。
+// 调用方需持有 p.mu。
+//
+// 缓冲不能只靠公告板上的状态算：日程到点或提前做完时会 Clear，叫醒循环来重算的那一刻
+// 状态已经没了，按「Until + 缓冲」就退回了常规节奏——常规时刻早已过去的话当场就跳，
+// 正好撞上日程收尾的那一轮。所以看到忙的时候记住它，看到它没了的时候记下「结束于何时」
+// （提前结束取此刻，自然到点取 Until），缓冲从那里起算。只在内存里：重启丢掉的只是
+// 一次缓冲，启动本来就有宽限期。
+func (p *Plugin) busyHoldoffLocked(now time.Time) time.Time {
+	if st, ok := availability.CurrentExcept(now, availSource); ok && st.Level >= availability.Heavy {
+		p.busySeen, p.busyUntil = true, st.Until
+		return st.Until.Add(busyGrace)
+	}
+	if p.busySeen {
+		p.busySeen = false
+		p.busyEndedAt = minTime(now, p.busyUntil)
+	}
+	if p.busyEndedAt.IsZero() {
+		return time.Time{}
+	}
+	return p.busyEndedAt.Add(busyGrace)
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // resetClockLocked 把心跳倒计时的起点推到 at，并唤醒循环重算下一次心跳时刻。
@@ -101,6 +142,7 @@ func (p *Plugin) beat(ctx context.Context) {
 		p.cur = p.normalize(p.base)
 		p.adjusted = false
 		p.clearPauseLocked()
+		p.publishSleepLocked()
 	}
 	p.lastBeat = now
 	runTurn, beatPrompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
@@ -266,6 +308,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	// 全都活不过当轮。StartedAt 缺失（旧的调用方）时按旧规则处理。
 	if !p.pausedUntil.IsZero() && (ev.StartedAt.IsZero() || p.pausedAt.Before(ev.StartedAt)) {
 		p.clearPauseLocked()
+		p.publishSleepLocked()
 		persist = true
 	}
 	var dir string

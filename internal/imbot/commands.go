@@ -65,6 +65,7 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	// 对面是真人：标记交互（更新会话活跃时间），并接入本通道的确认通道
 	tctx = plugin.WithInteractive(tctx)
 	tctx = plugin.WithConfirmer(tctx, c.confirmerFor(msg))
+	tctx = withHeld(tctx, msg) // 被扣过的话，让这一轮知道自己回晚了
 	// 按配置转发过程通知：思考链、工具调用（仅名字）。同步发送保证与最终回复的顺序
 	if c.cfg.ShowThinking || c.cfg.ShowTools {
 		// 过程通知与最终回复走同一条出口：装了分通道路由时，思考链跟着回复一起

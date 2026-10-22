@@ -232,6 +232,7 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 	p.pausedAt = now
 	p.pausedUntil = now.Add(time.Duration(capped) * time.Minute)
 	p.asleep = a.Asleep
+	p.publishSleepLocked()
 	// 循环可能正挂在一个更早的到期时刻上，叫醒它按暂停重算
 	select {
 	case p.wake <- struct{}{}:

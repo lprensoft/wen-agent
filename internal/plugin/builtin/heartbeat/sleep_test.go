@@ -208,8 +208,10 @@ func TestSleepSurvivesRestart(t *testing.T) {
 	}
 }
 
-// wakeUp 模拟真人来消息：一轮在暂停之后开始并收尾。
+// wakeUp 模拟真人来消息：一轮在暂停之后开始并收尾。先等一下，让轮次开始时刻严格晚于
+// 暂停时刻——Windows 上紧挨着的两次 time.Now() 可能落在同一刻，那样会被当成当轮设下的暂停。
 func wakeUp(p *Plugin) {
+	time.Sleep(2 * time.Millisecond)
 	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, StartedAt: time.Now(), EndedAt: time.Now()})
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"wen/internal/availability"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -31,6 +32,34 @@ const (
 	// compactRetry 是会话正忙时下一次再试的间隔。
 	compactRetry = 10 * time.Minute
 )
+
+// availSource 是心跳在忙碌公告板上的写入方名。
+const availSource = "heartbeat"
+
+// busyGrace 是忙完之后再等多久才主动开口：日程在活动结束时自己会跑一轮写经历，
+// 心跳卡在同一刻只会撞上会话忙、白白跳过一拍。
+const busyGrace = 5 * time.Minute
+
+// publishSleepLocked 把「睡着」同步到忙碌公告板：自己睡着时宣布「不回」到醒来时刻，
+// 否则撤掉。消息通道据此扣住入站消息，过一阵才算被吵醒（只是对方不在、自己没睡的
+// 暂停不写——她本人并不忙）。调用方需持有 p.mu。
+//
+// 持锁写是安全的：心跳自己的订阅回调只往叫醒通道里投一下、不取 p.mu（见 Init），
+// 其它订阅方的回调按公告板的约定只碰自己的锁。
+func (p *Plugin) publishSleepLocked() {
+	if p.asleep && p.pausedUntil.After(time.Now()) {
+		availability.Set(availability.State{
+			Source:   availSource,
+			Activity: prompt.T(p.lang, "prompt.heartbeat.availability.asleep", "睡觉"),
+			Level:    availability.Away,
+			Since:    p.pausedAt,
+			Until:    p.pausedUntil,
+			Sleeping: true,
+		})
+		return
+	}
+	availability.Clear(availSource)
+}
 
 // clearPauseLocked 结束暂停，连同这一觉的状态一起清掉，并换一个代号——锁外还在跑的
 // 整理任务回来时据此知道那一觉已经结束。调用方需持有 p.mu。

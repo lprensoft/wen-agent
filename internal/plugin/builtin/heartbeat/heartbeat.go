@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/availability"
 	"wen/internal/cue"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -106,6 +107,12 @@ type Plugin struct {
 	// sleepGen 是这一觉的代号：每结束或开始一段暂停就加一。睡着时的整理在锁外跑，
 	// 回来时凭它认出「还是不是同一觉」，旧任务不往新一觉上回写状态。
 	sleepGen uint64
+
+	unsubAvail func() // 撤销对忙碌公告板的订阅
+	// 忙碌的来去（见 busyHoldoffLocked）：上次看到的忙到何时，以及忙实际结束于何时。
+	busySeen    bool
+	busyUntil   time.Time
+	busyEndedAt time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -258,6 +265,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		// 不走这条的话，睡前的节奏会越过一整个暂停期存活下来。
 		p.cur, p.adjusted = p.base, false
 	}
+	// 公告板只在内存里，重启后由这里按恢复出来的暂停重新宣布「睡着」。此时自己的订阅
+	// 已在开头的 Stop 里撤掉、新的还没装，持锁写不会叫到自己。
+	p.publishSleepLocked()
 
 	// 起点当场落盘，别等第一次心跳才写：否则「启用后还没跳过一次就重启」这一段
 	// 时间里状态文件仍是空的，倒计时又会从头开始。persistState 不碰 p.mu，
@@ -271,6 +281,15 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 公告板来了新理由就叫醒循环重算下一拍。锁序恒为 p.mu → cue 内部锁
 	// （Post 的回调在 cue 锁外发起），不成环
 	cue.SetNotify(p.onCue)
+	// 忙碌状态变了（活动开始、提前结束）同样叫醒循环。回调只往这一轮的叫醒通道里投
+	// 一下、**不取 p.mu**：心跳自己会在持锁时宣布「睡着」，回调要是取锁就是自锁。
+	wake := p.wake
+	p.unsubAvail = availability.Subscribe(func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
 	return nil
 }
 
@@ -289,13 +308,18 @@ func (p *Plugin) onCue() {
 }
 
 // Stop 停止心跳循环。只做取消与有界等待，符合 Stoppable 契约。
-// 叫醒回调一并卸下：插件已停，公告板再叫也没有循环可醒。
+// 叫醒回调一并卸下：插件已停，公告板再叫也没有循环可醒。「睡着」也从忙碌公告板上
+// 撤掉——心跳关了就没有人负责把她叫醒，消息通道不该再按一段没人管的睡眠扣消息。
 func (p *Plugin) Stop() {
 	cue.SetNotify(nil)
 	p.mu.Lock()
-	cancel := p.cancel
-	p.cancel = nil
+	cancel, unsub := p.cancel, p.unsubAvail
+	p.cancel, p.unsubAvail = nil, nil
 	p.mu.Unlock()
+	if unsub != nil {
+		unsub()
+	}
+	availability.Clear(availSource)
 	if cancel != nil {
 		cancel()
 		p.wg.Wait() // 循环体内所有阻塞点都挂在 ctx 上，取消后即刻返回
