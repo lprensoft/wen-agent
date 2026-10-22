@@ -13,6 +13,9 @@ import (
 func newTestPlugin(t *testing.T, cfg map[string]any) *Plugin {
 	t.Helper()
 	p := New()
+	// 钉在白天、骰子永不出「一阵困意」：困意随钟点变，不钉住的话夜里跑测试会多出一行
+	p.now = func() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local) }
+	p.roll = func() float64 { return 1 }
 	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, cfg); err != nil {
 		t.Fatalf("Init 失败: %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.Lock()
 	cur, dynamic, lastBeat := p.cur, p.dynamic, p.lastBeat
-	pausedUntil, curContext := p.pausedUntil, p.curContext
+	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
 	p.mu.Unlock()
 
 	if cur <= 0 { // 尚未 Init（理论上不会被问到），没有可报的节奏
@@ -24,6 +24,11 @@ func (p *Plugin) StatusLines(lang string) []string {
 	}
 	if curContext != "" {
 		mode += " · " + curContext // 情境名是用户自己写的，不翻译
+	}
+	if until := time.Until(pausedUntil); until > 0 && asleep {
+		return []string{i18n.Tf(lang, "plugin.heartbeat.status.asleep",
+			"💓 心跳：睡着了，约 %s后醒（每 %s，%s）",
+			humanDur(lang, until), humanDur(lang, cur), mode)}
 	}
 	if until := time.Until(pausedUntil); until > 0 {
 		return []string{i18n.Tf(lang, "plugin.heartbeat.status.paused",

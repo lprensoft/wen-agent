@@ -9,6 +9,7 @@ import (
 	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
+	"wen/internal/prompt"
 	"wen/internal/session"
 )
 
@@ -293,6 +294,7 @@ func TestHistoryRulesQuoteRealMarkers(t *testing.T) {
 		for _, tc := range []struct{ what, format string }{
 			{"日界线", dayMarkFmt(l.Code)},
 			{"间隔", gapNoteFmt(l.Code)},
+			{"摘要开头", strings.TrimRight(prompt.T(l.Code, "prompt.core.summary_prefix", summaryPrefixZH), "\n：:")},
 		} {
 			got := longestLiteral(tc.format)
 			if got == "" || !strings.Contains(rules, got) {

@@ -57,8 +57,8 @@ const defaultContexts = `[生活]
 - 然后看有没有值得对对方说的：惦记的事、答应过的跟进、刚发生的变化。有就自然地
   说，像随手给人发消息那样，一两句就好，不必汇报你刚更新的状态。
 - 没有就保持安静，输出空回复即可。不编造进展，不为了说话而说话。
-下次该早些或晚些醒就用 set_heartbeat_interval 定；对方要睡或长时间离开时用
-pause_heartbeat 暂停到合适的时候。`
+下次该早些或晚些醒就用 set_heartbeat_interval 定；对方要睡或长时间离开、或者你自己
+困了要睡时，用 pause_heartbeat 暂停到合适的时候。`
 
 // beatTimeout 是单次心跳轮次的时长上限。
 const beatTimeout = 10 * time.Minute
@@ -85,6 +85,10 @@ type Plugin struct {
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
 	sessions   plugin.SessionQuery // 只读：挑选最近活跃的会话
+	compactPct int                 // 睡着时整理上下文的门槛（占自动压缩点的百分比），0 = 不整理
+	compact    plugin.CompactFunc
+	status     plugin.StatusFunc
+	notice     plugin.NoticeFunc
 
 	// 运行状态
 	cur         time.Duration // 当前心跳间隔（持久化到 state.json）
@@ -94,6 +98,14 @@ type Plugin struct {
 	curContext  string    // 当前情境（模型经工具切换，持久化）
 	pausedUntil time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
 	pausedAt    time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
+	// 这段暂停里角色自己也在睡（见 sleep.go）。asleep 与 sleepCompacted 持久化，
+	// compactRetryAt 只在内存里——重启丢掉的只是一次重试的等待。
+	asleep         bool
+	sleepCompacted bool
+	compactRetryAt time.Time
+	// sleepGen 是这一觉的代号：每结束或开始一段暂停就加一。睡着时的整理在锁外跑，
+	// 回来时凭它认出「还是不是同一觉」，旧任务不往新一觉上回写状态。
+	sleepGen uint64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -117,16 +129,19 @@ func (p *Plugin) SystemPrompt() string { return "" }
 // 但普通对话轮次里模型此前根本看不到当前间隔——看不见现状，判据就永远不会触发，
 // 实测它只在「去睡了」「等一小时」这类对话里有明确文本信号的时刻才调节奏。
 // 固定节奏时不注入：调整会被工具拒绝，亮出来只会诱导模型去调。
-func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
 	p.mu.Lock()
-	lang, cur, dynamic, pausedUntil := p.lang, p.cur, p.dynamic, p.pausedUntil
+	lang, cur, dynamic := p.lang, p.cur, p.dynamic
+	var paused string
+	if until := time.Until(p.pausedUntil); until > 0 {
+		paused = p.pauseStateLocked(plugin.IsInteractive(ctx), until)
+	}
 	p.mu.Unlock()
 	if !dynamic || cur <= 0 {
 		return "", nil
 	}
-	if until := time.Until(pausedUntil); until > 0 {
-		return prompt.Tf(lang, "prompt.heartbeat.state_paused",
-			"[心跳]\n主动开口已暂停，约 %s后恢复常规节奏。", humanDur(lang, until)), nil
+	if paused != "" {
+		return paused, nil
 	}
 	return prompt.Tf(lang, "prompt.heartbeat.state",
 		"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
@@ -172,6 +187,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default: defMaxMinutes, Min: plugin.IntPtr(1), Max: plugin.IntPtr(2880),
 			Description: "角色调慢、以及无人聊天时自动放缓的上限",
 		},
+		{
+			Key: "sleep_compact_percent", Label: "睡着时整理上下文的门槛（%）", Type: plugin.FieldInt,
+			Default: defSleepCompactPercent, Min: plugin.IntPtr(0), Max: plugin.IntPtr(100),
+			Description: "角色自己去睡（暂停时说明自己也在睡）二十分钟后，若会话上下文已达自动压缩点的这个比例，" +
+				"就趁睡着压缩一次，免得在聊天中途被自动压缩打断。每次整理是一次真实的模型调用，被叫醒就不做。填 0 表示不整理",
+		},
 	}
 }
 
@@ -210,6 +231,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
 	p.sessions = ictx.Sessions
+	p.compactPct = plugin.CfgInt(cfg, "sleep_compact_percent", defSleepCompactPercent)
+	p.compact, p.status, p.notice = ictx.Compact, ictx.Status, ictx.Notice
 
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
 	// 「上次是几点」才推得出下一次
@@ -226,9 +249,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 暂停同属动态节奏：关掉动态心跳就没有「模型定的暂停」可言。
 	// 设下暂停之后真人说过话的话，说话那刻已把暂停清掉——重启不该让它复活，
 	// 所以要对照「暂停设于何时」而不能只看「暂停到何时」。
-	p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+	p.clearPauseLocked()
 	if p.dynamic && st.PausedUntil.After(time.Now()) && !p.lastActive.After(st.PausedAt) {
 		p.pausedUntil, p.pausedAt = st.PausedUntil, st.PausedAt
+		p.asleep, p.sleepCompacted = st.Asleep, st.SleepCompacted
 	} else if p.dynamic && !st.PausedUntil.IsZero() && !p.lastActive.After(st.PausedAt) {
 		// 暂停在停机期间到点了：等同「睡醒」（见 beat），节奏回基础值。
 		// 不走这条的话，睡前的节奏会越过一整个暂停期存活下来。
@@ -298,6 +322,10 @@ type state struct {
 	// 设下之后真人说过话的话暂停已被清除，只看「到何时」会让它跨重启复活。
 	PausedUntil time.Time `json:"paused_until,omitempty"`
 	PausedAt    time.Time `json:"paused_at,omitempty"`
+	// Asleep：这段暂停里角色自己也在睡；SleepCompacted：这一觉已经整理过上下文，
+	// 重启后不再来一次。两者都只在暂停仍有效时才有意义。
+	Asleep         bool `json:"asleep,omitempty"`
+	SleepCompacted bool `json:"sleep_compacted,omitempty"`
 }
 
 // resolve 定出本次启动的心跳间隔，以及它是不是一个动态判定挣来的节奏。
@@ -364,6 +392,8 @@ func (p *Plugin) snapshotStateLocked() (string, state) {
 		Context:         p.curContext,
 		PausedUntil:     p.pausedUntil,
 		PausedAt:        p.pausedAt,
+		Asleep:          p.asleep,
+		SleepCompacted:  p.sleepCompacted,
 	}
 }
 

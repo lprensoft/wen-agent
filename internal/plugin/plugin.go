@@ -85,9 +85,21 @@ type StatusInfo struct {
 	CachedTokens     int
 	CacheWriteTokens int
 	PromptTokens     int
+	// CompactAt 是自动压缩的触发点（token 数）：会话用量达到它时核心会自动压缩。
+	// 0 表示未知（上下文窗口未配置）。
+	CompactAt int
 	// PluginLines 是启用插件贡献的状态行（见 StatusReporter），已按注册顺序排好，
 	// 直接逐行输出即可。核心不解释其内容。
 	PluginLines []string
+}
+
+// CompactLoad 返回会话用量占自动压缩点的比例：1 表示到了自动压缩的地步，可能略超过 1。
+// 用量取实测与全量估算的较大者，与核心自动压缩的判据一致。没有会话或触发点未知时返回 0。
+func (s StatusInfo) CompactLoad() float64 {
+	if !s.HasSession || s.CompactAt <= 0 {
+		return 0
+	}
+	return float64(max(s.MeasuredTokens, s.EstTokens)) / float64(s.CompactAt)
 }
 
 // StatusFunc 见 InitContext.Status。sessionID 可为空（只要模型配置部分）。

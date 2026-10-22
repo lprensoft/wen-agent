@@ -2,13 +2,16 @@ package bodysense
 
 import "wen/internal/prompt"
 
-// 五段注入片段各按语言取一次。
+// 六段注入片段各按语言取一次。
 func guideFor(lang string) string { return prompt.T(lang, "prompt.body_sense.guide", guidePromptZH) }
 func stageRulesFor(lang string) string {
 	return prompt.T(lang, "prompt.body_sense.stage_rules", stageRulesZH)
 }
 func stateGuideFor(lang string) string {
 	return prompt.T(lang, "prompt.body_sense.state_guide", stateGuideZH)
+}
+func sleepGuideFor(lang string) string {
+	return prompt.T(lang, "prompt.body_sense.sleep_guide", sleepGuideZH)
 }
 func bodyStateHeaderFor(lang string) string {
 	return prompt.T(lang, "prompt.body_sense.body_state_header", bodyStateHeaderZH)
@@ -61,6 +64,20 @@ const stateGuideZH = `[身体状态]
 - 回落不需要手动调：过了一夜该平复的自然平复。
 - 没有给出当前状态时按两项都为 0 起算。
 - 不把数值当结论说出来，让它体现在呼吸、动作、反应的速度上。`
+
+// sleepGuideZH 是困意的判据，只在打开困意时注入。
+//
+// 困意由代码算、不让模型报，判据要说清的因此不是「什么时候调」，而是「拿它怎么办」：
+// 流露的时机交给「一阵困意」那一句（频率在代码侧随困意升高），流不流露、睡不睡归模型。
+// 「对方需要你时先顾着对方」不能省——不写的话，困意会压过一切正事。
+const sleepGuideZH = `[困意]
+[当前身体状态] 里有时会多出一行困意。它由醒着的时长与钟点决定，不用上报，
+adjust_body_state 也调不动它；只有睡一觉才会退。困意与疲劳是两回事：累是身体乏了，
+困是想睡。
+- 困了可以流露——话变少、反应慢半拍、打个哈欠——也可以忍着。不必每轮都提；
+  那一行末尾带着「这会儿一阵困意涌上来」时，才是它自己冒出来的时候。
+- 对方正需要你的时候先顾着对方，困意往后放。
+- 困得厉害时可以说想睡了；去不去睡、什么时候睡，由你决定。`
 
 // bodyStateHeaderZH 领起本轮注入的即时身体状态。
 const bodyStateHeaderZH = "[当前身体状态]"

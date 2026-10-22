@@ -118,6 +118,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 				Version:  version.Version,
 				Provider: provider, Model: model, Thinking: thinking,
 				ContextLength: contextLength, MeasuredTokens: -1,
+				CompactAt: int(float64(contextLength) * agent.AutoCompactThreshold),
 			}
 			if plugins != nil {
 				info.PluginLines = plugins.StatusLines(lang)

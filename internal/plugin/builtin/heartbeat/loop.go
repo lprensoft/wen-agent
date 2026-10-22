@@ -24,6 +24,12 @@ func (p *Plugin) loop(ctx context.Context) {
 	for {
 		p.mu.Lock()
 		next := p.nextBeatLocked()
+		// 睡着时要整理上下文的话，那一刻总在暂停结束（也就是下一拍）之前
+		due := p.sleepCompactDueLocked()
+		tidy := !due.IsZero() && due.Before(next)
+		if tidy {
+			next = due
+		}
 		p.mu.Unlock()
 
 		timer := time.NewTimer(time.Until(next)) // 已过期时零延时触发
@@ -37,7 +43,11 @@ func (p *Plugin) loop(ctx context.Context) {
 			timer.Stop()
 			p.maybeDecay()
 		case <-timer.C:
-			p.beat(ctx)
+			if tidy {
+				p.sleepCompact(ctx)
+			} else {
+				p.beat(ctx)
+			}
 		}
 	}
 }
@@ -90,7 +100,7 @@ func (p *Plugin) beat(ctx context.Context) {
 	if p.dynamic && !p.pausedUntil.IsZero() && !now.Before(p.pausedUntil) {
 		p.cur = p.normalize(p.base)
 		p.adjusted = false
-		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+		p.clearPauseLocked()
 	}
 	p.lastBeat = now
 	runTurn, beatPrompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
@@ -251,8 +261,11 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 		persist = true
 	}
 	// 人来说话就是醒了：暂停即刻作废（不落盘的话重启后暂停会复活）。
-	if !p.pausedUntil.IsZero() {
-		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+	// 只作废**这一轮开始之前**设下的暂停：对方说晚安、角色在同一轮里暂停到早上，是这一轮
+	// 的结论，不是被这一轮打断的——此前这里不分先后一律清掉，于是在真人对话里设下的暂停
+	// 全都活不过当轮。StartedAt 缺失（旧的调用方）时按旧规则处理。
+	if !p.pausedUntil.IsZero() && (ev.StartedAt.IsZero() || p.pausedAt.Before(ev.StartedAt)) {
+		p.clearPauseLocked()
 		persist = true
 	}
 	var dir string

@@ -168,7 +168,8 @@ func (t *pauseTool) Description() string {
 }
 
 const pauseDescZH = "暂停主动开口一段时间，到点恢复常规节奏（睡醒回到平常状态）——对方说要去睡、" +
-	"要出门长时间离开时用它，免得在不合适的时候被定时唤醒。" +
+	"要出门长时间离开，或者你自己要去睡时用它，免得在不合适的时候被定时唤醒。" +
+	"你自己也睡下时传 asleep，这段时间里来消息你会知道自己是被叫醒的。" +
 	"期间对方随时来消息不受影响，且对方一说话暂停即自动取消。" +
 	"配置了情境提示词时，可用 context 指定醒来后按哪套提示词开口（如睡前暂停到早上，指定早晨的情境）。"
 
@@ -187,7 +188,8 @@ const pauseSchemaZH = `{
 	"type": "object",
 	"properties": {
 		"minutes": {"type": "integer", "description": "暂停多少分钟（最长 %d，即一天）。睡一夜按 420-540 报"},
-		"reason": {"type": "string", "description": "暂停的理由，一句话，如「她说要睡了」"}%s
+		"reason": {"type": "string", "description": "暂停的理由，一句话，如「她说要睡了」"},
+		"asleep": {"type": "boolean", "description": "这段时间你自己也在睡觉，而不只是对方不在"}%s
 	},
 	"required": ["minutes", "reason"]
 }`
@@ -197,6 +199,7 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 		Minutes int    `json:"minutes"`
 		Reason  string `json:"reason"`
 		Context string `json:"context"`
+		Asleep  bool   `json:"asleep"`
 	}
 	p := t.p
 	lang := p.langOf()
@@ -225,8 +228,10 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 		return "", err
 	}
 	now := time.Now()
+	p.clearPauseLocked() // 新的一段暂停是新的一觉：上一觉整理过与否不作数
 	p.pausedAt = now
 	p.pausedUntil = now.Add(time.Duration(capped) * time.Minute)
+	p.asleep = a.Asleep
 	// 循环可能正挂在一个更早的到期时刻上，叫醒它按暂停重算
 	select {
 	case p.wake <- struct{}{}:
@@ -242,6 +247,11 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 	out := prompt.Tf(lang, "prompt.heartbeat.result.paused",
 		"好，接下来 %s内不再主动开口，到点恢复常规节奏%s；对方一说话即恢复。",
 		humanDur(lang, time.Duration(capped)*time.Minute), ctxNote)
+	if a.Asleep {
+		out = prompt.Tf(lang, "prompt.heartbeat.result.paused_asleep",
+			"好，你睡下了：接下来 %s内不再主动开口，到点醒来%s；对方来消息会把你叫醒。",
+			humanDur(lang, time.Duration(capped)*time.Minute), ctxNote)
+	}
 	if capped != a.Minutes {
 		out += prompt.Tf(lang, "prompt.heartbeat.result.pause_capped",
 			"（你报的是 %d 分钟，已按上限收到 %d 分钟）", a.Minutes, capped)
