@@ -38,7 +38,8 @@ func (t *searchTool) Description() string {
 }
 
 const searchDescZH = "在历史对话中检索原文，可按关键词、日期范围过滤，返回命中的会话及其摘录。" +
-	"用于回头查证当时具体说了什么。检索范围同时包含现存会话与被压缩前的历史归档，" +
+	"用于回头查证当时具体说了什么：压缩摘要里只剩个大概、记不清当时的原话与细节时，先查再说，不要凭印象补。" +
+	"检索范围同时包含现存会话与被压缩前的历史归档，" +
 	"归档命中后可用 read_archive 读取全文。"
 
 func (t *searchTool) Schema() json.RawMessage {

@@ -262,7 +262,8 @@ func TestInteractiveTurnClearsPause(t *testing.T) {
 	if _, err := p.Tools()[1].Execute(context.Background(), json.RawMessage(`{"minutes":480,"reason":"睡"}`)); err != nil {
 		t.Fatal(err)
 	}
-	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, EndedAt: time.Now()})
+	time.Sleep(2 * time.Millisecond) // 下一轮在暂停之后才开始
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, StartedAt: time.Now(), EndedAt: time.Now()})
 	p.mu.Lock()
 	until := p.pausedUntil
 	p.mu.Unlock()

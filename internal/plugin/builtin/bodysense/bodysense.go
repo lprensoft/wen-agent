@@ -3,6 +3,7 @@ package bodysense
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,6 +35,15 @@ type Plugin struct {
 	arousalDecay   int
 	fatigueDecay   int
 	stateMaxDelta  int
+	sleepiness     bool
+	sleepOnset     int               // 开始计入「醒了很久」的上下文占用（占自动压缩点的百分比）
+	status         plugin.StatusFunc // 取会话用量；nil 时困意只按钟点算
+
+	// 困意的时钟与骰子，测试替换它们。lastWave 是上一阵困意的时刻（只在内存里）。
+	now      func() time.Time
+	roll     func() float64
+	waveMu   sync.Mutex
+	lastWave time.Time
 
 	// 按可见域分出的库，惰性创建。单独一把锁：这张表的生命周期与配置无关。
 	storesMu    sync.Mutex
@@ -51,6 +61,10 @@ func New() *Plugin {
 		arousalDecay:  defaultArousalDecayPerHour,
 		fatigueDecay:  defaultFatigueDecayPerHour,
 		stateMaxDelta: defaultStateMaxDelta,
+		sleepiness:    true,
+		sleepOnset:    defaultSleepinessOnset,
+		now:           time.Now,
+		roll:          rand.Float64,
 	}
 }
 
@@ -59,7 +73,7 @@ func (p *Plugin) Name() string { return "body_sense" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "身体感知：记录各部位被触碰的累计次数并按熟悉阶段给出反应准则，另维护随时间回落的唤起与疲劳"
+	return "身体感知：记录各部位被触碰的累计次数并按熟悉阶段给出反应准则，另维护随时间回落的唤起与疲劳，以及按醒着的时长与钟点算出的困意"
 }
 
 // Requires 硬依赖 roleplay：没有角色，身体就没有归属，接触记录也没有作用对象。
@@ -120,6 +134,19 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Max:         plugin.IntPtr(stateMax),
 		},
 		{
+			Key: "sleepiness", Label: "困意", Type: plugin.FieldBool, Default: true,
+			Description: "按醒着的时长与钟点算出困意，随身体状态注入。醒着的时长取的是会话上下文离自动压缩还有多远，" +
+				"所以睡一觉（上下文被压缩）困意才会退。困意不由模型上报、也调不动，困了说不说、去不去睡由角色自己定。",
+		},
+		{
+			Key: "sleepiness_onset_percent", Label: "开始犯困的上下文占用（%）", Type: plugin.FieldInt,
+			Description: "上下文用量达到自动压缩点的这个比例之后，「醒了很久」才开始计入困意，越接近压缩点越困。" +
+				"钟点带来的困意不受它影响。填 100 表示只按钟点。",
+			Default: defaultSleepinessOnset,
+			Min:     plugin.IntPtr(0),
+			Max:     plugin.IntPtr(100),
+		},
+		{
 			Key: "max_inject_bytes", Label: "接触记录注入字节上限", Type: plugin.FieldInt,
 			Description: "记录随每轮对话重复发送，因此需要上限。超出时先省略次数只留阶段，再按阶段归并，仍超出则只注明部位数。",
 			Default:     defaultMaxInjectBytes,
@@ -163,6 +190,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.arousalDecay = plugin.CfgInt(cfg, "arousal_decay_per_hour", defaultArousalDecayPerHour)
 	p.fatigueDecay = plugin.CfgInt(cfg, "fatigue_decay_per_hour", defaultFatigueDecayPerHour)
 	p.stateMaxDelta = plugin.CfgInt(cfg, "state_max_delta_per_call", defaultStateMaxDelta)
+	p.sleepiness = plugin.CfgBool(cfg, "sleepiness", true)
+	p.sleepOnset = plugin.CfgInt(cfg, "sleepiness_onset_percent", defaultSleepinessOnset)
+	p.status = ictx.Status
 	return nil
 }
 
@@ -196,6 +226,9 @@ type settings struct {
 	arousalDecay   int
 	fatigueDecay   int
 	stateMaxDelta  int
+	sleepiness     bool
+	sleepOnset     int
+	status         plugin.StatusFunc
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而工具可能正在执行。
@@ -206,15 +239,23 @@ func (p *Plugin) snapshot() settings {
 		lang:  p.lang,
 		parts: p.parts, pace: p.pace, base: p.base, maxInjectBytes: p.maxInjectBytes,
 		arousalDecay: p.arousalDecay, fatigueDecay: p.fatigueDecay, stateMaxDelta: p.stateMaxDelta,
+		sleepiness: p.sleepiness, sleepOnset: p.sleepOnset, status: p.status,
 	}
 }
 
 // SystemPrompt 注入上报判据与反应准则，均为静态内容。
 // 累计记录改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘，
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
+// 困意的判据随开关增减：开关只在 Init 时变，整轮之间仍逐字节一致。
 func (p *Plugin) SystemPrompt() string {
-	lang := p.langOf()
-	return guideFor(lang) + "\n\n" + stageRulesFor(lang) + "\n\n" + stateGuideFor(lang)
+	p.mu.RLock()
+	lang, sleepy := p.lang, p.sleepiness
+	p.mu.RUnlock()
+	out := guideFor(lang) + "\n\n" + stageRulesFor(lang) + "\n\n" + stateGuideFor(lang)
+	if sleepy {
+		out += "\n\n" + sleepGuideFor(lang)
+	}
+	return out
 }
 
 // langOf 取进程语言。SystemPrompt 与两处 storeFor 在快照之外单独取一次，
@@ -225,9 +266,9 @@ func (p *Plugin) langOf() string {
 	return p.lang
 }
 
-// TurnPrompt 注入本轮可读的累计记录与即时身体状态。都没有时不注入：
+// TurnPrompt 注入本轮可读的累计记录与即时身体状态（含困意）。都没有时不注入：
 // 判据已在 SystemPrompt 里。
-func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.base == "" {
 		return "", nil
@@ -244,12 +285,48 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil {
 		return "", err
 	}
+	var lines []string
 	if ok {
 		if line := renderBodyState(s.lang, st); line != "" {
-			parts = append(parts, bodyStateHeaderFor(s.lang)+"\n"+line)
+			lines = append(lines, line)
 		}
 	}
+	if line := p.sleepinessLine(s, ev.SessionID); line != "" {
+		lines = append(lines, line)
+	}
+	if len(lines) > 0 {
+		parts = append(parts, bodyStateHeaderFor(s.lang)+"\n"+strings.Join(lines, "\n"))
+	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// sleepinessLine 算出本轮的困意并渲染成一行；关着、不到一档时返回空串。
+//
+// 会话用量取不到（没有状态通道、会话不存在、窗口未配置）时负载按 0 算，困意只剩
+// 钟点那一半——宁可少报，不凭空让角色犯困。「一阵困意」按档位掷一次骰子，带冷却。
+func (p *Plugin) sleepinessLine(s settings, sessionID string) string {
+	if !s.sleepiness {
+		return ""
+	}
+	load := 0.0
+	if s.status != nil && sessionID != "" {
+		if info, err := s.status(sessionID); err == nil {
+			load = info.CompactLoad()
+		}
+	}
+	now := p.now()
+	sl := computeSleepiness(load, s.sleepOnset, now.Hour())
+	level := sleepinessLevel(sl.Score)
+	if level == 0 {
+		return ""
+	}
+	p.waveMu.Lock()
+	wave := now.Sub(p.lastWave) >= waveCooldown && p.roll() < waveChance(level)
+	if wave {
+		p.lastWave = now
+	}
+	p.waveMu.Unlock()
+	return renderSleepiness(s.lang, sl, wave)
 }
 
 // ---------- 按可见域分库 ----------

@@ -29,8 +29,8 @@ const (
 	EventError        EventType = "error"
 )
 
-// autoCompactThreshold 会话上下文占用达到窗口的该比例时触发自动压缩。
-const autoCompactThreshold = 0.90
+// AutoCompactThreshold 会话上下文占用达到窗口的该比例时触发自动压缩。
+const AutoCompactThreshold = 0.90
 
 // Event 是 Agent 运行过程中对外发布的事件（server 将其转为 SSE 帧）。
 type Event struct {
@@ -517,7 +517,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opt
 			used = est
 		}
 	}
-	if float64(used) < float64(opts.ContextLength)*autoCompactThreshold {
+	if float64(used) < float64(opts.ContextLength)*AutoCompactThreshold {
 		return
 	}
 	emit(Event{Type: EventCompactStart})
