@@ -51,8 +51,12 @@ func scanRepo(t *testing.T) scanned {
 			return err
 		}
 		if d.IsDir() {
-			// 依赖、生成物与 git 目录不扫
-			if name := d.Name(); name == ".git" || name == "vendor" || name == "node_modules" {
+			// 依赖与生成物不扫，以「.」开头的目录也不扫——与 go 自己认包的规则一致，
+			// 其中有 .git，也有 Windows 上放临时构建的 .gotmp（见 CLAUDE.md「常用命令」）：
+			// 别的包并行跑测试时会在那里建了又删临时目录，扫到一半就是「找不到文件」。
+			// 根目录自己（../..）的名字也以「.」开头，不能被这条规则跳过。
+			name := d.Name()
+			if name == "vendor" || name == "node_modules" || (path != repoRoot && strings.HasPrefix(name, ".")) {
 				return filepath.SkipDir
 			}
 			return nil

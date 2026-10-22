@@ -19,6 +19,9 @@ wen.lock
 *.log
 /wen.exe~
 
+# Windows 上 go test 的临时构建目录（GOTMPDIR，躲开杀毒软件对 %TEMP% 的拦截，见 CLAUDE.md「常用命令」）
+/.gotmp/
+
 # 分发打包产物（发布 workflow 在这两处落地，本地跑同一套脚本时也一样）
 /dist/
 /build/

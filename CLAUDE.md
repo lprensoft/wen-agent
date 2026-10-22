@@ -266,6 +266,14 @@ go test ./...                   # 测试
 go run ./cmd/wen                # 运行（没配过模型时先进首次运行向导）
 ```
 
+**在 Windows 上跑测试要把临时构建放进项目目录**：`go test` 把每个包编译成一个无签名的临时 exe 放在 `%TEMP%` 里跑，而 `execcmd` 的测试会真的起 `cmd /C del …` 去删文件——「临时目录里的陌生程序一启动就起 shell 删文件」正是杀毒软件的行为规则要拦的，于是那个包每次都以 `exit status 0xffffffff` 被杀掉，看上去像测试挂了。只在这条命令上设 `GOTMPDIR`，**不要用 `go env -w`**——那是用户级配置，会让本机所有 Go 项目都往这里编译：
+
+```bash
+mkdir -p .gotmp && GOTMPDIR="$PWD/.gotmp" go test ./...   # Git Bash 会把 $PWD 换成 D:/ 形式的路径
+```
+
+`.gotmp/` 已在 `.gitignore` 中，go 跑完会自己清掉里面的东西。PowerShell 里写成 `$env:GOTMPDIR="$PWD\.gotmp"`，它会留在当前会话里，用完 `Remove-Item Env:GOTMPDIR`。
+
 改了文案、提示词、配置项或日志之后，两份语言包各查一次：
 
 ```bash
