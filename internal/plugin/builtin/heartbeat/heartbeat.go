@@ -109,6 +109,10 @@ type Plugin struct {
 	sleepGen uint64
 
 	unsubAvail func() // 撤销对忙碌公告板的订阅
+	// 忙碌的来去（见 busyHoldoffLocked）：上次看到的忙到何时，以及忙实际结束于何时。
+	busySeen    bool
+	busyUntil   time.Time
+	busyEndedAt time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc

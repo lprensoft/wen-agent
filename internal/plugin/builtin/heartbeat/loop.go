@@ -73,16 +73,44 @@ func (p *Plugin) nextBeatLocked() time.Time {
 		}
 	}
 	if p.dynamic {
-		if st, ok := availability.CurrentExcept(now, availSource); ok && st.Level >= availability.Heavy {
-			if t := st.Until.Add(busyGrace); t.After(next) {
-				next = t
-			}
+		if t := p.busyHoldoffLocked(now); t.After(next) {
+			next = t
 		}
 	}
 	if p.pausedUntil.After(next) {
 		return p.pausedUntil
 	}
 	return next
+}
+
+// busyHoldoffLocked 返回因为忙而不该早于的时刻（不受限时为零值），并顺手记下忙何时结束。
+// 调用方需持有 p.mu。
+//
+// 缓冲不能只靠公告板上的状态算：日程到点或提前做完时会 Clear，叫醒循环来重算的那一刻
+// 状态已经没了，按「Until + 缓冲」就退回了常规节奏——常规时刻早已过去的话当场就跳，
+// 正好撞上日程收尾的那一轮。所以看到忙的时候记住它，看到它没了的时候记下「结束于何时」
+// （提前结束取此刻，自然到点取 Until），缓冲从那里起算。只在内存里：重启丢掉的只是
+// 一次缓冲，启动本来就有宽限期。
+func (p *Plugin) busyHoldoffLocked(now time.Time) time.Time {
+	if st, ok := availability.CurrentExcept(now, availSource); ok && st.Level >= availability.Heavy {
+		p.busySeen, p.busyUntil = true, st.Until
+		return st.Until.Add(busyGrace)
+	}
+	if p.busySeen {
+		p.busySeen = false
+		p.busyEndedAt = minTime(now, p.busyUntil)
+	}
+	if p.busyEndedAt.IsZero() {
+		return time.Time{}
+	}
+	return p.busyEndedAt.Add(busyGrace)
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // resetClockLocked 把心跳倒计时的起点推到 at，并唤醒循环重算下一次心跳时刻。

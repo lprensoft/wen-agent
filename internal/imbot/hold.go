@@ -65,22 +65,33 @@ func (h *holder) poke() {
 }
 
 // saveLocked 原子写回；没有扣着的消息时删掉文件。调用方须持 mu。
-func (h *holder) saveLocked() {
+//
+// 目录要自己建：通道初始化时并不创建 StateDir，它往往要等第一次建立会话绑定才出现，
+// 而第一条消息就可能被扣住——那时目录还不存在，写盘失败而消息只在内存里，一次重启
+// 就没了。
+func (h *holder) saveLocked() error {
 	if len(h.users) == 0 {
-		_ = os.Remove(h.path)
-		return
+		if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 	raw, err := json.Marshal(h.users)
 	if err != nil {
-		return
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
+		return err
 	}
 	tmp := h.path + ".tmp"
-	if os.WriteFile(tmp, raw, 0o600) != nil {
-		return
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
 	}
-	if os.Rename(tmp, h.path) != nil {
+	if err := os.Rename(tmp, h.path); err != nil {
 		_ = os.Remove(tmp)
+		return err
 	}
+	return nil
 }
 
 // releaseAt 算出一批从 first 起扣着的消息该在何时放行；不需要扣时返回 now。
@@ -122,8 +133,12 @@ func (c *Core) holdOrPass(msg Message) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if prev := h.users[msg.UserID]; len(prev) > 0 {
+		// 前面还有扣着的，这条只能接在后面：放行的话就插了队。存不上盘也照样扣着，
+		// 只是这一批扛不过重启——记一笔，让人知道
 		h.users[msg.UserID] = append(prev, heldMsg{Msg: msg, Arrived: now})
-		h.saveLocked()
+		if err := h.saveLocked(); err != nil {
+			c.logHoldSaveFailed(err)
+		}
 		h.poke()
 		return true
 	}
@@ -132,7 +147,12 @@ func (c *Core) holdOrPass(msg Message) bool {
 	}
 	st, _ := availability.Current(now)
 	h.users[msg.UserID] = []heldMsg{{Msg: msg, Arrived: now, Activity: st.Activity, Sleeping: st.Sleeping}}
-	h.saveLocked()
+	if err := h.saveLocked(); err != nil {
+		// 存不上盘就不扣：立刻回总比扣在内存里、一重启就悄悄丢了强
+		delete(h.users, msg.UserID)
+		c.logHoldSaveFailed(err)
+		return false
+	}
 	h.poke()
 	i18n.Logf(c.cfg.Lang, "log.imbot.held", "%s: 角色正忙（%s），用户 %s 的消息先扣住", c.cfg.PluginName, st.Activity, msg.UserID)
 	return true
@@ -165,15 +185,28 @@ func (c *Core) releaseDue(now time.Time) time.Time {
 		}
 	}
 	if len(due) > 0 {
-		h.saveLocked()
+		if err := h.saveLocked(); err != nil {
+			c.logHoldSaveFailed(err) // 盘上还留着这几条，重启后会再放一次
+		}
 	}
 	h.mu.Unlock()
 
 	ctx := c.lifeCtx(context.Background())
 	for _, batch := range due {
+		// 按**此刻**的白名单再认一次：扣着的这段时间里（尤其跨过一次重启）用户可能已被
+		// 移出白名单，入队之后就会触发模型与工具执行，Handle 里那一道已经管不到了
+		if user := batch[0].Msg.UserID; !c.allowed(user) {
+			i18n.Logf(c.cfg.Lang, "log.imbot.held_dropped",
+				"%s: 用户 %s 已不在白名单内，丢弃扣着的 %d 条消息", c.cfg.PluginName, user, len(batch))
+			continue
+		}
 		c.enqueueNow(ctx, releasedMessage(batch))
 	}
 	return next
+}
+
+func (c *Core) logHoldSaveFailed(err error) {
+	i18n.Logf(c.cfg.Lang, "log.imbot.hold_save_failed", "%s: 扣着的消息存盘失败: %v", c.cfg.PluginName, err)
 }
 
 // releasedMessage 把一批扣着的消息合成一轮，并记下「从何时起、因为什么」被扣着。

@@ -109,3 +109,41 @@ func TestPublishingSleepDoesNotDeadlock(t *testing.T) {
 		t.Fatal("宣布睡着时卡死了")
 	}
 }
+
+// 日程到点或提前做完时会撤掉忙碌状态，叫醒循环来重算的那一刻状态已经没了：
+// 缓冲要从「忙实际结束的时刻」起算，而不是跟着状态一起消失。
+func TestBusyGraceSurvivesClear(t *testing.T) {
+	cleanBoard(t)
+	p, _ := newInited(t, noTurn, nil)
+	p.mu.Lock()
+	p.lastBeat = time.Now().Add(-2 * time.Hour) // 常规时刻早就过了
+	p.mu.Unlock()
+
+	availability.Set(availability.State{Source: "agenda", Activity: "开会", Level: availability.Heavy, Until: time.Now().Add(time.Hour)})
+	p.mu.Lock()
+	_ = p.nextBeatLocked() // 循环看到了忙
+	p.mu.Unlock()
+
+	availability.Clear("agenda") // 提前开完
+	cleared := time.Now()
+	p.mu.Lock()
+	next := p.nextBeatLocked()
+	p.mu.Unlock()
+	if next.Before(cleared.Add(busyGrace - time.Second)) {
+		t.Errorf("提前忙完也要留出缓冲：next 距清除 %v", next.Sub(cleared))
+	}
+
+	// 自然到点（没人 Clear，状态过期被清掉）：缓冲从原定的 Until 起算
+	until := time.Now().Add(30 * time.Millisecond)
+	availability.Set(availability.State{Source: "agenda", Activity: "跑步", Level: availability.Heavy, Until: until})
+	p.mu.Lock()
+	_ = p.nextBeatLocked()
+	p.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	p.mu.Lock()
+	next = p.nextBeatLocked()
+	p.mu.Unlock()
+	if !next.Equal(until.Add(busyGrace)) {
+		t.Errorf("到点结束时缓冲应从 Until 起算：next-until = %v", next.Sub(until))
+	}
+}

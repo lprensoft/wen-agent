@@ -2,6 +2,8 @@ package imbot
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +157,58 @@ func TestHeldTurnKnowsItIsLate(t *testing.T) {
 	msg.heldSince = time.Now().Add(-10 * time.Second)
 	if got := heldNote(withHeld(context.Background(), msg), ""); got != "" {
 		t.Errorf("不到一分钟不该提：%q", got)
+	}
+}
+
+// 通道初始化时 StateDir 往往还不存在：第一条消息就被扣住时也要落得了盘。
+func TestHoldCreatesStateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plugins", "qq_bot")
+	rec := newTurnRecorder()
+	busy(t, availability.State{Activity: "开会", Level: availability.Away, Until: time.Now().Add(time.Hour)})
+	c, _ := holdingCore(t, rec, func(cfg *Config) { cfg.StateDir = dir })
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "在吗"})
+	rec.expectNone(t, 100*time.Millisecond)
+	if _, err := os.Stat(filepath.Join(dir, "held.json")); err != nil {
+		t.Fatalf("扣住的消息应已落盘：%v", err)
+	}
+}
+
+// 存不上盘就不扣：立刻回，免得扣在内存里、一重启就丢了。
+func TestHoldFallsThroughWhenUnsavable(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := newTurnRecorder()
+	busy(t, availability.State{Activity: "开会", Level: availability.Away, Until: time.Now().Add(time.Hour)})
+	c, _ := newCore(t, rec.run, func(cfg *Config) {
+		cfg.HoldWhenBusy = true
+		cfg.StateDir = t.TempDir()
+	})
+	c.hold.path = filepath.Join(blocker, "held.json") // 父路径是个文件，目录建不出来
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "在吗"})
+	if got := rec.expect(t); got != "在吗" {
+		t.Errorf("存不上盘时应立刻处理：%q", got)
+	}
+}
+
+// 扣着期间用户被移出白名单（跨过一次重启）：放行时按此刻的白名单再认一次。
+func TestHeldMessagesRecheckWhitelist(t *testing.T) {
+	dir := t.TempDir()
+	rec := newTurnRecorder()
+	busy(t, availability.State{Activity: "开会", Level: availability.Away, Until: time.Now().Add(time.Hour)})
+	c1, _ := holdingCore(t, rec, func(cfg *Config) { cfg.StateDir = dir })
+	c1.Handle(context.Background(), Message{UserID: "u1", Text: "在吗"})
+	rec.expectNone(t, 100*time.Millisecond)
+	c1.Stop()
+
+	availability.Clear("agenda")
+	holdingCore(t, rec, func(cfg *Config) {
+		cfg.StateDir = dir
+		cfg.Allow = func(string) bool { return false } // 管理员把人移出了白名单
+	})
+	rec.expectNone(t, 300*time.Millisecond)
+	if _, err := os.Stat(filepath.Join(dir, "held.json")); !os.IsNotExist(err) {
+		t.Errorf("丢弃后不该再留在盘上：%v", err)
 	}
 }

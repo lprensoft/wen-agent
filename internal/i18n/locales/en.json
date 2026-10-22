@@ -407,6 +407,8 @@
   "log.imbot.channel_down": "imbot: channel %s is not enabled right now, so nothing could be delivered",
   "log.imbot.handle_panic": "%s: panic while handling a message (contained): %v",
   "log.imbot.held": "%s: the character is busy (%s), holding the message from user %s for now",
+  "log.imbot.held_dropped": "%s: user %s is no longer on the whitelist, dropping %d held message(s)",
+  "log.imbot.hold_save_failed": "%s: failed to save held messages: %v",
   "log.imbot.joined_anchor": "%s: user %s joined the shared current session %s",
   "log.imbot.no_push": "%s: this channel offers no way to push, so it cannot receive re-routed replies",
   "log.imbot.no_recipient": "%s: nobody to deliver to (%d users known; exactly 1 is needed to adopt them into the session)",
