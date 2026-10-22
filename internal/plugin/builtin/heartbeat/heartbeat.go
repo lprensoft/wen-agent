@@ -103,6 +103,9 @@ type Plugin struct {
 	asleep         bool
 	sleepCompacted bool
 	compactRetryAt time.Time
+	// sleepGen 是这一觉的代号：每结束或开始一段暂停就加一。睡着时的整理在锁外跑，
+	// 回来时凭它认出「还是不是同一觉」，旧任务不往新一觉上回写状态。
+	sleepGen uint64
 
 	ctx    context.Context
 	cancel context.CancelFunc

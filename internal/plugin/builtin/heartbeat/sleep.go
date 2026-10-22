@@ -32,17 +32,25 @@ const (
 	compactRetry = 10 * time.Minute
 )
 
-// clearPauseLocked 结束暂停，连同这一觉的状态一起清掉。调用方需持有 p.mu。
+// clearPauseLocked 结束暂停，连同这一觉的状态一起清掉，并换一个代号——锁外还在跑的
+// 整理任务回来时据此知道那一觉已经结束。调用方需持有 p.mu。
 func (p *Plugin) clearPauseLocked() {
 	p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
 	p.asleep, p.sleepCompacted = false, false
 	p.compactRetryAt = time.Time{}
+	p.sleepGen++
 }
 
 // sleepCompactDueLocked 返回这一觉该整理上下文的时刻；不需要整理时返回零值。
 // 调用方需持有 p.mu。
+//
+// 已经到了醒来时刻的一觉不再整理：电脑休眠跨过整段睡眠再恢复时，循环会同时看到
+// 「早该整理」与「早该醒」，先补一次整理只会推迟醒来、白付一次模型调用。
 func (p *Plugin) sleepCompactDueLocked() time.Time {
 	if !p.dynamic || !p.asleep || p.sleepCompacted || p.compactPct <= 0 || p.compact == nil || p.status == nil {
+		return time.Time{}
+	}
+	if !time.Now().Before(p.pausedUntil) {
 		return time.Time{}
 	}
 	due := p.pausedAt.Add(sleepSettle)
@@ -57,15 +65,27 @@ func (p *Plugin) sleepCompactDueLocked() time.Time {
 
 // sleepCompact 在角色睡着时压缩最近活跃的会话——醒来之后心跳与对话落的正是那个会话。
 // 用量没到门槛就不压：上下文本来就短，整理一次只是白付一次模型调用。
+//
+// 查会话、问用量都在锁外，期间真人可能已经把人叫醒，所以动手压缩之前再认一次
+// 「还是这一觉、还该整理」，回写结果时也只写回同一觉。认过之后到压缩拿到会话锁之间
+// 仍有极短的窗口：真人轮次先拿到锁时压缩返回会话忙、按重试处理，而那时暂停已清、
+// 代号已换，重试不会发生；压缩先拿到锁时真人轮次排在它后面。
 func (p *Plugin) sleepCompact(ctx context.Context) {
 	p.mu.Lock()
 	if p.sleepCompactDueLocked().IsZero() { // 等待期间被叫醒了，或者配置变了
 		p.mu.Unlock()
 		return
 	}
+	gen := p.sleepGen
 	lang, pct := p.lang, p.compactPct
 	compact, status, notice, sessions := p.compact, p.status, p.notice, p.sessions
 	p.mu.Unlock()
+
+	stillAsleep := func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.sleepGen == gen && !p.sleepCompactDueLocked().IsZero()
+	}
 
 	done := true
 	sid, _, err := sessions.LastActive()
@@ -81,6 +101,9 @@ func (p *Plugin) sleepCompact(ctx context.Context) {
 			i18n.Logf(lang, "log.heartbeat.sleep_compact_skip",
 				"heartbeat: 会话 %s 的上下文只占自动压缩点的 %d%%，睡着时不整理", sid, percent)
 			break
+		}
+		if !stillAsleep() {
+			return // 已经醒了：这一觉的状态归新一轮管，什么都不写
 		}
 		cctx, cancel := context.WithTimeout(ctx, beatTimeout)
 		err := compact(cctx, sid)
@@ -102,6 +125,10 @@ func (p *Plugin) sleepCompact(ctx context.Context) {
 	}
 
 	p.mu.Lock()
+	if p.sleepGen != gen { // 整理期间被叫醒或换了一觉：结果不属于现在这一觉
+		p.mu.Unlock()
+		return
+	}
 	if done {
 		p.sleepCompacted = true
 	} else {

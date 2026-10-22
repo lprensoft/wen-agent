@@ -207,3 +207,69 @@ func TestSleepSurvivesRestart(t *testing.T) {
 		t.Errorf("重启后应当还睡着、且记得这一觉整理过：asleep=%v done=%v", asleep, done)
 	}
 }
+
+// wakeUp 模拟真人来消息：一轮在暂停之后开始并收尾。
+func wakeUp(p *Plugin) {
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, StartedAt: time.Now(), EndedAt: time.Now()})
+}
+
+// 查用量期间人被叫醒：旧任务不该再压缩，也不该往状态里写任何东西。
+func TestSleepCompactAbortsWhenWokenBeforeCompacting(t *testing.T) {
+	p, _, calls := sleepyPlugin(t, 0.6, nil)
+	fallAsleep(t, p, sleepSettle+time.Minute)
+	p.mu.Lock()
+	p.status = func(string) (plugin.StatusInfo, error) {
+		wakeUp(p) // 锁外调用，正是真人轮次能插进来的那个空当
+		return plugin.StatusInfo{HasSession: true, CompactAt: 1000, EstTokens: 600, MeasuredTokens: -1}, nil
+	}
+	p.mu.Unlock()
+
+	p.sleepCompact(context.Background())
+	p.mu.Lock()
+	asleep, done := p.asleep, p.sleepCompacted
+	p.mu.Unlock()
+	if len(*calls) != 0 {
+		t.Errorf("醒了之后不该再压缩：%v", *calls)
+	}
+	if asleep || done {
+		t.Errorf("旧任务不该回写状态：asleep=%v done=%v", asleep, done)
+	}
+}
+
+// 压缩期间人被叫醒、随后又睡下：旧任务的结果不属于新的一觉。
+func TestSleepCompactDoesNotMarkNextSleep(t *testing.T) {
+	p, _, _ := sleepyPlugin(t, 0.6, nil)
+	fallAsleep(t, p, sleepSettle+time.Minute)
+	p.mu.Lock()
+	p.compact = func(context.Context, string) error {
+		wakeUp(p)
+		pause(t, p, `{"minutes":480,"reason":"又睡了","asleep":true}`)
+		return nil
+	}
+	p.mu.Unlock()
+
+	p.sleepCompact(context.Background())
+	p.mu.Lock()
+	asleep, done := p.asleep, p.sleepCompacted
+	p.mu.Unlock()
+	if !asleep || done {
+		t.Errorf("新的一觉不该被标成已整理：asleep=%v done=%v", asleep, done)
+	}
+}
+
+// 电脑休眠跨过整段睡眠再恢复：已经到了醒来时刻，不该先补一次整理。
+func TestSleepCompactSkippedAfterSleepEnded(t *testing.T) {
+	p, _, calls := sleepyPlugin(t, 0.6, nil)
+	fallAsleep(t, p, 9*time.Hour)
+	p.mu.Lock()
+	p.pausedUntil = time.Now().Add(-time.Hour)
+	due := p.sleepCompactDueLocked()
+	p.mu.Unlock()
+	if !due.IsZero() {
+		t.Errorf("已经醒了的一觉不该再排整理：due=%v", due)
+	}
+	p.sleepCompact(context.Background())
+	if len(*calls) != 0 {
+		t.Errorf("不该压缩：%v", *calls)
+	}
+}
