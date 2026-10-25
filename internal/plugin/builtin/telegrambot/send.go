@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wen/internal/i18n"
+	"wen/internal/imbot"
 
 	"wen/internal/mdtext"
 )
@@ -82,6 +83,37 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 }
 
 // sendMessage 发一条消息。parseMode 为空表示纯文本。
+// onPreview 把正在写的回复显示成草稿（sendMessageDraft，Bot API 9.3 起，仅私聊）。
+// 草稿是 30 秒的临时预览，正式回复照常用 sendMessage 发，发出后草稿自动消失。
+//
+// 同一轮用同一个 draft_id，变化才是带动画的更新；取入站消息的 message_id，它在这个
+// 聊天里唯一且非零。草稿按纯文本发：写到一半的 markdown 转成 MarkdownV2 多半解析失败，
+// 正式回复才走格式。失败只记日志——预览丢一次无所谓，正式回复不受影响。
+func (p *Plugin) onPreview(ctx context.Context, msg imbot.Message, text string) {
+	chatID, err := strconv.ParseInt(msg.UserID, 10, 64)
+	if err != nil {
+		return
+	}
+	draftID, _ := strconv.ParseInt(msg.ReplyTo, 10, 64)
+	if draftID == 0 {
+		draftID = 1
+	}
+	text = mdtext.ToPlainText(p.langOf(), text)
+	if r := []rune(text); len(r) > previewLimit {
+		text = string(r[:previewLimit]) + "…"
+	}
+	p.mu.Lock()
+	client := p.client
+	p.mu.Unlock()
+	params := map[string]any{"chat_id": chatID, "draft_id": draftID, "text": text}
+	if err := p.apiCall(ctx, client, "sendMessageDraft", params, nil); err != nil && ctx.Err() == nil {
+		i18n.Logf(p.langOf(), "log.telegram.preview_failed", "telegram_bot: 草稿预览失败（忽略）: %v", err)
+	}
+}
+
+// previewLimit 是草稿的字数上限：官方是解析后 4096 字，留些余量给省略号与 emoji 的双字长。
+const previewLimit = 4000
+
 func (p *Plugin) sendMessage(ctx context.Context, client *http.Client, chatID, text, parseMode, replyTo string) error {
 	params := map[string]any{
 		"chat_id": chatID,

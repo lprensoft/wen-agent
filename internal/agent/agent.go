@@ -435,11 +435,15 @@ func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options,
 		return turnResult{}, err
 	}
 
+	preview := plugin.ReplyPreviewFrom(ctx)
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
 			r.content += ev.Content
 			emit(Event{Type: EventDelta, Content: ev.Content})
+			if preview != nil {
+				preview(r.content) // 本次响应到目前为止的全文，见 plugin.WithReplyPreview
+			}
 		case llm.EventReasoningDelta:
 			r.reasoning += ev.Content
 			emit(Event{Type: EventThinking, Content: ev.Content})

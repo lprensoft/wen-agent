@@ -25,8 +25,10 @@ import (
 )
 
 const (
-	defAPIBase        = "https://api.sgroup.qq.com"
-	defTokenURL       = "https://bots.qq.com/app/getAppAccessToken"
+	// 2026-08-10 起官方把域名统一为 api.bot.qq.com，token 也改从这里取。旧的
+	// api.sgroup.qq.com / bots.qq.com 仍能用、没有下线日期，存过旧值的配置不迁移
+	defAPIBase        = "https://api.bot.qq.com"
+	defTokenURL       = "https://api.bot.qq.com/app/getAppAccessToken"
 	defConfirmTimeout = 300 // 秒
 
 	turnTimeout = 10 * time.Minute
@@ -47,7 +49,7 @@ type Plugin struct {
 	whitelist map[string]bool
 	format    string // formatMarkdown / formatPlain
 
-	// markdown 能力缓存：openid → 关闭到何时（平台返回 40034012 后记入）
+	// markdown 能力缓存：openid → 关闭到何时（平台返回 markdown 被拒的错误码后记入，见 isMarkdownForbidden）
 	mdOff map[string]time.Time
 
 	// 运行组件
@@ -208,6 +210,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		HoldWhenBusy:   holdWhenBusy,
 		WakeAfter:      wakeAfter,
 		Allow:          p.allowed,
+		Typing:         p.typing,
 		Push:           p.push,
 		Notice:         ictx.Notice,
 		RunTurn:        ictx.RunTurn,

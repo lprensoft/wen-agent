@@ -261,8 +261,11 @@ func TestBuildPayload(t *testing.T) {
 	if typ != "interactive" {
 		t.Fatalf("卡片模式的 msg_type = %q", typ)
 	}
-	if !strings.Contains(content, "lark_md") {
-		t.Errorf("卡片应用 lark_md 渲染: %s", content)
+	if !strings.Contains(content, `"schema":"2.0"`) || !strings.Contains(content, `"tag":"markdown"`) {
+		t.Errorf("卡片应是 JSON 2.0 的 markdown 组件: %s", content)
+	}
+	if strings.Contains(content, "wide_screen_mode") {
+		t.Errorf("已废弃的 wide_screen_mode 不该再发: %s", content)
 	}
 	if !strings.Contains(content, `**重点**`) {
 		t.Errorf("卡片模式应原样带上 markdown: %s", content)

@@ -16,7 +16,8 @@ import (
 	"wen/internal/i18n"
 )
 
-// runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出。
+// runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出（v3.11.0 起才如此：
+// 更早的版本连上之后是一个不看 ctx 的 select{}，见 ws_test.go）。
 //
 // 长连接的线格式是 protobuf 私有协议，官方不公开，只能用 SDK——这是本项目里
 // 唯一一处「协议层不自己写」的地方。发消息仍是手写 HTTP。
@@ -45,7 +46,7 @@ func (p *Plugin) runWS(ctx context.Context, appID, appSecret, base string) {
 		i18n.Logf(p.langOf(), "log.lark.connecting", "%s: 正在建立长连接（%s）", p.Name(), base)
 		if err := cli.Start(ctx); err != nil && ctx.Err() == nil {
 			i18n.Logf(p.langOf(), "log.lark.disconnected", "%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
-				"并订阅了「接收消息」事件、开通了 im:message 与 im:message:send_as_bot 权限",
+				"并订阅了「接收消息」事件、开通了 im:message.p2p_msg:readonly（收单聊消息）与 im:message:send_as_bot 权限",
 				p.Name(), err)
 		}
 	}()

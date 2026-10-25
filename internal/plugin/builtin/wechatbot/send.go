@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"wen/internal/i18n"
 
@@ -27,9 +28,15 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 		i18n.Logf(p.langOf(), "log.wechat.reply_no_token", "wechat_bot: 缺少 context_token，无法回复 %s", userID)
 		return
 	}
+	if p.paused() {
+		i18n.Logf(p.langOf(), "log.wechat.send_paused", "wechat_bot: 微信侧 token 已失效，暂停期间丢弃发给 %s 的消息", userID)
+		return
+	}
 
 	if format == formatPlain {
 		text = mdtext.ToPlainText(p.langOf(), text)
+	} else {
+		text = filterMarkdown(text)
 	}
 	chunks := mdtext.ChunkMarkdown(text, chunkLimit)
 	total := len(chunks)
@@ -46,6 +53,27 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 	}
 }
 
+// pauseFor 记下 -14 之后的暂停截止时刻，连同引起它的那把 token。
+//
+// 暂停只对那把 token 作数：重新扫码换了凭证之后，旧的收信循环可能还有一个在途请求，
+// 它的 -14 晚到一步也只会落在旧 token 上，不会把新凭证的发送一并停掉。token 已经不是
+// 当前凭证时直接不记。
+func (p *Plugin) pauseFor(token string, until time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if token != p.creds.BotToken {
+		return
+	}
+	p.pausedToken, p.pausedUntil = token, until
+}
+
+// paused 判断此刻是否在 -14 之后的暂停期里（且暂停属于当前凭证）。
+func (p *Plugin) paused() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pausedToken == p.creds.BotToken && time.Now().Before(p.pausedUntil)
+}
+
 // sendMessage 发送单条文本消息（message_state=FINISH，非流式）。
 func (p *Plugin) sendMessage(ctx context.Context, creds credentials, userID, text, contextToken string) error {
 	body := map[string]any{
@@ -57,7 +85,7 @@ func (p *Plugin) sendMessage(ctx context.Context, creds credentials, userID, tex
 			ContextToken: contextToken,
 			ItemList:     []messageItem{{Type: 1, TextItem: &textItem{Text: text}}},
 		},
-		"base_info": baseInfo{ChannelVersion: channelVersion},
+		"base_info": newBaseInfo(),
 	}
 	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/sendmessage", body, creds.BotToken, apiTimeout)
 	if err != nil {

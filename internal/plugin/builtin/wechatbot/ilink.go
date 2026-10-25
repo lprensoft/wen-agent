@@ -11,14 +11,33 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+
+	"wen/internal/version"
 )
 
 // iLink Bot API 的 HTTP 封装。所有接口在同一基址下（扫码用公共基址，绑定后用
 // 服务端下发的专属 baseurl），JSON over HTTP，对照官方 openclaw-weixin 包移植。
 
-// channelVersion 随每个请求的 base_info 上报，取官方渠道包的版本号。
-const channelVersion = "1.0.2"
+// channelVersion 随每个请求的 base_info 上报，取官方渠道包的版本号。协议行为已对齐
+// 到这一版（扫码改 POST、公共请求头、无符号消息 ID、-14 暂停全部请求）。
+const channelVersion = "2.4.10"
+
+// iLinkAppID 是公共请求头 iLink-App-Id 的值，与官方包一致。
+const iLinkAppID = "bot"
+
+// clientVersionHeader 是 iLink-App-ClientVersion 的值：版本号按 0x00MMNNPP 编码后的十进制。
+var clientVersionHeader = strconv.Itoa(encodeClientVersion(channelVersion))
+
+func encodeClientVersion(v string) int {
+	var parts [3]int
+	for i, s := range strings.SplitN(v, ".", 3) {
+		n, _ := strconv.Atoi(s)
+		parts[i] = n & 0xff
+	}
+	return parts[0]<<16 | parts[1]<<8 | parts[2]
+}
 
 const (
 	longPollTimeout = 35 * time.Second // getupdates / 扫码状态长轮询的客户端超时
@@ -27,6 +46,12 @@ const (
 
 type baseInfo struct {
 	ChannelVersion string `json:"channel_version"`
+	// BotAgent 只用于对方的日志与监控归因，不参与鉴权或路由；格式是 Name/Version
+	BotAgent string `json:"bot_agent,omitempty"`
+}
+
+func newBaseInfo() baseInfo {
+	return baseInfo{ChannelVersion: channelVersion, BotAgent: "Wen/" + version.Version}
 }
 
 // ---------- 报文结构（bytes 字段在 JSON 中是 base64 字符串） ----------
@@ -53,7 +78,9 @@ const (
 )
 
 type wxMessage struct {
-	MessageID    int64         `json:"message_id,omitempty"`
+	// MessageID 线上是 uint64（官方 2.4.9 起按无损方式解析）：按有符号数解析的话，
+	// 一旦有 ID 超过 2^63，整个 getupdates 响应解不开，游标不再前进，收信就卡死了
+	MessageID    uint64        `json:"message_id,omitempty"`
 	FromUserID   string        `json:"from_user_id,omitempty"`
 	ToUserID     string        `json:"to_user_id,omitempty"`
 	ClientID     string        `json:"client_id,omitempty"`
@@ -73,7 +100,8 @@ type getUpdatesResp struct {
 	LongpollingTimeoutMs int         `json:"longpolling_timeout_ms"`
 }
 
-// errcodeExpired 是服务端「会话过期」错误码，收到后暂停请求一段时间（官方行为）。
+// errcodeExpired 是服务端「token 失效」错误码（官方叫 STALE_TOKEN），收到后暂停
+// **全部**请求一段时间，发送也不例外（官方行为）。
 const errcodeExpired = -14
 
 // ---------- HTTP ----------
@@ -101,6 +129,7 @@ func apiPost(ctx context.Context, base, endpoint string, body any, token string,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("AuthorizationType", "ilink_bot_token")
 	req.Header.Set("X-WECHAT-UIN", randomUIN())
+	setAppHeaders(req)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -119,7 +148,13 @@ func apiPost(ctx context.Context, base, endpoint string, body any, token string,
 	return data, nil
 }
 
-// apiGet 发一个 GET（扫码二维码与状态接口，无鉴权）。
+// setAppHeaders 补上官方要求每个请求都带的应用请求头。
+func setAppHeaders(req *http.Request) {
+	req.Header.Set("iLink-App-Id", iLinkAppID)
+	req.Header.Set("iLink-App-ClientVersion", clientVersionHeader)
+}
+
+// apiGet 发一个 GET（扫码状态接口）：只带应用请求头，不带鉴权、UIN 与 AuthorizationType。
 func apiGet(ctx context.Context, base, endpoint string, headers map[string]string, timeout time.Duration) ([]byte, error) {
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -127,6 +162,7 @@ func apiGet(ctx context.Context, base, endpoint string, headers map[string]strin
 	if err != nil {
 		return nil, err
 	}
+	setAppHeaders(req)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

@@ -3,6 +3,7 @@ package qqbot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,6 +48,12 @@ func (p *Plugin) gatewayLoop(ctx context.Context) {
 		start := time.Now()
 		err := p.connectOnce(ctx, &sessionID, &seq)
 		if ctx.Err() != nil {
+			return
+		}
+		var fatal *fatalGatewayError
+		if errors.As(err, &fatal) {
+			i18n.Logf(p.langOf(), "log.qq.gateway_fatal",
+				"qq_bot: 网关以不可恢复的关闭码断开（%v），不再重连。机器人可能已下架或被封禁，或配置有误；处理后在设置页重新保存一次即可", err)
 			return
 		}
 		if time.Since(start) > time.Minute {
@@ -133,7 +140,12 @@ func (p *Plugin) connectOnce(ctx context.Context, sessionID *string, seq *int64)
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				_ = conn.WriteJSON(map[string]any{"op": opHeartbeat, "d": *seq})
+				// 还没收到过事件时官方要求 d 发 null 而不是 0
+				var d any
+				if *seq > 0 {
+					d = *seq
+				}
+				_ = conn.WriteJSON(map[string]any{"op": opHeartbeat, "d": d})
 			}
 		}
 	}()
@@ -141,11 +153,12 @@ func (p *Plugin) connectOnce(ctx context.Context, sessionID *string, seq *int64)
 	for {
 		frame, err := readFrame(conn)
 		if err != nil {
-			// 部分关闭码意味着 session 无法恢复，下次直接重新 Identify
-			if websocket.IsCloseError(err, 4006, 4007, 4009) {
-				*sessionID = ""
-			}
-			if websocket.IsCloseError(err, 4008) { // 触发频控，多歇一会
+			switch closeAction(err) {
+			case closeReidentify:
+				*sessionID = "" // session 无法恢复，下次直接重新 Identify
+			case closeFatal:
+				return &fatalGatewayError{err: err}
+			case closeThrottled: // 触发频控，多歇一会
 				select {
 				case <-time.After(60 * time.Second):
 				case <-ctx.Done():
@@ -166,6 +179,39 @@ func (p *Plugin) connectOnce(ctx context.Context, sessionID *string, seq *int64)
 		}
 	}
 }
+
+// 网关关闭码的处理方式（官方 WebSocket 文档）。
+const (
+	closeRetry      = iota // 照常退避后重连，有 session 就 Resume
+	closeReidentify        // 丢掉 session，重新 Identify
+	closeThrottled         // 频控，多歇一会再连
+	closeFatal             // 不能再连：重连只会一直失败，还会耗掉每天 1000 次的会话启动配额
+)
+
+// closeAction 按关闭码决定怎么办。4009（连接过期）可以 Resume，不丢 session；
+// 4006/4007 与 4900–4913 要重新 Identify；4914（机器人已下架）、4915（已封禁）以及
+// 4001/4002/4010–4014（参数或 intent 有误）重连也没用，停下来等人处理。
+func closeAction(err error) int {
+	var ce *websocket.CloseError
+	if !errors.As(err, &ce) {
+		return closeRetry
+	}
+	switch c := ce.Code; {
+	case c == 4008:
+		return closeThrottled
+	case c == 4006, c == 4007, c >= 4900 && c <= 4913:
+		return closeReidentify
+	case c == 4914, c == 4915, c == 4001, c == 4002, c >= 4010 && c <= 4014:
+		return closeFatal
+	}
+	return closeRetry
+}
+
+// fatalGatewayError 表示网关以「不能再连」的关闭码断开，网关循环据此停下。
+type fatalGatewayError struct{ err error }
+
+func (e *fatalGatewayError) Error() string { return e.err.Error() }
+func (e *fatalGatewayError) Unwrap() error { return e.err }
 
 // handleDispatch 处理一条事件帧。
 func (p *Plugin) handleDispatch(ctx context.Context, frame wsFrame, sessionID *string) {

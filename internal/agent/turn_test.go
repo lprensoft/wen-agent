@@ -245,3 +245,24 @@ func TestTurnNotes(t *testing.T) {
 		}
 	}
 }
+
+// 回复预览：每次送的是当前这次模型响应到目前为止的全文；调了工具之后下一次响应从空开始
+func TestReplyPreview(t *testing.T) {
+	store, id := newTestSession(t)
+	mp := &mockProvider{turns: []mockTurn{
+		{content: "我查一下", toolCalls: []llm.ToolCall{{ID: "c1", Name: "echo", Arguments: []byte(`{"text":"x"}`)}}},
+		{content: "最终回答"},
+	}}
+	ag := New(mp, newTestManager(t, echoPlugin{}), store, Options{Model: "m", MaxTurns: 5})
+	var got []string
+	ctx := plugin.WithReplyPreview(context.Background(), func(text string) { got = append(got, text) })
+	if _, err := ag.RunTurn(ctx, id, "帮我查"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || got[len(got)-1] != "最终回答" {
+		t.Fatalf("最后一次预览应是最终回复的全文: %q", got)
+	}
+	if !slices.Contains(got, "我查一下") {
+		t.Errorf("工具调用之前的那段也该预览过: %q", got)
+	}
+}

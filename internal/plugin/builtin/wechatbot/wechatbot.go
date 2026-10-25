@@ -77,6 +77,10 @@ type Plugin struct {
 	// 绑定流程状态（插件操作入口）
 	bind bindState
 
+	// pausedUntil 是 -14 之后全部请求暂停到几点：收信循环自己睡，发送与输入状态按它跳过。
+	// pausedToken 是引起暂停的那把 token，换了凭证暂停就不作数（见 pauseFor）
+	pausedUntil time.Time
+	pausedToken string
 	// 测试注入：过期暂停时长（默认 expiredPause）
 	pauseOnExpired time.Duration
 }

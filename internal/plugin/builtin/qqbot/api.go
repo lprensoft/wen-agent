@@ -65,31 +65,40 @@ func (p *Plugin) getGatewayURL(ctx context.Context) (string, error) {
 	return out.URL, nil
 }
 
-// sendC2C 发送一条单聊文本消息。msgID 非空为被动回复（附 msg_seq 防重），
-// 为空则是主动消息——官方对主动消息有严格限制，失败由调用方容忍。
-func (p *Plugin) sendC2C(ctx context.Context, openid, content, msgID string, seq int) error {
-	body := map[string]any{
-		"content":  content,
-		"msg_type": 0,
-	}
-	if msgID != "" {
-		body["msg_id"] = msgID
-		body["msg_seq"] = seq
-	}
-	_, err := p.apiDo(ctx, http.MethodPost, "/v2/users/"+openid+"/messages", body)
-	return err
+// sendMode 是一条消息以什么身份发出。
+type sendMode struct {
+	msgID  string // 非空为被动回复（附 msg_seq 防重）
+	seq    int
+	wakeup bool // 互动召回：不带 msg_id，30 天内分四个时段各能发一条
+}
+
+// sendC2C 发送一条单聊文本消息。msgID 为空且不是召回时是主动消息——官方对主动消息
+// 有严格限制，失败由调用方容忍。
+func (p *Plugin) sendC2C(ctx context.Context, openid, content string, m sendMode) error {
+	return p.postC2C(ctx, openid, map[string]any{"content": content, "msg_type": 0}, m)
 }
 
 // sendC2CMarkdown 发送一条原生 markdown 单聊消息（msg_type=2）。
 // 注意 markdown 与 message_reference 互斥，这里不带引用。
-func (p *Plugin) sendC2CMarkdown(ctx context.Context, openid, content, msgID string, seq int) error {
-	body := map[string]any{
-		"msg_type": 2,
-		"markdown": map[string]any{"content": content},
-	}
-	if msgID != "" {
-		body["msg_id"] = msgID
-		body["msg_seq"] = seq
+func (p *Plugin) sendC2CMarkdown(ctx context.Context, openid, content string, m sendMode) error {
+	return p.postC2C(ctx, openid, map[string]any{"msg_type": 2, "markdown": map[string]any{"content": content}}, m)
+}
+
+// sendInputNotify 发「正在输入」（msg_type=6），最长 60 秒，对方收到正式消息时自动消失。
+func (p *Plugin) sendInputNotify(ctx context.Context, openid string, m sendMode) error {
+	return p.postC2C(ctx, openid, map[string]any{
+		"msg_type":     6,
+		"input_notify": map[string]any{"input_type": 1, "input_second": 60},
+	}, m)
+}
+
+func (p *Plugin) postC2C(ctx context.Context, openid string, body map[string]any, m sendMode) error {
+	switch {
+	case m.msgID != "":
+		body["msg_id"] = m.msgID
+		body["msg_seq"] = m.seq
+	case m.wakeup:
+		body["is_wakeup"] = true // 与 msg_id 互斥
 	}
 	_, err := p.apiDo(ctx, http.MethodPost, "/v2/users/"+openid+"/messages", body)
 	return err

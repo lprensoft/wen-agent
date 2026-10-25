@@ -30,20 +30,23 @@ type sentMsg struct {
 }
 
 type fakeQQ struct {
-	t     *testing.T
-	srv   *httptest.Server
-	sends chan sentMsg
+	t      *testing.T
+	srv    *httptest.Server
+	sends  chan sentMsg
+	typing chan sentMsg // msg_type=6 的「正在输入」单独收，不混进正文
 
 	mu             sync.Mutex
 	conn           *websocket.Conn
 	seq            int64
 	rejectMarkdown bool // 模拟平台「不允许发送原生 markdown」(40034012)
+	rejectActive   bool // 模拟主动消息被拒（不带 msg_id 也不是召回的）
+	wakeups        int  // 收到的互动召回条数
 
 	ready chan struct{} // 收到 Identify 并回了 READY
 }
 
 func newFakeQQ(t *testing.T) *fakeQQ {
-	f := &fakeQQ{t: t, sends: make(chan sentMsg, 32), ready: make(chan struct{}, 4)}
+	f := &fakeQQ{t: t, sends: make(chan sentMsg, 32), typing: make(chan sentMsg, 32), ready: make(chan struct{}, 4)}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /app/getAppAccessToken", func(w http.ResponseWriter, r *http.Request) {
@@ -89,13 +92,28 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 			Markdown *struct {
 				Content string `json:"content"`
 			} `json:"markdown"`
-			MsgID  string `json:"msg_id"`
-			MsgSeq int    `json:"msg_seq"`
+			MsgID    string `json:"msg_id"`
+			MsgSeq   int    `json:"msg_seq"`
+			IsWakeup bool   `json:"is_wakeup"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.MsgType == 6 {
+			f.typing <- sentMsg{openid: r.PathValue("openid"), msgType: 6, msgID: body.MsgID, seq: body.MsgSeq}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "typing-1"})
+			return
+		}
 		f.mu.Lock()
 		reject := f.rejectMarkdown
+		if body.IsWakeup {
+			f.wakeups++
+		}
+		rejectActive := f.rejectActive && body.MsgID == "" && !body.IsWakeup
 		f.mu.Unlock()
+		if rejectActive {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "主动消息被拒", "code": 40034024})
+			return
+		}
 		if body.MsgType == 2 && reject {
 			w.WriteHeader(400)
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 40034012})
@@ -223,8 +241,8 @@ func TestChatRoundTrip(t *testing.T) {
 	if m.openid != "user1" || m.content != "收到：你好" {
 		t.Fatalf("回复不符: %+v", m)
 	}
-	if m.msgID != id || m.seq != 1 {
-		t.Fatalf("被动回复应带 msg_id=%s seq=1: %+v", id, m)
+	if m.msgID != id || m.seq <= 0 {
+		t.Fatalf("被动回复应带 msg_id=%s 与正的 seq: %+v", id, m)
 	}
 	if m.msgType != 2 {
 		t.Fatalf("默认应发原生 markdown（msg_type=2），得到 %d", m.msgType)
@@ -529,11 +547,17 @@ func TestSanitizeImagesAndCode(t *testing.T) {
 
 func TestReplyLimiter(t *testing.T) {
 	l := newReplyLimiter()
+	prev := 0
 	for i := 1; i <= replyLimit; i++ {
 		ok, seq := l.next("m1")
-		if !ok || seq != i {
-			t.Fatalf("第 %d 次应放行且 seq=%d，得到 ok=%v seq=%d", i, i, ok, seq)
+		if !ok || seq <= 0 || (i > 1 && seq != prev+1) {
+			t.Fatalf("第 %d 次应放行且 seq 递增，得到 ok=%v seq=%d（上一个 %d）", i, ok, seq, prev)
 		}
+		prev = seq
+	}
+	// 重启后（换一个起点）同一 msg_id 的序号不与重启前的重叠
+	if a, b := seqBase(time.Unix(1000, 0)), seqBase(time.Unix(1001, 0)); b-a < replyLimit {
+		t.Fatalf("不同时刻的起点应相隔至少 %d: %d %d", replyLimit, a, b)
 	}
 	if ok, _ := l.next("m1"); ok {
 		t.Fatal("超过 4 次应降级")
@@ -583,5 +607,121 @@ func TestBackgroundTurnRespectsRouting(t *testing.T) {
 	})
 	if m := f.expectSend(t); !strings.Contains(m.content, "该发来这里") {
 		t.Fatalf("目标是本通道时应照常推送: %+v", m)
+	}
+}
+
+// 网关关闭码：4009 可以 Resume，4900–4913 重新 Identify，下架、封禁与参数错误不再重连。
+func TestCloseAction(t *testing.T) {
+	cases := map[int]int{
+		4009: closeRetry, 1006: closeRetry, 4004: closeRetry,
+		4006: closeReidentify, 4007: closeReidentify, 4900: closeReidentify, 4913: closeReidentify,
+		4008: closeThrottled,
+		4914: closeFatal, 4915: closeFatal, 4001: closeFatal, 4012: closeFatal,
+	}
+	for code, want := range cases {
+		if got := closeAction(&websocket.CloseError{Code: code}); got != want {
+			t.Errorf("关闭码 %d: 得到 %d，应为 %d", code, got, want)
+		}
+	}
+	if closeAction(fmt.Errorf("network down")) != closeRetry {
+		t.Error("非关闭帧的错误照常重连")
+	}
+}
+
+func TestMarkdownForbiddenCodes(t *testing.T) {
+	for _, s := range []string{"code 40034010", "code=40034127", "Markdown not allowed"} {
+		if !isMarkdownForbidden(fmt.Errorf("%s", s)) {
+			t.Errorf("应认作 markdown 被拒: %s", s)
+		}
+	}
+	if isMarkdownForbidden(fmt.Errorf("code 40054005")) {
+		t.Error("序号重复不是 markdown 被拒")
+	}
+}
+
+// token 只在到期前 50 秒内才换新；换回来的若仍快到期，10 秒内不再重取
+func TestTokenRefreshWindow(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"access_token":"t","expires_in":"30"}`))
+	}))
+	defer srv.Close()
+	ts := newTokenSource("1", "123")
+	ts.tokenURL = srv.URL
+	ts.token, ts.expiresAt = "old", time.Now().Add(2*time.Minute)
+	if tok, _ := ts.Get(context.Background()); tok != "old" || calls.Load() != 0 {
+		t.Fatalf("离到期还远时不该重取: %s %d", tok, calls.Load())
+	}
+	ts.expiresAt = time.Now().Add(40 * time.Second)
+	if tok, _ := ts.Get(context.Background()); tok != "t" || calls.Load() != 1 {
+		t.Fatalf("进入最后 50 秒应重取: %s %d", tok, calls.Load())
+	}
+	for range 5 {
+		_, _ = ts.Get(context.Background())
+	}
+	if calls.Load() != 1 {
+		t.Errorf("取回来的仍快到期时不该每次都重取: %d 次", calls.Load())
+	}
+}
+
+// 一轮开始时挂在入站消息上发「正在输入」，并占用一条被动回复额度（序号不与正文重复）
+func TestTypingNotify(t *testing.T) {
+	reply := func(context.Context, string, string) (string, error) { return "ok", nil }
+	_, f, _ := newInited(t, reply, "user1")
+	id := f.pushC2C("user1", "你好")
+	select {
+	case ty := <-f.typing:
+		if ty.msgID != id || ty.seq <= 0 {
+			t.Fatalf("「正在输入」应挂在入站消息上: %+v", ty)
+		}
+		m := f.expectSend(t)
+		if m.seq == ty.seq {
+			t.Fatalf("正文与「正在输入」的序号不能重复: %d", m.seq)
+		}
+	case <-time.After(8 * time.Second): // 入站有合并窗口，一轮要等它过去才开始
+		t.Fatal("没收到「正在输入」")
+	}
+}
+
+// 主动推送被拒时退一步用互动召回，一次发送只试一次
+func TestPushFallsBackToWakeup(t *testing.T) {
+	reply := func(context.Context, string, string) (string, error) { return "ok", nil }
+	p, f, _ := newInited(t, reply, "user1")
+	f.mu.Lock()
+	f.rejectActive = true
+	f.mu.Unlock()
+	p.send(context.Background(), "user1", "早上好", "")
+	m := f.expectSend(t)
+	if m.content != "早上好" || m.msgID != "" {
+		t.Fatalf("应以召回送达: %+v", m)
+	}
+	f.mu.Lock()
+	n := f.wakeups
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("应只试一次召回，实际 %d 次", n)
+	}
+}
+
+// 「正在输入」每条入站消息至多一次，发完之后正文还有三条被动回复额度
+func TestTypingSlotOncePerMessage(t *testing.T) {
+	l := newReplyLimiter()
+	if ok, _ := l.typingSlot("m1"); !ok {
+		t.Fatal("第一次应放行")
+	}
+	if ok, _ := l.typingSlot("m1"); ok {
+		t.Fatal("同一条入站消息不该再发第二次")
+	}
+	for i := range 3 {
+		if ok, _ := l.next("m1"); !ok {
+			t.Fatalf("正文第 %d 段应仍能被动回复", i+1)
+		}
+	}
+	// 已经被正文用掉额度的消息上不再发「正在输入」
+	l.next("m2")
+	l.next("m2")
+	if ok, _ := l.typingSlot("m2"); ok {
+		t.Error("剩余额度不够给正文留三条时不该发")
 	}
 }

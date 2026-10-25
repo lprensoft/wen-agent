@@ -44,11 +44,18 @@ type fakeTG struct {
 	// 下一次 sendMessage 的强制结果（用完即弃）
 	failNext atomic.Value // func() (int, string, int) -> code, description, retryAfter
 	actions  atomic.Int64
+	drafts   chan draftMsg // sendMessageDraft 收到的草稿
+}
+
+type draftMsg struct {
+	ChatID  int64  `json:"chat_id"`
+	DraftID int64  `json:"draft_id"`
+	Text    string `json:"text"`
 }
 
 func newFakeTG(t *testing.T) *fakeTG {
 	t.Helper()
-	f := &fakeTG{sent: make(chan sentMsg, 64)}
+	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64)}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /bot"+testToken+"/getUpdates", func(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +99,16 @@ func newFakeTG(t *testing.T) *fakeTG {
 		default:
 		}
 		writeOK(w, map[string]any{"message_id": 1})
+	})
+
+	mux.HandleFunc("POST /bot"+testToken+"/sendMessageDraft", func(w http.ResponseWriter, r *http.Request) {
+		var d draftMsg
+		_ = json.NewDecoder(r.Body).Decode(&d)
+		select {
+		case f.drafts <- d:
+		default:
+		}
+		writeOK(w, true)
 	})
 
 	mux.HandleFunc("POST /bot"+testToken+"/sendChatAction", func(w http.ResponseWriter, r *http.Request) {
@@ -435,5 +452,39 @@ func TestCommandsReachCore(t *testing.T) {
 	f.push(42, "/help")
 	if m := f.expectSend(t); !strings.Contains(m.Text, "/compact") {
 		t.Fatalf("/help 应列出命令: %s", m.Text)
+	}
+}
+
+// 边写边显示：开着时轮次进行中发草稿（同一轮同一个 draft_id，纯文本），正式回复照常发；
+// 关着时一份草稿都不发
+func TestStreamPreview(t *testing.T) {
+	turn := func(ctx context.Context, _, _ string) (string, error) {
+		if fn := plugin.ReplyPreviewFrom(ctx); fn != nil {
+			fn("**写到**一半")
+		}
+		time.Sleep(1500 * time.Millisecond) // 让节流后的那一份草稿发出去
+		return "写完了", nil
+	}
+	_, f := newInited(t, turn, "42", map[string]any{"stream_preview": true})
+	f.push(42, "你好")
+	select {
+	case d := <-f.drafts:
+		if d.ChatID != 42 || d.DraftID == 0 || d.Text != "写到一半" {
+			t.Fatalf("草稿不对（应为纯文本、非零 draft_id）: %+v", d)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("没收到草稿")
+	}
+	if m := f.expectSend(t); !strings.Contains(m.Text, "写完了") {
+		t.Fatalf("正式回复照常发: %+v", m)
+	}
+
+	_, g := newInited(t, turn, "42", nil)
+	g.push(42, "你好")
+	g.expectSend(t)
+	select {
+	case d := <-g.drafts:
+		t.Fatalf("开关关着不该发草稿: %+v", d)
+	default:
 	}
 }
