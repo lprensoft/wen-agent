@@ -223,8 +223,8 @@ func TestChatRoundTrip(t *testing.T) {
 	if m.openid != "user1" || m.content != "收到：你好" {
 		t.Fatalf("回复不符: %+v", m)
 	}
-	if m.msgID != id || m.seq != 1 {
-		t.Fatalf("被动回复应带 msg_id=%s seq=1: %+v", id, m)
+	if m.msgID != id || m.seq <= 0 {
+		t.Fatalf("被动回复应带 msg_id=%s 与正的 seq: %+v", id, m)
 	}
 	if m.msgType != 2 {
 		t.Fatalf("默认应发原生 markdown（msg_type=2），得到 %d", m.msgType)
@@ -529,11 +529,17 @@ func TestSanitizeImagesAndCode(t *testing.T) {
 
 func TestReplyLimiter(t *testing.T) {
 	l := newReplyLimiter()
+	prev := 0
 	for i := 1; i <= replyLimit; i++ {
 		ok, seq := l.next("m1")
-		if !ok || seq != i {
-			t.Fatalf("第 %d 次应放行且 seq=%d，得到 ok=%v seq=%d", i, i, ok, seq)
+		if !ok || seq <= 0 || (i > 1 && seq != prev+1) {
+			t.Fatalf("第 %d 次应放行且 seq 递增，得到 ok=%v seq=%d（上一个 %d）", i, ok, seq, prev)
 		}
+		prev = seq
+	}
+	// 重启后（换一个起点）同一 msg_id 的序号不与重启前的重叠
+	if a, b := seqBase(time.Unix(1000, 0)), seqBase(time.Unix(1001, 0)); b-a < replyLimit {
+		t.Fatalf("不同时刻的起点应相隔至少 %d: %d %d", replyLimit, a, b)
 	}
 	if ok, _ := l.next("m1"); ok {
 		t.Fatal("超过 4 次应降级")
@@ -583,5 +589,60 @@ func TestBackgroundTurnRespectsRouting(t *testing.T) {
 	})
 	if m := f.expectSend(t); !strings.Contains(m.content, "该发来这里") {
 		t.Fatalf("目标是本通道时应照常推送: %+v", m)
+	}
+}
+
+// 网关关闭码：4009 可以 Resume，4900–4913 重新 Identify，下架、封禁与参数错误不再重连。
+func TestCloseAction(t *testing.T) {
+	cases := map[int]int{
+		4009: closeRetry, 1006: closeRetry, 4004: closeRetry,
+		4006: closeReidentify, 4007: closeReidentify, 4900: closeReidentify, 4913: closeReidentify,
+		4008: closeThrottled,
+		4914: closeFatal, 4915: closeFatal, 4001: closeFatal, 4012: closeFatal,
+	}
+	for code, want := range cases {
+		if got := closeAction(&websocket.CloseError{Code: code}); got != want {
+			t.Errorf("关闭码 %d: 得到 %d，应为 %d", code, got, want)
+		}
+	}
+	if closeAction(fmt.Errorf("network down")) != closeRetry {
+		t.Error("非关闭帧的错误照常重连")
+	}
+}
+
+func TestMarkdownForbiddenCodes(t *testing.T) {
+	for _, s := range []string{"code 40034010", "code=40034127", "Markdown not allowed"} {
+		if !isMarkdownForbidden(fmt.Errorf("%s", s)) {
+			t.Errorf("应认作 markdown 被拒: %s", s)
+		}
+	}
+	if isMarkdownForbidden(fmt.Errorf("code 40054005")) {
+		t.Error("序号重复不是 markdown 被拒")
+	}
+}
+
+// token 只在到期前 50 秒内才换新；换回来的若仍快到期，10 秒内不再重取
+func TestTokenRefreshWindow(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"access_token":"t","expires_in":"30"}`))
+	}))
+	defer srv.Close()
+	ts := newTokenSource("1", "123")
+	ts.tokenURL = srv.URL
+	ts.token, ts.expiresAt = "old", time.Now().Add(2*time.Minute)
+	if tok, _ := ts.Get(context.Background()); tok != "old" || calls.Load() != 0 {
+		t.Fatalf("离到期还远时不该重取: %s %d", tok, calls.Load())
+	}
+	ts.expiresAt = time.Now().Add(40 * time.Second)
+	if tok, _ := ts.Get(context.Background()); tok != "t" || calls.Load() != 1 {
+		t.Fatalf("进入最后 50 秒应重取: %s %d", tok, calls.Load())
+	}
+	for range 5 {
+		_, _ = ts.Get(context.Background())
+	}
+	if calls.Load() != 1 {
+		t.Errorf("取回来的仍快到期时不该每次都重取: %d 次", calls.Load())
 	}
 }

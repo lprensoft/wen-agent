@@ -18,7 +18,7 @@ const chunkLimit = 3500
 const mdOffTTL = 6 * time.Hour
 
 // send 把文本发到 QQ：默认按原生 markdown（msg_type=2，单聊已对所有机器人开放），
-// 发送前过方言降级管线；收到「不允许发送原生 markdown」(40034012) 时按用户记忆
+// 发送前过方言降级管线；收到「不允许发送原生 markdown」类错误时按用户记忆
 // 降级为纯文本重发，消息不丢。每段独立判定被动回复额度，超限降级为主动消息。
 func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 	p.mu.Lock()
@@ -71,10 +71,20 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 	}
 }
 
-// isMarkdownForbidden 判定「不允许发送原生 markdown」类错误（错误码 40034012）。
+// markdownErrCodes 是现行错误码表里与 markdown 相关的几个（40034008–40034011、
+// 40034124、40034127）。早先认的 40034012 已不在表里，留着无害。错误串里含 markdown
+// 的也算，作为错误码再变时的兜底。
+var markdownErrCodes = []string{"40034008", "40034009", "40034010", "40034011", "40034012", "40034124", "40034127"}
+
+// isMarkdownForbidden 判定「不允许发送原生 markdown」类错误。
 func isMarkdownForbidden(err error) bool {
 	s := err.Error()
-	return strings.Contains(s, "40034012") || strings.Contains(s, "markdown")
+	for _, c := range markdownErrCodes {
+		if strings.Contains(s, c) {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(s), "markdown")
 }
 
 // markdownAllowed 查询该用户的 markdown 能力缓存（默认允许，被拒后在 TTL 内关闭）。

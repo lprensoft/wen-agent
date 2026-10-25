@@ -21,11 +21,17 @@ type tokenSource struct {
 	client    *http.Client
 	token     string
 	expiresAt time.Time
+	fetchedAt time.Time
 }
 
-// refreshAhead 在过期前多久就开始换新 token：官方在到期前约 60 秒会下发新 token
-// 且新旧并行有效，提前 5 分钟留足余量。
-const refreshAhead = 5 * time.Minute
+// refreshAhead 在过期前多久就开始换新 token。官方只在到期前 60 秒内才下发新 token
+// （新旧并行有效 60 秒），更早去取拿回来的还是原来那个——从前提前 5 分钟，于是最后
+// 那几分钟里每次调用都会白取一次，可能撞上频控。50 秒落在窗口之内，又留了余量。
+const refreshAhead = 50 * time.Second
+
+// minRefetch 是两次取 token 之间的最短间隔：万一取回来的还是快到期的旧 token
+// （服务端行为未完全确认），也不至于每次调用都去敲一次门。
+const minRefetch = 10 * time.Second
 
 func newTokenSource(appID, secret string) *tokenSource {
 	return &tokenSource{
@@ -41,6 +47,9 @@ func (t *tokenSource) Get(ctx context.Context) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.token != "" && time.Until(t.expiresAt) > refreshAhead {
+		return t.token, nil
+	}
+	if t.token != "" && time.Now().Before(t.expiresAt) && time.Since(t.fetchedAt) < minRefetch {
 		return t.token, nil
 	}
 	body, _ := json.Marshal(map[string]string{"appId": t.appID, "clientSecret": t.secret})
@@ -68,7 +77,8 @@ func (t *tokenSource) Get(ctx context.Context) (string, error) {
 		ttl = 7200
 	}
 	t.token = out.AccessToken
-	t.expiresAt = time.Now().Add(time.Duration(ttl) * time.Second)
+	t.fetchedAt = time.Now()
+	t.expiresAt = t.fetchedAt.Add(time.Duration(ttl) * time.Second)
 	return t.token, nil
 }
 

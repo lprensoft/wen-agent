@@ -457,6 +457,7 @@
   "log.plugin.turnprompt_failed": "plugin %q failed to build its prompt for this turn: %v",
   "log.qq.event_parse_failed": "qq_bot: could not parse the message event: %v",
   "log.qq.gateway_disconnected": "qq_bot: the gateway connection dropped (%v); reconnecting in %v",
+  "log.qq.gateway_fatal": "qq_bot: the gateway closed with an unrecoverable code (%v); not reconnecting. The bot may have been taken down or banned, or the configuration is wrong. After fixing it, save the settings once more",
   "log.qq.gateway_ready": "qq_bot: the gateway is ready (%s)",
   "log.qq.gateway_restored": "qq_bot: the gateway connection is back",
   "log.qq.kind.push": "push message (which the official policy may restrict)",
