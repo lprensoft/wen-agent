@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -548,5 +549,23 @@ func TestAnthropicEndpointNotDuplicated(t *testing.T) {
 	}
 	if got := NewAnthropic("", "https://api.anthropic.com/", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("endpoint = %s", got)
+	}
+}
+
+// TestAnthropicWorkspaceErrorIsExplained：没绑定工作区的密钥每个请求都 400。前面补一句
+// 说清该去哪儿改，并归为配置错误原样示人，不交给角色演成走神。
+func TestAnthropicWorkspaceErrorIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace. Set the anthropic-workspace-id header."}}`))
+	}))
+	defer srv.Close()
+	p := NewAnthropic("", srv.URL, "sk-ant-test", false)
+	_, err := p.ChatStream(context.Background(), ChatRequest{Model: "claude-sonnet-5-5", Messages: testMessages("hi"), Thinking: "high"})
+	if err == nil || !strings.Contains(err.Error(), "工作区") || !strings.Contains(err.Error(), "anthropic-workspace-id") {
+		t.Fatalf("应补一句说明并保留原文: %v", err)
+	}
+	if !IsConfigError(err) {
+		t.Error("应归为配置错误")
 	}
 }

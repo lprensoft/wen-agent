@@ -549,9 +549,22 @@ func (p *Anthropic) send(ctx context.Context, wr antRequest) (*http.Response, er
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(errBody))}
+		return nil, p.apiError(resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 	return resp, nil
+}
+
+// apiError 包装非 200 响应。Console 新建的个人密钥若没绑定工作区，每个请求都会
+// 400 并要求带 anthropic-workspace-id 头——原文是英文的协议细节，用户多半看不出
+// 该去哪儿改，所以在前面补一句说人话的，并归为配置错误原样示人（不交给角色演成走神）。
+func (p *Anthropic) apiError(status int, body string) *APIError {
+	e := &APIError{Status: status, Body: body}
+	if status == http.StatusBadRequest && strings.Contains(strings.ToLower(body), "anthropic-workspace-id") {
+		e.Kind = KindConfig
+		e.Body = i18n.T(p.lang, "llm.err.anthropic_workspace",
+			"这把 API 密钥没有绑定工作区：请在 Claude Console 新建密钥时选定一个工作区，再换上新密钥。") + " " + body
+	}
+	return e
 }
 
 // assembleBlocks 按 content block 下标顺序还原思考块。

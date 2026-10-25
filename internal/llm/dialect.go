@@ -13,7 +13,7 @@ import "slices"
 const (
 	DialectDeepSeek = "deepseek" // thinking:{enabled|disabled} + reasoning_effort（默认）
 	DialectGLM      = "glm"      // 同上，但只认 low/high/max
-	DialectMiniMax  = "minimax"  // thinking:{adaptive|disabled} + reasoning_split，无档位
+	DialectMiniMax  = "minimax"  // thinking:{adaptive} + reasoning_split，无档位、关不掉
 	DialectQwen     = "qwen"     // enable_thinking 布尔开关
 	DialectKimi     = "kimi"     // 仅 reasoning_effort，只认 low/high/max；关闭落到 low
 	DialectOpenAI   = "openai"   // 仅 reasoning_effort；拒绝采样参数，且要 max_completion_tokens
@@ -28,7 +28,7 @@ type thinkShape int
 
 const (
 	shapeThinkingEffort thinkShape = iota // thinking:{enabled|disabled} + reasoning_effort
-	shapeAdaptive                         // thinking:{adaptive|disabled} + reasoning_split
+	shapeAdaptive                         // thinking:{adaptive} + reasoning_split，不发 disabled
 	shapeEnableThinking                   // enable_thinking 布尔
 	shapeEffortOnly                       // 仅 reasoning_effort
 	shapeNothing                          // 什么都不发

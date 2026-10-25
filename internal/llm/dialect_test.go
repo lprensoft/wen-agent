@@ -32,9 +32,10 @@ func TestApplyThinking(t *testing.T) {
 		wr.ReasoningEffort != "" || wr.Temperature == nil {
 		t.Fatalf("minimax 思考态: %+v", wr)
 	}
+	// MiniMax 关不掉思考：选「关闭」也照开着发（M3.1-Flash 收到 disabled 会 400）
 	wr = build(DialectMiniMax, "off")
-	if wr.Thinking == nil || wr.Thinking.Type != "disabled" || wr.ReasoningSplit || wr.Temperature == nil {
-		t.Fatalf("minimax 关闭态: %+v", wr)
+	if wr.Thinking == nil || wr.Thinking.Type != "adaptive" || !wr.ReasoningSplit || wr.Temperature == nil {
+		t.Fatalf("minimax 关闭态应照开着发: %+v", wr)
 	}
 
 	// Qwen：enable_thinking 布尔
