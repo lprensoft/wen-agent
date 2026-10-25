@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/plugin"
 )
 
@@ -116,8 +117,17 @@ func TestApplyClearAndBondsOverride(t *testing.T) {
 		t.Fatalf("snap = %+v", snap)
 	}
 
-	// 全部清掉：视为无记录
+	// 清掉阶段：第一次成为「热恋」的那个日子是发生过的事，留着
 	if _, _, err := s.Apply(Update{Stage: str(" ")}, now); err != nil {
+		t.Fatal(err)
+	}
+	snap, ok, _ = s.Load()
+	if !ok || snap.Stage != "" || len(snap.Dates) != 1 || snap.Dates[0].What != "热恋" || !snap.Dates[0].Auto {
+		t.Fatalf("清掉阶段后日子应留着：%+v", snap)
+	}
+
+	// 全部清掉：视为无记录
+	if _, _, err := s.Apply(Update{RemoveDate: str("热恋")}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := s.Load(); ok {
@@ -332,5 +342,143 @@ func TestPromptsCarryNoIdentity(t *testing.T) {
 		if strings.Contains(all, bad) {
 			t.Errorf("提示词不应包含身份信息 %q", bad)
 		}
+	}
+}
+
+// ---------- 日子 ----------
+
+func day(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 10, 0, 0, 0, time.Local) }
+
+// 关系第一次变成某个阶段时自动记下日子；热恋—冷战—热恋不会把最初那个日子覆盖掉。
+func TestStageAutoDateFirstTimeOnly(t *testing.T) {
+	s := NewStore("", t.TempDir())
+	_, _, _ = s.Apply(Update{Stage: str("热恋")}, day(2026, 1, 10))
+	_, _, _ = s.Apply(Update{Stage: str("冷战中")}, day(2026, 3, 1))
+	_, _, _ = s.Apply(Update{Stage: str("热恋")}, day(2026, 3, 5))
+	snap, _, _ := s.Load()
+	got := map[string]string{}
+	for _, d := range snap.Dates {
+		if !d.Auto {
+			t.Errorf("阶段变化记下的日子应标为自动：%+v", d)
+		}
+		got[d.What] = d.Date
+	}
+	if got["热恋"] != "2026-01-10" || got["冷战中"] != "2026-03-01" || len(got) != 2 {
+		t.Errorf("只记第一次：%v", got)
+	}
+}
+
+func TestAddAndRemoveDates(t *testing.T) {
+	s := NewStore("", t.TempDir())
+	now := day(2026, 10, 20)
+	if _, _, err := s.Apply(Update{AddDate: &DateArg{What: "对方生日", Date: "05-12"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Apply(Update{AddDate: &DateArg{What: "对方生日", Date: "05-13"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	snap, _, _ := s.Load()
+	if len(snap.Dates) != 1 || snap.Dates[0].Date != "05-13" {
+		t.Errorf("同名的改日子：%+v", snap.Dates)
+	}
+	for _, bad := range []DateArg{{What: "x", Date: "2026/05/12"}, {What: "x", Date: "5-12"}, {What: "", Date: "05-12"},
+		{What: strings.Repeat("长", maxDateWhatRunes+1), Date: "05-12"}} {
+		if _, _, err := s.Apply(Update{AddDate: &bad}, now); err == nil {
+			t.Errorf("应拒绝：%+v", bad)
+		}
+	}
+	if _, _, err := s.Apply(Update{RemoveDate: str("不存在")}, now); err == nil || !strings.Contains(err.Error(), "对方生日") {
+		t.Errorf("去掉不存在的日子应报错并列出现有的：%v", err)
+	}
+	if _, _, err := s.Apply(Update{RemoveDate: str("对方生日")}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Load(); ok {
+		t.Error("去掉唯一的日子后应视为无记录")
+	}
+}
+
+// 满了先挤掉最早那个自动记下的；全是模型记的就拒绝，要它先去掉一个。
+func TestDatesCap(t *testing.T) {
+	s := NewStore("", t.TempDir())
+	now := day(2026, 10, 20)
+	_, _, _ = s.Apply(Update{Stage: str("刚认识")}, now)
+	for i := 1; i < maxDates; i++ {
+		if _, _, err := s.Apply(Update{AddDate: &DateArg{What: "日子" + string(rune('A'+i)), Date: "01-0" + string(rune('0'+i%9+1))}}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.Apply(Update{AddDate: &DateArg{What: "再一个", Date: "02-01"}}, now); err != nil {
+		t.Fatalf("满了应先挤掉自动记下的：%v", err)
+	}
+	snap, _, _ := s.Load()
+	if dateIndex(snap.Dates, "刚认识") >= 0 || len(snap.Dates) != maxDates {
+		t.Errorf("自动记下的那个应被挤掉：%+v", snap.Dates)
+	}
+	if _, _, err := s.Apply(Update{AddDate: &DateArg{What: "又一个", Date: "02-02"}}, now); err == nil || !strings.Contains(err.Error(), "remove_date") {
+		t.Errorf("全是模型记的就拒绝并提示先去掉一个：%v", err)
+	}
+}
+
+func TestDateHits(t *testing.T) {
+	dates := []DateMark{
+		{What: "对方生日", Date: "05-12"},
+		{What: "第一次见面", Date: "2025-05-12"},
+		{What: "热恋", Date: "2026-02-10", Auto: true},
+	}
+	cases := []struct {
+		on   time.Time
+		want []string
+	}{
+		{day(2026, 5, 12), []string{"「对方生日」", "「第一次见面」1 周年"}},
+		{day(2026, 5, 12).AddDate(0, 0, 1), nil},
+		{day(2026, 2, 10).AddDate(0, 0, 100), []string{"成为「热恋」满 100 天"}},
+		{day(2025, 5, 12), []string{"「对方生日」"}}, // 第一次见面当天不算周年
+		{day(2025, 5, 12).AddDate(0, 0, 1000), []string{"「第一次见面」满 1000 天"}},
+	}
+	for _, c := range cases {
+		got := dateHits("", dates, c.on)
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s：got %v want %v", c.on.Format(dateLayout), got, c.want)
+		}
+	}
+	if got := dateHits("", []DateMark{{What: "x", Date: "2023-01-01"}}, day(2023, 1, 1).AddDate(0, 0, 1000)); len(got) != 1 || !strings.Contains(got[0], "1000") {
+		t.Errorf("满一千天：%v", got)
+	}
+}
+
+// [关系] 只在今天或明天碰上日子时多一行；平常不出现日子清单。
+func TestRenderDatesTodayAndTomorrow(t *testing.T) {
+	snap := Snapshot{Stage: "热恋", Dates: []DateMark{{What: "对方生日", Date: "05-12"}, {What: "纪念日", Date: "05-13"}}}
+	got := renderSnapshot("", snap, day(2026, 5, 12))
+	if !strings.Contains(got, "日子：今天是「对方生日」；明天是「纪念日」。") {
+		t.Errorf("今天与明天：%q", got)
+	}
+	if got := renderSnapshot("", snap, day(2026, 6, 1)); strings.Contains(got, "日子") {
+		t.Errorf("平常不该出现：%q", got)
+	}
+}
+
+// 每天第一轮结束时投一条开口理由；只看表人格（共享域），一天只投一次。
+func TestDateCuesSharedScopeOnce(t *testing.T) {
+	p := newTestPlugin(t)
+	now := day(2026, 5, 12)
+	p.clock = func() time.Time { return now }
+	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
+	for _, tag := range []string{"", "inner"} {
+		_, _, _ = p.storeFor(tag).Apply(Update{AddDate: &DateArg{What: "生日" + tag, Date: "05-12"}}, now)
+	}
+	p.OnTurnEnd(scopedCtx("inner"), plugin.TurnEndEvent{})
+	if cue.Pending(now) {
+		t.Fatal("里人格的日子不该投开口理由")
+	}
+	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	got := cue.Take(now)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "「生日」") || got[0].Source != "relationship" {
+		t.Fatalf("表人格的日子应投一条：%+v", got)
+	}
+	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	if cue.Pending(now) {
+		t.Error("同一天不该再投")
 	}
 }

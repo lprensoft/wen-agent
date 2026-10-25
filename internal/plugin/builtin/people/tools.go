@@ -31,7 +31,8 @@ func (t *upsertTool) Description() string {
 	return prompt.T(t.p.langOf(), "prompt.people.tool.upsert_person.desc",
 		"登记或更新角色生活里的一个人物（朋友、同事、家人、常去店里的老板）。"+
 			"新人物必须先登记，之后才能出现在故事与日程里；更新时只传要改的字段。"+
-			"与某人有过一次实际来往后传 met_now 记下这次来往。对方本人不登记在这里。")
+			"与某人有过一次实际来往后传 met_now 记下这次来往；听说了这个人自己最近的状况就用 lately 记下。"+
+			"对方本人不登记在这里。")
 }
 
 func (t *upsertTool) Schema() json.RawMessage {
@@ -45,10 +46,11 @@ const upsertpersonSchemaZH = `{
 		"properties": {
 			"name": {"type": "string", "description": "名字或称呼，库内唯一（20 字内）"},
 			"relation": {"type": "string", "description": "关系，一句话，如「高中同学」「楼下咖啡店老板」（40 字内）；新人物必填"},
-			"profile": {"type": "string", "description": "几句设定：性格、近况、与角色相处的方式（200 字内）。有变化时传完整的新版本"},
+			"profile": {"type": "string", "description": "几句稳定的设定：性格、与角色相处的方式（200 字内）。有变化时传完整的新版本"},
 			"closeness": {"type": "string", "enum": %s, "description": "亲近度；新人物不填默认「认识」"},
 			"met_now": {"type": "boolean", "description": "这次调用是否代表刚与此人有过一次来往（见面、通话、一起做了件事）；为 true 时把此刻记为上次来往"},
-			"last_note": {"type": "string", "description": "上次来往的一句摘要（60 字内），与 met_now 一起传"}
+			"last_note": {"type": "string", "description": "上次来往的一句摘要（60 字内），与 met_now 一起传"},
+			"lately": {"type": "string", "description": "这个人自己最近的状况，一句话，如「在闹离职」「刚搬去杭州」（40 字内）；听说的时刻会一并记下，空串清除"}
 		},
 		"required": ["name"]
 	}`
@@ -61,6 +63,7 @@ func (t *upsertTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		Closeness *string `json:"closeness"`
 		MetNow    bool    `json:"met_now"`
 		LastNote  *string `json:"last_note"`
+		Lately    *string `json:"lately"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", plugin.BadArgs(t.p.langOf(), err)
@@ -86,7 +89,7 @@ func (t *upsertTool) Execute(ctx context.Context, args json.RawMessage) (string,
 
 	res, err := store.Upsert(Update{
 		Name: a.Name, Relation: a.Relation, Profile: a.Profile,
-		Closeness: a.Closeness, MetNow: a.MetNow, LastNote: a.LastNote,
+		Closeness: a.Closeness, MetNow: a.MetNow, LastNote: a.LastNote, Lately: a.Lately,
 	}, time.Now(), Limits{MaxPeople: s.maxPeople})
 	if err != nil {
 		return "", err
@@ -132,7 +135,7 @@ func (t *listTool) Name() string { return "list_people" }
 
 func (t *listTool) Description() string {
 	return prompt.T(t.p.langOf(), "prompt.people.tool.list_people.desc",
-		"列出人物库的完整内容（含每个人的设定与上次来往）。可按关键词过滤，"+
+		"列出人物库的完整内容（含每个人的设定、上次来往与近况）。可按关键词过滤，"+
 			"用于清单未完整注入、或要看某人的设定与近况时。")
 }
 
@@ -175,7 +178,7 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	var b strings.Builder
 	matched := 0
 	for _, p := range ps {
-		if kw != "" && !strings.Contains(strings.ToLower(p.Name+"\n"+p.Relation+"\n"+p.Profile+"\n"+p.LastNote), kw) {
+		if kw != "" && !strings.Contains(strings.ToLower(p.Name+"\n"+p.Relation+"\n"+p.Profile+"\n"+p.LastNote+"\n"+p.Lately), kw) {
 			continue
 		}
 		matched++
@@ -186,6 +189,9 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 			if p.LastNote != "" {
 				b.WriteString(prompt.Tf(s.lang, "prompt.people.render.last_note", "：%s", p.LastNote))
 			}
+		}
+		if p.Lately != "" {
+			b.WriteString(latelyText(s.lang, p, now))
 		}
 		b.WriteString("\n")
 		if p.Profile != "" {

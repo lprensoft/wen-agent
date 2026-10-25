@@ -280,8 +280,8 @@ func renderLines(lang string, ps []Person, maxBytes int, now time.Time, full boo
 	return out, true
 }
 
-// renderPerson 渲染一行：`林舟（大学同学，熟）上次来往 3 天前：一起吃了晚饭`。
-// 精简形态只留 `林舟（熟）`。
+// renderPerson 渲染一行：`林舟（大学同学，熟）上次来往 3 天前：一起吃了晚饭；近况（昨天听说）：在闹离职`。
+// 精简形态只留 `林舟（熟）`。近况过了 latelyTTL 不出现。
 func renderPerson(lang string, p Person, now time.Time, full bool) string {
 	closeness := closenessLevels.For(lang, p.Closeness)
 	if !full {
@@ -294,7 +294,18 @@ func renderPerson(lang string, p Person, now time.Time, full bool) string {
 			s += prompt.Tf(lang, "prompt.people.render.last_note", "：%s", p.LastNote)
 		}
 	}
+	if p.Lately != "" && (p.LatelyAt.IsZero() || now.Sub(p.LatelyAt) <= latelyTTL) {
+		s += latelyText(lang, p, now)
+	}
 	return s
+}
+
+// latelyText 渲染近况，带上是什么时候听说的：近况会过时，模型得知道这是多久前的消息。
+func latelyText(lang string, p Person, now time.Time) string {
+	if a := agoText(lang, p.LatelyAt, now); a != "" {
+		return prompt.Tf(lang, "prompt.people.render.lately_ago", "；近况（%s听说）：%s", a, p.Lately)
+	}
+	return prompt.Tf(lang, "prompt.people.render.lately", "；近况：%s", p.Lately)
 }
 
 // agoText 把时刻化成「今天 / 昨天 / N 天前 / N 个月前 / N 年前」，按日历日算而不是

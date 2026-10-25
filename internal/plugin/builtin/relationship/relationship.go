@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -27,9 +28,14 @@ type Plugin struct {
 	// 设置页操作的状态。StartAction 与 ActionState 会被 HTTP 并发调用，自带一把锁。
 	actMu    sync.Mutex
 	actState plugin.ActionState
+
+	// cuedDay 是上次检查「今天碰上的日子」的日期（只在内存里，重启后再查一次无妨：
+	// 公告板按 Key 去重）。clock 供测试替换。
+	cuedDay string
+	clock   func() time.Time
 }
 
-func New() *Plugin { return &Plugin{} }
+func New() *Plugin { return &Plugin{clock: time.Now} }
 
 func (p *Plugin) Name() string { return "relationship" }
 
@@ -87,7 +93,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	body := renderSnapshot(lang, snap, time.Now())
+	body := renderSnapshot(lang, snap, p.clock())
 	if body == "" {
 		return "", nil
 	}
@@ -148,7 +154,74 @@ func renderSnapshot(lang string, snap Snapshot, now time.Time) string {
 		lines = append(lines, prompt.Tf(lang, "prompt.relationship.render.their_now", "对方近况：%s",
 			sentence(snap.TheirNow)))
 	}
+	if line := renderDates(lang, snap.Dates, now); line != "" {
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// renderDates 只在今天或明天碰上日子时出一行，平常不出现：日子本身的清单对每轮
+// 对话没有用，碰上的那一天才有话可说。带上明天，是给准备留出余地（买花要提前）。
+//
+//	日子：今天是「在一起」1 周年；明天是「对方生日」。
+func renderDates(lang string, dates []DateMark, now time.Time) string {
+	if len(dates) == 0 {
+		return ""
+	}
+	sep := prompt.T(lang, "prompt.relationship.result.field_sep", "、")
+	var parts []string
+	if hits := dateHits(lang, dates, now); len(hits) > 0 {
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.dates_today", "今天是%s", strings.Join(hits, sep)))
+	}
+	if hits := dateHits(lang, dates, now.AddDate(0, 0, 1)); len(hits) > 0 {
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.dates_tomorrow", "明天是%s", strings.Join(hits, sep)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return prompt.Tf(lang, "prompt.relationship.render.dates", "日子：%s。",
+		strings.Join(parts, prompt.T(lang, "prompt.relationship.result.part_sep", "；")))
+}
+
+// OnTurnEnd 在每天第一轮结束时看一眼今天有没有碰上日子，有就投一条开口理由：心跳
+// 当天会提前开口，说不说、怎么过归模型。本插件没有后台循环，挂在轮次收尾上就够了——
+// 心跳最慢两小时跳一拍，当天一定会遇到一轮。
+//
+// 只看共享域（表人格）的日子：开口理由公告板不分人格，心跳拿到理由时在哪个人格上
+// 说话是不确定的，里人格的纪念日从表人格嘴里说出来就是泄漏。里人格的日子照样在它
+// 自己的 [关系] 里出现，只是不主动开口。
+func (p *Plugin) OnTurnEnd(ctx context.Context, _ plugin.TurnEndEvent) {
+	if plugin.ScopeFrom(ctx).Write != "" {
+		return
+	}
+	now := p.clock()
+	today := now.Format(dateLayout)
+	p.mu.Lock()
+	if p.cuedDay == today {
+		p.mu.Unlock()
+		return
+	}
+	p.cuedDay = today
+	lang := p.lang
+	p.mu.Unlock()
+
+	store := p.storeFor("")
+	if store == nil {
+		return
+	}
+	snap, ok, err := store.Load()
+	if err != nil || !ok {
+		return
+	}
+	y, m, d := now.Date()
+	endOfDay := time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
+	for _, hit := range dateHits(lang, snap.Dates, now) {
+		cue.Post(cue.Cue{
+			Source: "relationship", Key: "date|" + today + "|" + hit,
+			Text:   prompt.Tf(lang, "prompt.relationship.cue.date", "今天是%s。", hit),
+			Expire: endOfDay,
+		})
+	}
 }
 
 // renderHead 渲染第一行：阶段与称呼。三项都可缺，缺哪项省哪句。

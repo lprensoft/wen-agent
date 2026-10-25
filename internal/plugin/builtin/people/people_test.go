@@ -290,3 +290,29 @@ func TestSystemPromptStableAndRequires(t *testing.T) {
 		t.Errorf("Requires = %v", r)
 	}
 }
+
+// 近况：带上听说的时刻注入，过了有效期不注入；空串清除。
+func TestLately(t *testing.T) {
+	s := NewStore("", t.TempDir())
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.Local)
+	if _, err := s.Upsert(Update{Name: "小林", Relation: str("同事"), Lately: str("在闹离职")}, now, testLimits()); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.List()
+	if got := renderPerson("", ps[0], now.AddDate(0, 0, 1), true); !strings.Contains(got, "近况（昨天听说）：在闹离职") {
+		t.Errorf("近况应带上听说的时刻：%q", got)
+	}
+	if got := renderPerson("", ps[0], now.Add(latelyTTL+24*time.Hour), true); strings.Contains(got, "近况") {
+		t.Errorf("过期的近况不该注入：%q", got)
+	}
+	res, err := s.Upsert(Update{Name: "小林", Lately: str("")}, now, testLimits())
+	if err != nil || len(res.Changes) != 1 {
+		t.Fatalf("清除近况：%+v %v", res, err)
+	}
+	if ps, _ := s.List(); ps[0].Lately != "" || !ps[0].LatelyAt.IsZero() {
+		t.Errorf("清除后：%+v", ps[0])
+	}
+	if _, err := s.Upsert(Update{Name: "小林", Lately: str(strings.Repeat("长", maxLatelyRunes+1))}, now, testLimits()); err == nil {
+		t.Error("超长应报错")
+	}
+}
