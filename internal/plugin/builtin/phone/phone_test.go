@@ -137,15 +137,48 @@ func TestCuedItemSurvivesTrim(t *testing.T) {
 	if !ok || pick.Title != "相机降价" {
 		t.Fatalf("应挑中兴趣条目: %+v", pick)
 	}
-	keep(&st, added, pick.ID)
-	if len(st.Items) != maxKept || st.Items[0].ID != pick.ID {
-		t.Fatalf("挑中的那条应留在缓存最前: %d 条，首条 %q", len(st.Items), st.Items[0].Title)
-	}
+	st.CuedID, st.CuedUntil = pick.ID, now.Add(cueTTL)
+	keep(&st, added, now)
 	p := New()
-	p.st = st
-	raw, _ := json.Marshal(map[string]any{"title": "相机降价"})
-	if _, err := (&readTool{p: p}).Execute(context.Background(), raw); err != nil {
+	readable := func() error {
+		p.st = st
+		raw, _ := json.Marshal(map[string]any{"title": "相机降价"})
+		_, err := (&readTool{p: p}).Execute(context.Background(), raw)
+		return err
+	}
+	if len(st.Items) != maxKept {
+		t.Fatalf("应裁到 %d 条: %d", maxKept, len(st.Items))
+	}
+	if err := readable(); err != nil {
 		t.Errorf("理由说的那条应能细看: %v", err)
+	}
+
+	// 一小时后又刷到三十条不相干的：理由还在有效期内，那条仍要留着
+	later := now.Add(time.Hour)
+	var es []entry
+	for i := range maxKept {
+		es = append(es, entry{ID: fmt.Sprintf("后来%d", i), Title: fmt.Sprintf("后来%d", i), Published: later})
+	}
+	flood := func(at time.Time, tag string) []Item { // 七个源各冒五条，足够把旧的全挤出去
+		var out []Item
+		for f := range 7 {
+			out = append(out, merge(&st, fmt.Sprintf("https://%s%d.example/rss", tag, f), "源", es, nil, at)...)
+		}
+		return out
+	}
+	keep(&st, flood(later, "late"), later)
+	if len(st.Items) != maxKept {
+		t.Fatalf("应裁到 %d 条: %d", maxKept, len(st.Items))
+	}
+	if err := readable(); err != nil {
+		t.Errorf("后面的刷新不该挤掉理由还在有效期内的那条: %v", err)
+	}
+
+	// 理由过期之后就不再特别保护
+	expired := now.Add(cueTTL + time.Minute)
+	keep(&st, flood(expired, "expired"), expired)
+	if err := readable(); err == nil {
+		t.Error("理由过期后那条可以正常淘汰")
 	}
 }
 
@@ -290,6 +323,9 @@ func TestRefreshSavesInjectsAndCues(t *testing.T) {
 	cues := cue.Take(now)
 	if len(cues) != 1 || !strings.Contains(cues[0].Text, "新款相机发布") {
 		t.Fatalf("碰上兴趣的应投一条开口理由: %+v", cues)
+	}
+	if p.st.CuedID != p.st.Items[0].ID || !p.st.CuedUntil.Equal(now.Add(cueTTL)) {
+		t.Errorf("应记下理由说的是哪条、到几点: %q %v", p.st.CuedID, p.st.CuedUntil)
 	}
 	got, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
 	for _, want := range []string{"[手机上看到的]", "「新款相机发布」（数码频道，4 小时前）"} {

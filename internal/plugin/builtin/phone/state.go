@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 )
@@ -37,6 +38,11 @@ type State struct {
 	Seen        map[string]time.Time `json:"seen,omitempty"`
 	Items       []Item               `json:"items,omitempty"`
 	Errors      map[string]string    `json:"errors,omitempty"` // 每个源最近一次的错误，给设置页看
+	// CuedID 是最近一次开口理由说的那条，CuedUntil 是理由的过期时刻。在那之前这条一直
+	// 留在缓存里：理由可能还在公告板上等心跳来取，取走说出口之后对方也可能接着问，
+	// 后面几次刷新冒出来的新条目不能把它挤掉。
+	CuedID    string    `json:"cued_id,omitempty"`
+	CuedUntil time.Time `json:"cued_until,omitzero"`
 }
 
 func statePath(dir string) string { return filepath.Join(dir, "phone.json") }
@@ -119,20 +125,25 @@ func merge(st *State, feedURL, source string, entries []entry, interests []strin
 	return added
 }
 
-// keep 把这次新刷到的收进缓存：新的在前（发布晚的先），pick 指定的那条（开口理由选中
-// 的）排在最前，然后统一裁到 maxKept——理由说的那条新闻必须还能用 read_news 细看。
-func keep(st *State, added []Item, pick string) {
+// keep 把这次新刷到的收进缓存：新的在前（发布晚的先），然后统一裁到 maxKept。
+//
+// 开口理由还在有效期内的那条（st.CuedID，可能是这次刚挑的，也可能是前几次的）裁剪时
+// 保住：理由说的新闻必须还能用 read_news 细看。它被挤出前 maxKept 条时顶替最后一个位置。
+func keep(st *State, added []Item, now time.Time) {
 	fresh := append([]Item(nil), added...)
-	sort.SliceStable(fresh, func(i, j int) bool {
-		if (fresh[i].ID == pick) != (fresh[j].ID == pick) {
-			return fresh[i].ID == pick
-		}
-		return fresh[i].when().After(fresh[j].when())
-	})
-	st.Items = append(fresh, st.Items...)
-	if len(st.Items) > maxKept {
-		st.Items = st.Items[:maxKept]
+	sort.SliceStable(fresh, func(i, j int) bool { return fresh[i].when().After(fresh[j].when()) })
+	all := append(fresh, st.Items...)
+	if len(all) <= maxKept {
+		st.Items = all
+		return
 	}
+	kept := all[:maxKept:maxKept]
+	if st.CuedID != "" && now.Before(st.CuedUntil) && !slices.ContainsFunc(kept, func(it Item) bool { return it.ID == st.CuedID }) {
+		if i := slices.IndexFunc(all, func(it Item) bool { return it.ID == st.CuedID }); i >= 0 {
+			kept = append(kept[:maxKept-1:maxKept-1], all[i])
+		}
+	}
+	st.Items = kept
 }
 
 // prune 清掉去重表里太旧的记录，并把总数压在上限内。

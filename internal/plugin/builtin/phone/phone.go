@@ -396,7 +396,10 @@ func (p *Plugin) refresh(ctx context.Context) {
 	}
 	// 先挑出开口理由要说的那条，再统一收进缓存并保证它留着
 	pick, hit := pickCue(added)
-	keep(&p.st, added, pick.ID)
+	if hit {
+		p.st.CuedID, p.st.CuedUntil = pick.ID, now.Add(cueTTL)
+	}
+	keep(&p.st, added, now)
 	p.st.LastRefresh = now
 	prune(&p.st, now)
 	snap := p.st
