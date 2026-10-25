@@ -26,6 +26,7 @@ import (
 	"wen/internal/plugin/builtin/agenda"
 	"wen/internal/plugin/builtin/belongings"
 	"wen/internal/plugin/builtin/bodysense"
+	"wen/internal/plugin/builtin/bookshelf"
 	"wen/internal/plugin/builtin/bundles"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
@@ -263,7 +264,7 @@ func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
 //     「拿它当干活的 Agent」时才要的东西，不该是开箱默认——尤其它们能绕过可见域
 //     直接读到会话文件与记忆目录（dual_persona 正是为此把它们声明为冲突）。
 //     要用就去设置页打开，那是个看得见的选择。
-//  3. 空目录：skills 的技能目录是空的，开着只多两个用不上的工具。
+//  3. 空目录：skills 的技能目录与 bookshelf 的书架是空的，开着只多几个用不上的工具。
 //
 // 其余插件用声明的默认参数就能直接工作，因此默认启用——**包括整个角色演绎组**。
 // 它们从前全在这张表里，理由是「依赖默认关闭的 roleplay」，而 roleplay 关着的理由
@@ -280,6 +281,7 @@ var defaultOffPlugins = map[string]bool{
 	"dual_persona": true, // 不填触发词就永远切不过去
 	"weather":      true, // 不填城市就查不了天气，且开箱即联网
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
+	"bookshelf":    true, // 书架是空的，不放书就没有可读的
 
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot":   true, // 不扫码绑定没法工作
@@ -355,11 +357,12 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// people 排在心情之后：人物是角色与舞台立起来之后的关系网，agenda 紧随其后：日程是这群人之间的一天；
 		// relationship 紧跟 people：对方是关系最近的那个人，先立人物再立关系；unspoken 紧跟其后：
 		// 心里话是在这段关系里憋着的，关系先定，潜台词才有落点；
+		// bookshelf 跟在心里话之后：读书是她在对话之外自己的事，人与关系立起来之后才轮到它；
 		// presence 收尾：现场快照是角色、舞台、身体、心情、关系都立起来之后「此刻」的定格，
 		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近；
 		// style_watch 跟在 presence 之后：它不注入任何提示词，只观察轮次结束，放在
 		// 角色演绎这组的末尾是为了设置页上与 mood、presence 同节展示
-		roleplay.New(), dualpersona.New(), growth.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), presence.New(),
+		roleplay.New(), dualpersona.New(), growth.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), bookshelf.New(), presence.New(),
 		stylewatch.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。

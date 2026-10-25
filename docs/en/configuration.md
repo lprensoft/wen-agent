@@ -65,10 +65,10 @@ providers:
     api_key: ${DEEPSEEK_API_KEY}
 ```
 
-**Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page and stored only in `<config dir>/plugins.state.json`. On a first run every plugin is enabled with the defaults it declares, except for these ten:
+**Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page and stored only in `<config dir>/plugins.state.json`. On a first run every plugin is enabled with the defaults it declares, except for these eleven:
 
 - `read_file` and `exec_command` — they can read any file and run any command. You want them when you are using this as an agent that does work for you; turn them on from the settings page, where it is a visible choice.
-- `dual_persona` (without trigger phrases there is nothing to switch on), `weather` (it needs a city, and network access), `skills` (the skills directory is empty, so all it adds is two tools with nothing to do).
+- `dual_persona` (without trigger phrases there is nothing to switch on), `weather` (it needs a city, and network access), `skills` (the skills directory is empty, so all it adds is two tools with nothing to do), `bookshelf` (the shelf is empty, so there is nothing to read).
 - `qq_bot`, `wechat_bot`, `feishu_bot`, `lark_bot`, `telegram_bot` — they need credentials, or a code scanned, before they can do anything.
 
 Everything else is on, **the whole roleplay group and `heartbeat` included** — out of the box it should be what this project actually is; see [Out of the box](plugins/README.md). Heartbeat being on means it spends quota on a fixed rhythm from the moment you install it; turn it off on the settings page if you do not want that. Each plugin's own data lives in `<config dir>/plugins/<plugin>/`.
