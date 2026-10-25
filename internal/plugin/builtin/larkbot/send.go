@@ -18,8 +18,8 @@ const apiTimeout = 30 * time.Second
 
 // send 把文本发到飞书 / Lark。
 //
-// 普通文本消息不渲染 markdown，直发会满屏星号，所以默认走富文本卡片（lark_md），
-// 由客户端渲染加粗、链接、代码等；配成纯文本时先转成可读纯文本。
+// 普通文本消息不渲染 markdown，直发会满屏星号，所以默认走卡片 JSON 2.0 的 markdown
+// 组件，由客户端渲染标题、列表、引用、代码块、加粗与链接；配成纯文本时先转成可读纯文本。
 // 分段在转换之前做，按原始 markdown 切能保住代码块围栏的完整性。
 //
 // replyTo（入站消息的 message_id）在这里用不上：飞书按 open_id 直接发即可，
@@ -52,13 +52,13 @@ func buildPayload(lang, format, text string) (string, string) {
 		raw, _ := json.Marshal(map[string]string{"text": mdtext.ToPlainText(lang, text)})
 		return "text", string(raw)
 	}
+	// JSON 2.0：schema 必须显式声明，否则按 1.0 解析。1.0 的 lark_md 只认 markdown 的
+	// 一个子集（没有标题、列表与代码块），config.wide_screen_mode 也早已废弃
 	card := map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
-		"elements": []any{
-			map[string]any{
-				"tag": "div",
-				// lark_md 支持加粗、斜体、删除线、链接、行内代码等常用子集
-				"text": map[string]any{"tag": "lark_md", "content": text},
+		"schema": "2.0",
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{"tag": "markdown", "content": text},
 			},
 		},
 	}

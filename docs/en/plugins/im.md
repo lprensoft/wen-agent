@@ -25,7 +25,7 @@ Their protocol layers:
 |---|---|---|---|
 | `qq_bot` | The official QQ open platform, WebSocket event gateway | AppID / AppSecret | A passive reply carries a msg_id (at most 4 replies to one message within 60 minutes, after which it falls back to an active message); C2C direct messages |
 | `wechat_bot` | The official WeChat ClawBot plugin (iLink), HTTP long polling | **Bind by QR code** from the gear on the settings page — the credential is not a key you can paste, but something the server issues after you confirm by scanning | A reply must carry the inbound message's context_token, so the most recent ticket is persisted per user; nothing can be pushed to someone who has never written first |
-| `feishu_bot` | Feishu (China), events over the official SDK's long-lived connection, no public address needed | App ID / App Secret | Enable the `im:message` permission in the developer console, choose "long connection" for event subscription and subscribe to the receive-message event; direct messages only |
+| `feishu_bot` | Feishu (China), events over the official SDK's long-lived connection, no public address needed | App ID / App Secret | Grant the `im:message.p2p_msg:readonly` (read direct messages) and `im:message:send_as_bot` (send as the app) scopes in the developer console, choose "long connection" for event subscription and subscribe to the receive-message event; direct messages only |
 | `lark_bot` | Lark (international), same as above | Same as above, but **not interchangeable with Feishu** | The same implementation instantiated twice. They are two plugins because an international app cannot be used with the China edition, the credentials and open_ids are separate, and one plugin can hold only one set of credentials and so could only connect to one side |
 | `telegram_bot` | The Bot API, HTTP long polling | Bot Token | Not reachable directly from mainland China, so configure `proxy` (http / socks5). A 409 at start-up means the bot has a webhook set, which you need to `deleteWebhook` yourself first |
 
@@ -37,7 +37,7 @@ Their protocol layers:
 | `whitelist` | empty | Allowed user ids, one per line (openid for QQ, `xxx@im.wechat` for WeChat, open_id for Feishu / Lark, chat_id for Telegram) |
 | `api_base` | the official address | Rarely needs changing |
 | `confirm_timeout_sec` | 300 | The longest to wait for `/apply` / `/deny`; a timeout counts as a refusal |
-| `format` | see right | QQ / WeChat / Telegram offer `markdown` (falling back to plain text when the platform refuses) and plain text; Feishu / Lark offer cards (`lark_md`) and plain text |
+| `format` | see right | QQ / WeChat / Telegram offer `markdown` (falling back to plain text when the platform refuses) and plain text; Feishu / Lark offer cards (the markdown component of card JSON 2.0, which renders headings, lists, quotes and code blocks) and plain text |
 | `show_thinking` / `show_tools` | off / off | Whether to forward the reasoning and the tool names to the remote side |
 | `push_notices` | off | Whether to push what background work recorded (a memory distillation's note, say) to the remote side |
 | `merge_window_sec` | 3 | The window for merging rapid messages, in seconds; 0 turns it off |

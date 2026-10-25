@@ -423,7 +423,7 @@
   "log.imbot.route_dropped": "%s: this turn's reply belongs on %s, which could not be delivered to, so it was dropped",
   "log.imbot.save_binding_failed": "%s: could not save the session binding: %v",
   "log.lark.connecting": "%s: opening the long-lived connection (%s)",
-  "log.lark.disconnected": "%s: the long-lived connection ended: %v. Check that the developer console has the event subscription set to \"long connection\", that the \"receive message\" event is subscribed, and that the im:message and im:message:send_as_bot scopes are granted",
+  "log.lark.disconnected": "%s: the long-lived connection ended: %v. Check that the developer console has the event subscription set to \"long connection\", that the \"receive message\" event is subscribed, and that the im:message.p2p_msg:readonly (read direct messages) and im:message:send_as_bot scopes are granted",
   "log.lark.group_ignored": "%s: ignoring a non-direct message (chat_type=%s; only direct chats are supported)",
   "log.lark.send_failed": "%s: could not send: %v",
   "log.llm.truncated": "llm: the output was cut off by max_tokens (finish_reason=length)",

@@ -25,7 +25,7 @@
 |---|---|---|---|
 | `qq_bot` | QQ 官方开放平台，WebSocket 事件网关 | AppID / AppSecret | 被动回复带 msg_id（同一条消息 60 分钟内最多回 4 条，超限降级为主动消息）；C2C 私聊 |
 | `wechat_bot` | 微信官方 ClawBot 插件（iLink），HTTP 长轮询 | 设置页齿轮里**扫码绑定**——凭证不是可粘贴的 Key，而是扫码确认后由服务端下发 | 回消息必须带上入站消息的 context_token，因此按用户持久化最近一次的票据；对方从没说过话时推不出去 |
-| `feishu_bot` | 飞书（中国版），官方 SDK 长连接收事件，不需要公网地址 | App ID / App Secret | 需在开发者后台开通 `im:message` 权限、事件订阅选「长连接」并订阅收消息事件；仅单聊 |
+| `feishu_bot` | 飞书（中国版），官方 SDK 长连接收事件，不需要公网地址 | App ID / App Secret | 需在开发者后台开通 `im:message.p2p_msg:readonly`（收单聊消息）与 `im:message:send_as_bot`（以应用身份发消息）权限、事件订阅选「长连接」并订阅收消息事件；仅单聊 |
 | `lark_bot` | Lark（国际版），同上 | 同上，但**与飞书不通用** | 与飞书是同一套实现的两次实例化。分成两个插件是因为国际版应用不能用于中国版，凭证与 open_id 都是两套，一个插件只能存一份凭证就只能连一边 |
 | `telegram_bot` | Bot API，HTTP 长轮询 | Bot Token | 大陆直连不通，配 `proxy`（http / socks5）；启动时若报 409 说明该 Bot 已设 webhook，需先自行 `deleteWebhook` |
 
@@ -37,7 +37,7 @@
 | `whitelist` | 空 | 允许的用户 id，一行一个（QQ 用 openid，微信形如 `xxx@im.wechat`，飞书 / Lark 用 open_id，Telegram 用 chat_id） |
 | `api_base` | 官方地址 | 一般不需要改 |
 | `confirm_timeout_sec` | 300 | 等待 `/apply` / `/deny` 的上限，超时按拒绝 |
-| `format` | 见右 | QQ / 微信 / Telegram 是 `markdown`（平台拒绝时自动退回纯文本）与 `纯文本`；飞书 / Lark 是 `卡片`（`lark_md`）与 `纯文本` |
+| `format` | 见右 | QQ / 微信 / Telegram 是 `markdown`（平台拒绝时自动退回纯文本）与 `纯文本`；飞书 / Lark 是 `卡片`（卡片 JSON 2.0 的 markdown 组件，标题、列表、引用、代码块都能渲染）与 `纯文本` |
 | `show_thinking` / `show_tools` | 关 / 关 | 是否把思考过程与工具名转发到远端 |
 | `push_notices` | 关 | 是否把后台工作的说明（如记忆提炼的记录）推送到远端 |
 | `merge_window_sec` | 3 | 合并连发消息的窗口（秒），0 关闭 |

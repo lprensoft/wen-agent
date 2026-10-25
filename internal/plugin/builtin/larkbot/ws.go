@@ -46,7 +46,7 @@ func (p *Plugin) runWS(ctx context.Context, appID, appSecret, base string) {
 		i18n.Logf(p.langOf(), "log.lark.connecting", "%s: 正在建立长连接（%s）", p.Name(), base)
 		if err := cli.Start(ctx); err != nil && ctx.Err() == nil {
 			i18n.Logf(p.langOf(), "log.lark.disconnected", "%s: 长连接结束: %v。请确认开发者后台已把事件订阅方式设为「长连接」，"+
-				"并订阅了「接收消息」事件、开通了 im:message 与 im:message:send_as_bot 权限",
+				"并订阅了「接收消息」事件、开通了 im:message.p2p_msg:readonly（收单聊消息）与 im:message:send_as_bot 权限",
 				p.Name(), err)
 		}
 	}()
