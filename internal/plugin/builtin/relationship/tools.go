@@ -70,17 +70,23 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	}
 
 	// 快照只读写本轮的写入域：关系属于人格，两条故事线各有各的关系
-	store := t.p.storeFor(plugin.ScopeFrom(ctx).Write)
+	tag := plugin.ScopeFrom(ctx).Write
+	store := t.p.storeFor(tag)
 	if store == nil {
 		return "", errNotReady(lang)
 	}
+	now := t.p.clock()
 	updated, cleared, err := store.Apply(Update{
 		Stage: a.Stage, MyCall: a.MyCall, TheirCall: a.TheirCall,
 		Recent: a.Recent, Bonds: a.Bonds, TheirNow: a.TheirNow,
 		AddDate: a.AddDate, RemoveDate: a.RemoveDate,
-	}, t.p.clock())
+	}, now)
 	if err != nil {
 		return "", err
+	}
+	// 表人格的日子改了：公告板上今天投出的提醒可能已经不成立，撤回重投
+	if tag == "" && (a.AddDate != nil || a.RemoveDate != nil) {
+		t.p.refreshDateCues(now)
 	}
 
 	var parts []string

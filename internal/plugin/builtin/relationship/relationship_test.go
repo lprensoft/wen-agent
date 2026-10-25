@@ -482,3 +482,61 @@ func TestDateCuesSharedScopeOnce(t *testing.T) {
 		t.Error("同一天不该再投")
 	}
 }
+
+// 模型用 add_date 改过自动记下的那一天之后，再回到这个阶段不能又新记一个同名的日子。
+func TestCorrectedStageDateIsNotDuplicated(t *testing.T) {
+	s := NewStore("", t.TempDir())
+	_, _, _ = s.Apply(Update{Stage: str("热恋")}, day(2026, 1, 10))
+	_, _, _ = s.Apply(Update{AddDate: &DateArg{What: "热恋", Date: "2026-01-08"}}, day(2026, 2, 1)) // 记错了，改一下
+	_, _, _ = s.Apply(Update{Stage: str("冷战中")}, day(2026, 3, 1))
+	_, _, _ = s.Apply(Update{Stage: str("热恋")}, day(2026, 3, 5))
+	snap, _, _ := s.Load()
+	n := 0
+	for _, d := range snap.Dates {
+		if d.What == "热恋" {
+			n++
+			if d.Date != "2026-01-08" {
+				t.Errorf("改过的日子不该被覆盖：%+v", d)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("同名的日子只能有一个：%+v", snap.Dates)
+	}
+}
+
+// 当天的提醒投出去之后又去掉或改了那个日子：公告板上的旧提醒要撤回，改成今天的要补投。
+func TestChangingDatesWithdrawsStaleCues(t *testing.T) {
+	p := newTestPlugin(t)
+	now := day(2026, 5, 12)
+	p.clock = func() time.Time { return now }
+	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
+	tool := p.Tools()[0]
+	exec := func(args string) {
+		t.Helper()
+		if _, err := tool.Execute(scopedCtx(""), json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`{"add_date":{"what":"对方生日","date":"05-12"}}`)
+	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	if !cue.Pending(now) {
+		t.Fatal("前提：今天的生日提醒已投出")
+	}
+
+	exec(`{"add_date":{"what":"对方生日","date":"05-13"}}`) // 记错了，其实是明天
+	if cue.Pending(now) {
+		t.Error("改期之后旧提醒应撤回")
+	}
+	exec(`{"add_date":{"what":"对方生日","date":"05-12"}}`) // 又改回今天
+	if got := cue.Take(now); len(got) != 1 || !strings.Contains(got[0].Text, "对方生日") {
+		t.Errorf("改成今天的应补投：%+v", got)
+	}
+
+	exec(`{"add_date":{"what":"纪念日","date":"05-12"}}`)
+	exec(`{"remove_date":"纪念日"}`)
+	exec(`{"remove_date":"对方生日"}`)
+	if cue.Pending(now) {
+		t.Error("去掉的日子不该还留着提醒")
+	}
+}

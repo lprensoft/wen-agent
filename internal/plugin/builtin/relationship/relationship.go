@@ -29,10 +29,11 @@ type Plugin struct {
 	actMu    sync.Mutex
 	actState plugin.ActionState
 
-	// cuedDay 是上次检查「今天碰上的日子」的日期（只在内存里，重启后再查一次无妨：
-	// 公告板按 Key 去重）。clock 供测试替换。
-	cuedDay string
-	clock   func() time.Time
+	// cuedDay 是上次检查「今天碰上的日子」的日期，cuedKeys 是那次投出的提醒（改日子
+	// 时据此撤回）。只在内存里，重启后再查一次无妨：公告板按 Key 去重。clock 供测试替换。
+	cuedDay  string
+	cuedKeys []string
+	clock    func() time.Time
 }
 
 func New() *Plugin { return &Plugin{clock: time.Now} }
@@ -195,15 +196,29 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, _ plugin.TurnEndEvent) {
 		return
 	}
 	now := p.clock()
+	p.mu.Lock()
+	done := p.cuedDay == now.Format(dateLayout)
+	p.mu.Unlock()
+	if !done {
+		p.refreshDateCues(now)
+	}
+}
+
+// refreshDateCues 撤回本插件今天投出、还没被取走的日子提醒，再按当前快照重投。
+//
+// 投递之后日子可能被改掉（去掉了，或改了日期）：快照变了，公告板上那条却还在，心跳
+// 照样会拿到一条已经不成立的「今天是她生日」；而当天的检查又已经做过，不会再来。所以
+// 改日子时走这里重算一遍，而不只是在每天第一轮。
+func (p *Plugin) refreshDateCues(now time.Time) {
 	today := now.Format(dateLayout)
 	p.mu.Lock()
-	if p.cuedDay == today {
-		p.mu.Unlock()
-		return
-	}
-	p.cuedDay = today
+	old := p.cuedKeys
+	p.cuedKeys, p.cuedDay = nil, today
 	lang := p.lang
 	p.mu.Unlock()
+	for _, k := range old {
+		cue.Drop("relationship", k)
+	}
 
 	store := p.storeFor("")
 	if store == nil {
@@ -215,13 +230,19 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, _ plugin.TurnEndEvent) {
 	}
 	y, m, d := now.Date()
 	endOfDay := time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
+	var keys []string
 	for _, hit := range dateHits(lang, snap.Dates, now) {
+		key := "date|" + today + "|" + hit
 		cue.Post(cue.Cue{
-			Source: "relationship", Key: "date|" + today + "|" + hit,
+			Source: "relationship", Key: key,
 			Text:   prompt.Tf(lang, "prompt.relationship.cue.date", "今天是%s。", hit),
 			Expire: endOfDay,
 		})
+		keys = append(keys, key)
 	}
+	p.mu.Lock()
+	p.cuedKeys = append(p.cuedKeys, keys...)
+	p.mu.Unlock()
 }
 
 // renderHead 渲染第一行：阶段与称呼。三项都可缺，缺哪项省哪句。

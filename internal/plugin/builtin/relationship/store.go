@@ -161,7 +161,9 @@ func (s *Store) Apply(u Update, now time.Time) (updated, cleared []string, err e
 	}
 	prevStage := snap.Stage
 	setText(&snap.Stage, u.Stage, labelStage.For(s.lang))
-	if snap.Stage != "" && snap.Stage != prevStage && autoDateFor(snap.Dates, snap.Stage) < 0 {
+	// 认的是任何同名的日子，不只是自动记下的：模型用 add_date 改过那一天之后它就不再
+	// 标着自动，只认自动的话下一次回到这个阶段又会新记一个，同名的两个日子一起过节
+	if snap.Stage != "" && snap.Stage != prevStage && dateIndex(snap.Dates, snap.Stage) < 0 {
 		// 关系第一次变成这个样子：代码记下日子，不靠模型想起来
 		snap.Dates = addDate(snap.Dates, DateMark{What: snap.Stage, Date: now.Format(dateLayout), Auto: true})
 	}
@@ -300,16 +302,6 @@ func validDate(s string) bool {
 func dateIndex(dates []DateMark, what string) int {
 	for i, d := range dates {
 		if d.What == what {
-			return i
-		}
-	}
-	return -1
-}
-
-// autoDateFor 找某个阶段自动记下的那个日子。
-func autoDateFor(dates []DateMark, stage string) int {
-	for i, d := range dates {
-		if d.Auto && d.What == stage {
 			return i
 		}
 	}
