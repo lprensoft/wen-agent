@@ -80,8 +80,22 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 		})
 	}
 
+	// 边写边显示：只在回复原路回本通道时做。转投到别的通道时，预览出现在这一侧就等于
+	// 把另一面的话露在这一面的窗口里
+	stopPreview := func() {}
+	if c.cfg.Preview != nil {
+		if target := Target(sid); target == "" || target == c.cfg.PluginName {
+			var feed func(string)
+			feed, stopPreview = startPreview(ctx, func(pctx context.Context, text string) {
+				c.cfg.Preview(pctx, msg, text)
+			})
+			tctx = plugin.WithReplyPreview(tctx, feed)
+		}
+	}
+
 	c.typing(ctx, msg, true)
 	final, err := c.cfg.RunTurn(tctx, sid, msg.Text)
+	stopPreview() // 必须在正式回复之前：最后一次预览不能落在回复后面
 	c.typing(ctx, msg, false)
 	if err != nil {
 		if errors.Is(err, plugin.ErrSessionBusy) {

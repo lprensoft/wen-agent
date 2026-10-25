@@ -38,6 +38,7 @@ Their protocol layers:
 | `api_base` | the official address | Rarely needs changing |
 | `confirm_timeout_sec` | 300 | The longest to wait for `/apply` / `/deny`; a timeout counts as a refusal |
 | `format` | see right | QQ / WeChat / Telegram offer `markdown` (falling back to plain text when the platform refuses) and plain text; Feishu / Lark offer cards (the markdown component of card JSON 2.0, which renders headings, lists, quotes and code blocks) and plain text |
+| `stream_preview` | off | Telegram only: while a reply is being generated, show what has been written so far (a draft preview, replaced by the real message when done). With it on, replies no longer arrive the way a person types them |
 | `show_thinking` / `show_tools` | off / off | Whether to forward the reasoning and the tool names to the remote side |
 | `push_notices` | off | Whether to push what background work recorded (a memory distillation's note, say) to the remote side |
 | `merge_window_sec` | 3 | The window for merging rapid messages, in seconds; 0 turns it off |

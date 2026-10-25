@@ -38,6 +38,7 @@
 | `api_base` | 官方地址 | 一般不需要改 |
 | `confirm_timeout_sec` | 300 | 等待 `/apply` / `/deny` 的上限，超时按拒绝 |
 | `format` | 见右 | QQ / 微信 / Telegram 是 `markdown`（平台拒绝时自动退回纯文本）与 `纯文本`；飞书 / Lark 是 `卡片`（卡片 JSON 2.0 的 markdown 组件，标题、列表、引用、代码块都能渲染）与 `纯文本` |
+| `stream_preview` | 关 | 仅 Telegram：回复还在生成时显示正在写的内容（草稿预览，写完换成正式消息）。开着就不像真人打字了 |
 | `show_thinking` / `show_tools` | 关 / 关 | 是否把思考过程与工具名转发到远端 |
 | `push_notices` | 关 | 是否把后台工作的说明（如记忆提炼的记录）推送到远端 |
 | `merge_window_sec` | 3 | 合并连发消息的窗口（秒），0 关闭 |

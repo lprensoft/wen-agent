@@ -126,6 +126,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "markdown：转成 Telegram 的 MarkdownV2 发送，加粗、代码块等照常渲染，解析失败时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
 		},
 		{
+			Key: "stream_preview", Label: "边写边显示", Type: plugin.FieldBool, Default: false,
+			Description: "回复还在生成时，在对话里显示正在写的内容（Telegram 的草稿预览，写完后换成正式消息）。" +
+				"开着就不像真人打字了：真人不会让你看着一个字一个字往外冒",
+		},
+		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
 			Description: "把每轮的思考过程也推送过来（可能很长）",
 		},
@@ -197,6 +202,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.pollClient = &http.Client{Timeout: longPollTimeout + 30*time.Second, Transport: transport}
 	p.mu.Unlock()
 
+	var preview func(context.Context, imbot.Message, string)
+	if plugin.CfgBool(cfg, "stream_preview", false) {
+		preview = p.onPreview
+	}
 	core, err := imbot.New(imbot.Config{
 		PluginName:     p.Name(),
 		Sender:         sender{p: p},
@@ -215,6 +224,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		Push:           p.push,
 		Notice:         ictx.Notice,
 		Typing:         p.onTyping,
+		Preview:        preview,
 		RunTurn:        ictx.RunTurn,
 		NewSession:     ictx.NewSession,
 		Compact:        ictx.Compact,

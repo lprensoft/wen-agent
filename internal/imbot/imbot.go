@@ -101,6 +101,10 @@ type Config struct {
 	OnAccepted func(msg Message)
 	// Typing 在跑一轮对话前后调用，供通道发「正在输入」状态。可为 nil。
 	Typing func(ctx context.Context, msg Message, active bool)
+	// Preview 在一轮进行中显示「正在写的回复」（Telegram 的草稿预览）。骨架负责节流
+	// （至多每秒一次、只送最新的一份），并保证最后一次预览在正式回复之前送完。text 是
+	// 当前这次模型响应到目前为止的全文。nil 表示本通道不预览（开关关着或平台不支持）。
+	Preview func(ctx context.Context, msg Message, text string)
 	// Push 是主动推送：没有「本轮入站消息」可回带凭据时把文本发给某个用户。
 	// 返回是否真的交给了平台——微信必须回带该用户最近一次入站消息的
 	// context_token，对方从没说过话时就推不出去，调用方要据此知道这段话没送达。
