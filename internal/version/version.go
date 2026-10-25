@@ -8,4 +8,4 @@ package version
 // `git describe` 的形态（如 v0.4.1-3-g29a95a4），使测试包自我标识为「上一个
 // 正式版之后的第 N 个提交」而不冒充正式版。正式发布与本地构建不注入，
 // 显示的仍是这里的值。
-var Version = "v0.9.0"
+var Version = "v1.0.0"
