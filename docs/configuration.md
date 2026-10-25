@@ -116,9 +116,9 @@ OpenAI 兼容协议只统一了 messages / tools / stream 这一层，**思考�
 |---|---|---|
 | `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | 五档全收 |
 | `glm` | 同上 | `low` / `high` / `max` |
-| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split`；用 `max_completion_tokens` | 只有开关 |
+| `minimax` | `thinking:{adaptive}` + `reasoning_split`；用 `max_completion_tokens` | 没有档位，也关不掉（`off` 照开着发：M3.1-Flash 收到 `disabled` 会报 400） |
 | `qwen` | `enable_thinking` 布尔 | 只有开关 |
-| `kimi` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | `low` / `high` / `max`（`off` 发成 `low`：K3 的思考关不掉） |
+| `kimi` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | `low` / `high` / `max`（`off` 发成 `low`：K3 一代的思考关不掉） |
 | `openai` | `reasoning_effort`；不发采样参数，用 `max_completion_tokens` | 六档全收（`off` 发成 `none`） |
 | `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
 | `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |

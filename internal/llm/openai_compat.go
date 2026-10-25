@@ -226,13 +226,11 @@ func applyThinking(wr *wireRequest, req ChatRequest, dialect string) {
 			wr.ReasoningEffort = snapEffort(spec.levels, req.Thinking)
 		}
 	case shapeAdaptive:
-		if off {
-			// 注意 M2.x 系列并不真正关闭思考（平台接受 disabled 但无效）
-			wr.Thinking = &wireThinking{Type: "disabled"}
-		} else {
-			wr.Thinking = &wireThinking{Type: "adaptive"}
-			wr.ReasoningSplit = true // 不带的话思考会以 <think> 内联进正文
-		}
+		// MiniMax 不提供「关闭思考」：M2.x 接受 disabled 但照样思考，M3.1-Flash 收到
+		// disabled 直接 400。界面上选了「关闭」也按开着发，与其让一个选项时灵时不灵
+		// 或者报错，不如说清楚它就是关不掉
+		wr.Thinking = &wireThinking{Type: "adaptive"}
+		wr.ReasoningSplit = true // 不带的话思考会以 <think> 内联进正文
 		sample = true
 	case shapeEnableThinking:
 		et := !off

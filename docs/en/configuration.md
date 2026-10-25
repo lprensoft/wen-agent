@@ -116,9 +116,9 @@ The OpenAI-compatible protocol only standardises the messages / tools / stream l
 |---|---|---|
 | `deepseek` | `thinking:{enabled\|disabled}` + `reasoning_effort` | all five |
 | `glm` | same as above | `low` / `high` / `max` |
-| `minimax` | `thinking:{adaptive\|disabled}` + `reasoning_split`; uses `max_completion_tokens` | on/off only |
+| `minimax` | `thinking:{adaptive}` + `reasoning_split`; uses `max_completion_tokens` | no levels, and thinking cannot be turned off (`off` is sent as on, because M3.1-Flash rejects `disabled` with a 400) |
 | `qwen` | `enable_thinking` boolean | on/off only |
-| `kimi` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | `low` / `high` / `max` (`off` is sent as `low`, because K3 cannot turn thinking off) |
+| `kimi` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | `low` / `high` / `max` (`off` is sent as `low`, because the K3 generation cannot turn thinking off) |
 | `openai` | `reasoning_effort`; no sampling parameters, uses `max_completion_tokens` | all six (`off` is sent as `none`) |
 | `gemini` | `reasoning_effort` | `low` / `medium` / `high` |
 | `xai` | `reasoning_effort` | `low` / `medium` / `high` / `xhigh` |

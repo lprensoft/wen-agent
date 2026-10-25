@@ -82,7 +82,7 @@ var presets = []Preset{
 		Key: "kimi_cn", Name: "Kimi" + cnSuffix, Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.moonshot.cn/v1", Dialect: llm.DialectKimi,
 		ConsoleURL: "https://platform.kimi.com/console/api-keys",
-		Desc:       "月之暗面 Kimi，国内站。K3 长上下文，原生视觉。",
+		Desc:       "月之暗面 Kimi，国内站。K3.1 Pro 长上下文，原生视觉。",
 		Models:     kimiModels(),
 	},
 	{
@@ -109,7 +109,7 @@ var presets = []Preset{
 	{
 		Key: "doubao", Name: "Doubao", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://ark.cn-beijing.volces.com/api/v3", Dialect: llm.DialectDeepSeek,
-		ConsoleURL: "https://ark.volcengine.com/region:cn-beijing/apiKey",
+		ConsoleURL: "https://ark.volcengine.com/region:cn-beijing/apikey",
 		Desc:       "字节豆包，火山方舟。模型 ID 带版本日期，去掉就调不通。",
 		Models: []Model{
 			// 日期后缀是必须的，方舟不认不带日期的别名。这也意味着这两行
@@ -123,14 +123,14 @@ var presets = []Preset{
 		Key: "minimax_cn", Name: "MiniMax" + cnSuffix, Type: llm.TypeOpenAICompat,
 		// 国内站的域名已换成 minimax.cn；旧的 api.minimaxi.com 仍能用，但文档里已不再出现
 		BaseURL: "https://api.minimax.cn/v1", Dialect: llm.DialectMiniMax,
-		ConsoleURL: "https://platform.minimax.cn/console/access?tab=api-keys",
-		Desc:       "MiniMax，国内站。模型 ID 大小写敏感。",
+		ConsoleURL: "https://platform.minimax.cn/user-center/basic-information/interface-key",
+		Desc:       "MiniMax，国内站。模型 ID 大小写敏感，思考关不掉。",
 		Models:     minimaxModels(),
 	},
 	{
 		Key: "minimax", Name: "MiniMax", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://api.minimax.io/v1", Dialect: llm.DialectMiniMax,
-		ConsoleURL: "https://platform.minimax.io/console/access",
+		ConsoleURL: "https://platform.minimax.io/user-center/basic-information/interface-key",
 		Desc:       "MiniMax，国际站。与国内站是两套账号，密钥不通用。",
 		Models:     minimaxModels(),
 	},
@@ -165,7 +165,7 @@ var presets = []Preset{
 		Key: "anthropic", Name: "Anthropic", Type: llm.TypeAnthropic,
 		BaseURL:    "https://api.anthropic.com",
 		ConsoleURL: "https://platform.claude.com/settings/keys",
-		Desc:       "Anthropic Claude。唯一支持提示词缓存开关的一家。",
+		Desc:       "Anthropic Claude。唯一支持提示词缓存开关的一家。建密钥时要选定工作区。",
 		Models: []Model{
 			// 官方输出上限是 128K，这里取 64K：输出上限要从历史预算里扣掉
 			{ID: "claude-sonnet-5-5", ContextLength: intp(1000000), MaxTokens: intp(64000)},
@@ -196,7 +196,7 @@ var presets = []Preset{
 	{
 		Key: "openrouter", Name: "OpenRouter", Type: llm.TypeOpenAICompat,
 		BaseURL: "https://openrouter.ai/api/v1", Dialect: llm.DialectEffort,
-		ConsoleURL: "https://openrouter.ai/keys",
+		ConsoleURL: "https://openrouter.ai/settings/keys",
 		Desc:       "一个密钥通吃各家。带 ~ 的是始终指向该系列最新版的别名。",
 		Models: []Model{
 			// 能用别名就用别名：这张表本来就会过期，而别名不会。别名是按系列分的
@@ -230,8 +230,10 @@ func glmModels() []Model {
 
 func kimiModels() []Model {
 	return []Model{
-		// 只放 K3：K2.x 的思考参数是 thinking:{type, keep}，不认 reasoning_effort，
-		// 而方言是按提供商定的，同一家里分不出两种写法
+		// 只放 K3 一代：K2.x 的思考参数是 thinking:{type, keep}，不认 reasoning_effort，
+		// 而方言是按提供商定的，同一家里分不出两种写法。K3.1 Pro 与 K3 参数形状相同、
+		// 价格更低，官方示例也拿它当默认，故排第一
+		{ID: "kimi-k3.1-pro", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 		{ID: "kimi-k3", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 	}
 }
@@ -246,17 +248,18 @@ func qwenModels() []Model {
 
 func minimaxModels() []Model {
 	return []Model{
+		// M2.7 已从两站的兼容接口模型表里消失，不再预置
 		{ID: "MiniMax-M3", ContextLength: intp(1000000), MaxTokens: intp(65536)},
-		{ID: "MiniMax-M2.7", ContextLength: intp(204800), MaxTokens: intp(65536)},
-		{ID: "MiniMax-M2.7-highspeed", ContextLength: intp(204800), MaxTokens: intp(65536)},
+		{ID: "MiniMax-M3.1-Flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 	}
 }
 
 func siliconflowModels() []Model {
 	return []Model{
-		{ID: "deepseek-ai/DeepSeek-V4-Flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
+		// 与 DeepSeek 官方现行的 Flash（V4.1）对齐
+		{ID: "deepseek-ai/DeepSeek-V4.1-Flash", ContextLength: intp(1000000), MaxTokens: intp(65536)},
 		{ID: "deepseek-ai/DeepSeek-V4-Pro", ContextLength: intp(1000000), MaxTokens: intp(65536)},
-		// 两站共用一张清单，只放两边都有的：GLM-5.3-Flash 国内站查不到
+		// 两站共用一张清单，只放两边都核实过的：GLM-5.3-Flash 国内站已有，国际站未核实
 		{ID: "zai-org/GLM-5.3", ContextLength: intp(1000000), MaxTokens: intp(131072)},
 	}
 }
