@@ -30,11 +30,19 @@ const (
 // logView 是「查看成长记录」列出的条数。
 const logView = 30
 
+// Actions 顺手记下这次展示的是哪一条提议（shown）：批准与驳回只处理用户看到的那一条，
+// 见 decide。这是 Actions 唯一的副作用，与「廉价、随时可调」的契约不冲突——它只记
+// 一个标识，不读写任何别的东西。
 func (p *Plugin) Actions() []plugin.ActionDef {
 	pending := "· —"
-	if _, st, ok := p.nextPending(); ok {
+	shown := ""
+	if tag, st, ok := p.nextPending(); ok {
 		pending = "· " + st.Pending.Text
+		shown = pendingKey(tag, st.Pending.ID)
 	}
+	p.actMu.Lock()
+	p.shown = shown
+	p.actMu.Unlock()
 	return []plugin.ActionDef{
 		{Key: actionApprove, Label: "批准这条改变", Description: "让角色提议的那个大变化生效：", Detail: pending},
 		{Key: actionReject, Label: "驳回这条改变", Description: "不接受角色提议的那个大变化，角色照旧：", Detail: pending},
@@ -53,20 +61,32 @@ func (p *Plugin) domains() []string {
 	return plugin.ReadDomains(s.base, plugin.Scope{})
 }
 
-// nextPending 找第一个有待批准提议的域。Actions 与 StartAction 用同一个顺序，界面上
-// 看到的那一条就是按下去会处理的那一条。
+// nextPending 找全部域里**最早提出**的那条待批准提议。按提出时间而不是按域的顺序：
+// 后来在另一个人格里新提的一条永远排在后面，顶不掉界面上已经显示的那一条。
 func (p *Plugin) nextPending() (string, State, bool) {
+	var (
+		bestTag string
+		best    State
+		found   bool
+	)
 	for _, tag := range p.domains() {
 		store := p.storeFor(tag)
 		if store == nil {
 			continue
 		}
-		if st, err := store.Load(); err == nil && st.Pending != nil {
-			return tag, st, true
+		st, err := store.Load()
+		if err != nil || st.Pending == nil {
+			continue
+		}
+		if !found || st.Pending.Since.Before(best.Pending.Since) {
+			bestTag, best, found = tag, st, true
 		}
 	}
-	return "", State{}, false
+	return bestTag, best, found
 }
+
+// pendingKey 是一条提议的身份：哪个域、哪个编号。
+func pendingKey(tag, id string) string { return tag + "/" + id }
 
 func (p *Plugin) StartAction(_ context.Context, key string) error {
 	lang := p.langOf()
@@ -110,16 +130,29 @@ func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	return plugin.ActionState{Status: plugin.ActionIdle}, nil
 }
 
-// decide 批准或驳回那条在等的提议。
+// decide 批准或驳回那条在等的提议——只认用户看到的那一条。
+//
+// 按下按钮时重新挑一次「下一条」是不够的：界面显示的是 A，这期间 A 在别处被处理掉、
+// 或者别的什么让「下一条」变成了 B，按下去就批准了一条用户根本没读过的改变。所以对上
+// Actions 最后一次展示的那条（域与编号），对不上就拒绝并请用户刷新；写入时再在锁内
+// 核对一遍编号。
 func (p *Plugin) decide(lang string, approve bool) (string, error) {
-	tag, _, ok := p.nextPending()
+	tag, cur, ok := p.nextPending()
 	if !ok {
 		return i18n.T(lang, "plugin.growth.action.no_pending", "现在没有在等批准的改变。"), nil
+	}
+	p.actMu.Lock()
+	shown := p.shown
+	p.actMu.Unlock()
+	id := cur.Pending.ID
+	if shown != pendingKey(tag, id) {
+		return "", fmt.Errorf("%s", i18n.T(lang, "plugin.growth.action.stale",
+			"等待批准的改变已经变了，请刷新后看清楚再操作。"))
 	}
 	now := p.now()
 	var text string
 	_, err := p.storeFor(tag).Update(func(st *State) (bool, []LogEntry, error) {
-		if st.Pending == nil {
+		if st.Pending == nil || st.Pending.ID != id {
 			return false, nil, nil
 		}
 		e := *st.Pending

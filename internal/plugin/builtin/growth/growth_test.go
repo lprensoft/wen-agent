@@ -43,6 +43,17 @@ func reflecting(tag string) context.Context {
 	return plugin.WithScope(ctx, plugin.Scope{Write: tag})
 }
 
+// claimed 模拟一轮反思：发起方是 growth、可见域按 tag，并像真实轮次那样在裁决之后
+// 经 TurnPrompt 认领这个域——不认领的话两个改动工具一律拒绝。
+func claimed(t *testing.T, p *Plugin, tag string) context.Context {
+	t.Helper()
+	ctx := reflecting(tag)
+	if _, err := p.TurnPrompt(ctx, plugin.TurnEvent{SessionID: "s-" + tag}); err != nil {
+		t.Fatal(err)
+	}
+	return ctx
+}
+
 func call(t *testing.T, tool plugin.Tool, ctx context.Context, args string) (string, error) {
 	t.Helper()
 	return tool.Execute(ctx, json.RawMessage(args))
@@ -74,7 +85,7 @@ func TestToolsOnlyInReflection(t *testing.T) {
 
 func TestDetailAddModifyLetGoWithQuota(t *testing.T) {
 	p, _ := newTestPlugin(t, map[string]any{"daily_changes": 3}, nil, nil)
-	ctx := reflecting("")
+	ctx := claimed(t, p, "")
 	grow := p.Tools()[0]
 
 	out, err := call(t, grow, ctx, `{"action":"add","text":"早上会冲一杯手冲","basis":"10-19 买了手冲壶","why":"本来就离不开咖啡"}`)
@@ -108,7 +119,7 @@ func TestDetailAddModifyLetGoWithQuota(t *testing.T) {
 
 func TestDetailRequiresWhyAndRejectsLongText(t *testing.T) {
 	p, _ := newTestPlugin(t, nil, nil, nil)
-	ctx := reflecting("")
+	ctx := claimed(t, p, "")
 	grow := p.Tools()[0]
 	if _, err := call(t, grow, ctx, `{"action":"add","text":"x","basis":"y","why":" "}`); err == nil {
 		t.Error("说不清为什么这还是自己的，不该记")
@@ -121,7 +132,7 @@ func TestDetailRequiresWhyAndRejectsLongText(t *testing.T) {
 
 func TestDetailsCapForcesReplace(t *testing.T) {
 	p, c := newTestPlugin(t, map[string]any{"max_details": 2, "daily_changes": 10}, nil, nil)
-	ctx := reflecting("")
+	ctx := claimed(t, p, "")
 	grow := p.Tools()[0]
 	for _, txt := range []string{"a", "b"} {
 		if _, err := call(t, grow, ctx, `{"action":"add","text":"`+txt+`","basis":"x","why":"y"}`); err != nil {
@@ -137,7 +148,7 @@ func TestDetailsCapForcesReplace(t *testing.T) {
 
 func TestProposeOneAtATimeThenApproveAndUndo(t *testing.T) {
 	p, _ := newTestPlugin(t, nil, nil, nil)
-	ctx := reflecting("")
+	ctx := claimed(t, p, "")
 	propose := p.Tools()[1]
 	if _, err := call(t, propose, ctx, `{"text":"说话比以前直了","basis":"这几天都直说","why":"本来就嘴硬心软"}`); err != nil {
 		t.Fatal(err)
@@ -179,8 +190,9 @@ func TestProposeOneAtATimeThenApproveAndUndo(t *testing.T) {
 
 func TestRejectAndUndoDetail(t *testing.T) {
 	p, _ := newTestPlugin(t, nil, nil, nil)
-	ctx := reflecting("")
+	ctx := claimed(t, p, "")
 	_, _ = call(t, p.Tools()[1], ctx, `{"text":"变得爱热闹","basis":"x","why":"y"}`)
+	p.Actions() // 设置页先把列表拉出来，用户看到了这一条
 	if err := p.StartAction(context.Background(), actionReject); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +221,7 @@ func TestRejectAndUndoDetail(t *testing.T) {
 
 func TestScopesGrowSeparately(t *testing.T) {
 	p, _ := newTestPlugin(t, nil, nil, nil)
-	_, _ = call(t, p.Tools()[0], reflecting("inner"), `{"action":"add","text":"夜里爱听雨","basis":"x","why":"y"}`)
+	_, _ = call(t, p.Tools()[0], claimed(t, p, "inner"), `{"action":"add","text":"夜里爱听雨","basis":"x","why":"y"}`)
 	outer, _ := p.TurnPrompt(plugin.WithScope(context.Background(), plugin.Scope{}), plugin.TurnEvent{})
 	inner, _ := p.TurnPrompt(plugin.WithScope(context.Background(), plugin.Scope{Write: "inner"}), plugin.TurnEvent{})
 	if outer != "" || !strings.Contains(inner, "夜里爱听雨") {
@@ -248,16 +260,16 @@ type turnRec struct {
 	inputs []string
 	err    error
 	ch     chan struct{}
-	onTurn func(ctx context.Context)
+	onTurn func(sid string)
 }
 
-func (r *turnRec) run(ctx context.Context, _, input string) (string, error) {
+func (r *turnRec) run(_ context.Context, sid, input string) (string, error) {
 	r.mu.Lock()
 	r.inputs = append(r.inputs, input)
 	err, on := r.err, r.onTurn
 	r.mu.Unlock()
 	if on != nil {
-		on(ctx)
+		on(sid)
 	}
 	r.ch <- struct{}{}
 	return "", err
@@ -297,8 +309,10 @@ func TestReflectOncePerDayAfterConversation(t *testing.T) {
 		return nil
 	})
 	// 反思轮次里模型记下一条，模拟真实的工具调用（发起方由 Manager 注入，这里手工补上）
-	rec.onTurn = func(ctx context.Context) {
-		_, _ = p.Tools()[0].Execute(reflecting(""), json.RawMessage(`{"action":"add","text":"爱上手冲","basis":"x","why":"y"}`))
+	rec.onTurn = func(sid string) {
+		ctx := reflecting("")
+		_, _ = p.TurnPrompt(ctx, plugin.TurnEvent{SessionID: sid}) // 裁决之后认领，与真实轮次一样
+		_, _ = p.Tools()[0].Execute(ctx, json.RawMessage(`{"action":"add","text":"爱上手冲","basis":"x","why":"y"}`))
 	}
 
 	endTurn(p, true) // 第一次见：从今天起算，不补反思
@@ -367,4 +381,127 @@ func waitIdle(t *testing.T, p *Plugin) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("反思没有收尾")
+}
+
+// endTurnIn 是某个人格上的一轮收尾。
+func endTurnIn(p *Plugin, tag, sid string, interactive bool) {
+	p.OnTurnEnd(plugin.WithScope(context.Background(), plugin.Scope{Write: tag}),
+		plugin.TurnEndEvent{SessionID: sid, Interactive: interactive, EndedAt: time.Now()})
+}
+
+// 触发时是里人格，等到真正跑的时候会话已切回表人格：表人格不该看到里人格的成长清单，
+// 工具也不能改到里人格上；记账落在真正跑了反思的那个人格上，里人格仍然欠着一次。
+func TestReflectionFollowsPersonaDecidedAtRunTime(t *testing.T) {
+	rec := &turnRec{ch: make(chan struct{}, 4)}
+	p, c := newTestPlugin(t, nil, rec.run, nil)
+	yesterday := logicalDay(c.now())
+	for _, tag := range []string{"", "inner"} {
+		_, _ = p.storeFor(tag).Update(func(st *State) (bool, []LogEntry, error) {
+			st.LastReflect, st.Dirty = yesterday, true
+			if tag == "inner" {
+				st.Details = []Entry{{ID: "d1", Text: "里人格的秘密习惯"}}
+			}
+			return true, nil, nil
+		})
+	}
+	c.add(24 * time.Hour)
+
+	var listing string
+	var innerErr error
+	rec.onTurn = func(sid string) {
+		// Agent 在会话锁内重新裁决：此刻是表人格
+		listing, _ = p.TurnPrompt(reflecting(""), plugin.TurnEvent{SessionID: sid})
+		_, innerErr = p.Tools()[0].Execute(reflecting("inner"), json.RawMessage(`{"action":"add","text":"x","basis":"y","why":"z"}`))
+	}
+	endTurnIn(p, "inner", "s1", false) // 触发时是里人格
+	rec.wait(t)
+	waitIdle(t, p)
+
+	if strings.Contains(listing, "里人格的秘密习惯") || !strings.Contains(listing, "[你现在的成长]") {
+		t.Errorf("表人格拿到的应是它自己的清单：%q", listing)
+	}
+	if innerErr == nil {
+		t.Error("没认领的里人格不该被改")
+	}
+	today := logicalDay(c.now())
+	if st := load(t, p, ""); st.LastReflect != today {
+		t.Errorf("表人格真的反思了，应记作今天反思过：%q", st.LastReflect)
+	}
+	if st := load(t, p, "inner"); st.LastReflect != yesterday {
+		t.Errorf("里人格这次没反思，应仍然欠着：%q", st.LastReflect)
+	}
+}
+
+// 同一个人格今天已经反思过：后到的那一轮不认领，只叫它什么都别做。
+func TestSecondReflectionSameDayIsNotClaimed(t *testing.T) {
+	p, c := newTestPlugin(t, nil, nil, nil)
+	_, _ = p.storeFor("").Update(func(st *State) (bool, []LogEntry, error) {
+		st.LastReflect = logicalDay(c.now())
+		return true, nil, nil
+	})
+	out, _ := p.TurnPrompt(reflecting(""), plugin.TurnEvent{SessionID: "s1"})
+	if !strings.Contains(out, "今天已经回头看过了") {
+		t.Errorf("今天反思过的人格不该再认领：%q", out)
+	}
+	if _, err := call(t, p.Tools()[0], reflecting(""), `{"action":"add","text":"x","basis":"y","why":"z"}`); err == nil {
+		t.Error("没认领就不能改")
+	}
+}
+
+// 设置页显示的是表人格那条提议，之后里人格新提了一条：按下批准处理的仍是看到的那一条；
+// 看到的那条在别处被处理掉了，就拒绝并请用户刷新，而不是批准一条没读过的。
+func TestApproveActsOnTheShownProposal(t *testing.T) {
+	p, c := newTestPlugin(t, nil, nil, nil)
+	_, _ = call(t, p.Tools()[1], claimed(t, p, ""), `{"text":"说话直了","basis":"x","why":"y"}`)
+	p.Actions() // 用户看到的是「说话直了」
+	c.add(time.Minute)
+	_, _ = call(t, p.Tools()[1], claimed(t, p, "inner"), `{"text":"里人格的变化","basis":"x","why":"y"}`)
+
+	if err := p.StartAction(context.Background(), actionApprove); err != nil {
+		t.Fatal(err)
+	}
+	if st := load(t, p, ""); len(st.Core) != 1 || st.Core[0].Text != "说话直了" {
+		t.Errorf("应批准看到的那一条：%+v", st.Core)
+	}
+	if st := load(t, p, "inner"); st.Pending == nil {
+		t.Error("没看到的那一条不该被处理")
+	}
+
+	// 界面停在「里人格的变化」，它在别处被驳回了，又冒出一条新的：按下去必须拒绝
+	p.Actions()
+	_, _ = p.storeFor("inner").Update(func(st *State) (bool, []LogEntry, error) {
+		st.Pending = &Entry{ID: "c99", Text: "另一条没给人看过的", Since: c.now()}
+		return true, nil, nil
+	})
+	err := p.StartAction(context.Background(), actionApprove)
+	if err == nil || !strings.Contains(err.Error(), "刷新") {
+		t.Errorf("看到的那条变了，应请用户刷新：%v", err)
+	}
+	if st := load(t, p, "inner"); st.Pending == nil || len(st.Core) != 0 {
+		t.Errorf("没看过的那条不该被批准：%+v", st)
+	}
+}
+
+// 心跳触发的反思进行期间，有人来聊过（哪怕是另一个会话）：收尾不能把这次对话的标记
+// 一起清掉，否则次日的反思会被跳过。
+func TestReflectionKeepsActivityThatHappenedDuringIt(t *testing.T) {
+	for _, during := range []bool{true, false} {
+		rec := &turnRec{ch: make(chan struct{}, 4)}
+		p, c := newTestPlugin(t, nil, rec.run, nil)
+		endTurnIn(p, "", "s1", true) // 第一天有人来过
+		c.add(24 * time.Hour)
+		rec.onTurn = func(sid string) {
+			_, _ = p.TurnPrompt(reflecting(""), plugin.TurnEvent{SessionID: sid})
+			if during {
+				c.add(time.Minute)
+				endTurnIn(p, "", "s2", true) // 反思进行中，另一个会话里有人说话
+			}
+		}
+		endTurnIn(p, "", "s1", false) // 心跳触发
+		rec.wait(t)
+		waitIdle(t, p)
+		if st := load(t, p, ""); st.Dirty != during {
+			t.Errorf("反思期间有人来过=%v，收尾后 Dirty 应为 %v，实际 %v", during, during, st.Dirty)
+		}
+	}
 }

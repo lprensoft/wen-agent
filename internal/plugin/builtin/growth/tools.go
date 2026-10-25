@@ -18,6 +18,18 @@ import (
 // inReflection 判定本轮是不是 growth 自己发起的反思。
 func inReflection(ctx context.Context) bool { return plugin.TurnOriginFrom(ctx) == "growth" }
 
+// mayChange 判定本轮能不能改这个域：是反思轮次，且这一轮已经在裁决之后认领了它
+// （见 reflectionPrompt）。没认领的——人格今天已经反思过、或别的会话正在替它反思——
+// 一律拒绝，否则一轮反思可能改到它没看过清单的那个人格上。
+func (p *Plugin) mayChange(ctx context.Context) bool {
+	if !inReflection(ctx) {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.claimed[plugin.ScopeFrom(ctx).Write]
+}
+
 func errNotInReflection(lang string) error {
 	return fmt.Errorf("%s", prompt.T(lang, "prompt.growth.err.not_reflection",
 		"这个工具只在每天的反思里用，平常聊天时不改自己。此刻照常说话就好"))
@@ -73,7 +85,7 @@ const detailSchemaZH = `{
 func (t *detailTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	p := t.p
 	s := p.snapshot()
-	if !inReflection(ctx) {
+	if !p.mayChange(ctx) {
 		return "", errNotInReflection(s.lang)
 	}
 	var a struct {
@@ -197,7 +209,7 @@ const proposeSchemaZH = `{
 func (t *proposeTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	p := t.p
 	s := p.snapshot()
-	if !inReflection(ctx) {
+	if !p.mayChange(ctx) {
 		return "", errNotInReflection(s.lang)
 	}
 	var a struct {
