@@ -120,6 +120,21 @@ People have things they never said out loud: they say it is fine, they remember 
 | `max_entries` | 8 | The cap on entries (1-20); when full, the oldest is let go automatically |
 | `max_inject_bytes` | 1024 | The byte limit on the injected list |
 
+## Reading (bookshelf plugin)
+
+Nobody knows every book inside out. A person knows the ones they have read. The model is the opposite: it knows nearly every classic, so "I've been reading..." comes out as a recited review. This plugin gives the character a bookshelf. You put books on it, and she reads them a passage at a time when nobody is around. Her progress is saved like a bookmark, and where something moves her she writes down an impression of her own. Off by default (the shelf is empty), hard-depends on `roleplay`.
+
+- **Where books come from**: put `.txt` or `.md` files in the bookshelf folder (`<config dir>/plugins/bookshelf/books/`). One file is one book and the file name is the title. Books can be read as soon as they are there, no restart needed. GBK and UTF-16 with a BOM (Notepad's "Unicode") work too. A single book over 32 MB is not read, and is refused before its contents are loaded. "Look at the bookshelf" under the gear on the settings page shows where the folder is, how long each book is, how far she has read, and which files cannot be opened.
+- **A big shelf stays findable**: the shelf line in `[Reading]` lists at most eight books. When there are more, unread books come first and the line points to `list_books`, which gives every full title and how far she has read each (a hundred per page, with paging and a filter on words in the title). Long titles are shortened in the injection, but the shortened name still works when passed to a tool. Tool results and errors always give the full title.
+- **How she reads**: `read_book` reads the next passage from the bookmark, about `passage_runes` characters, ending at a paragraph or sentence. Without a title she continues the current book, and `from_start` lets her re-read a finished one. The text enters the context as a tool result and goes away with compaction. Once read, it fades.
+- **New passages only when nobody is around**: in turns with a real person present, `read_book` refuses outright. A long passage dropped into the middle of a chat would mean you watching her read. In heartbeat turns `[Reading]` adds a line saying nobody is around and she could read a passage if she likes. The heartbeat does not beat while she is asleep or very busy, so those are exactly her idle moments. Whether to read, and what, is her call.
+- **Having read it is not the same as knowing it**: `note_book` keeps one line of impression (up to 60 characters, the latest 5 per book, each with how far she had read). `[Reading]` is injected every turn with the shelf, the books in progress and their latest impressions, and the finished books. The criteria tell her to treat the parts she has not reached as unknown. The model already remembers the classics, so this line holds it back as far as it can but cannot stop it entirely.
+- **Progress belongs to the persona**: stored once per visibility scope, so the inner persona does not know what the outer one has read. The shelf itself is shared.
+
+| Setting | Default | Description |
+|---|---|---|
+| `passage_runes` | 1200 | About how many characters per passage (300-4000). The text goes into the context, so longer passages make her sleepy sooner and trigger compaction earlier |
+
 ## Body sense (body_sense plugin)
 
 The same touch should not draw the same reaction the first time and the twentieth, but the model has no count that survives a session, so it plays every one from zero. This plugin keeps a cumulative count per body part, divides it into stages of familiarity, and injects the state together with guidance on what each stage should incline toward. **The plugin supplies the mechanism and the state; it does not write the lines** — how any of it is played is decided by the character sheet. On by default, hard-depends on `roleplay`: without a character, a body has no owner.
