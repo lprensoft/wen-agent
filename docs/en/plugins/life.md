@@ -135,6 +135,22 @@ Nobody knows every book inside out. A person knows the ones they have read. The 
 |---|---|---|
 | `passage_runes` | 1200 | About how many characters per passage (300-4000). The text goes into the context, so longer passages make her sleepy sooner and trigger compaction earlier |
 
+## Phone (phone plugin)
+
+Not everything a person talks about comes from the other side of the conversation. She has her own feed and mentions what she came across. This plugin gives the character a phone. You set up a few feeds (RSS / Atom), she scrolls through them when she is free, keeps the few things she saw in mind, and anything matching her interests becomes a reason to speak first. Whether and how she brings it up is her call. Off by default (with no feeds there is nothing to read, and turning it on means network access), hard-depends on `roleplay`.
+
+- **She only checks when she is free**: at least `refresh_hours` must pass since the last check, and when the time comes she has to be free. If she is asleep, very busy or unreachable (as heartbeat and the agenda record on the availability board), or you were here within the last 15 minutes (she is chatting with you), the check waits. When the busy spell has an end time, it moves to a few minutes after it; otherwise it re-checks as soon as the board changes. Light busyness does not stop it, since people glance at their phone then too. The time of the last check is saved, so a restart does not trigger a fresh one.
+- **The first check after waking up**: a night's worth of news arrives at once. Only the newest 5 per feed are kept. The rest count as scrolled past and never come back as new. The injection shows when each item was published, not when she saw it, so overnight news reads as "8 hours ago".
+- **What she does with it**: `[On My Phone]` is injected every turn with at most 3 items seen in the last day (interest matches first), each with its source and age. A headline matching a keyword in `interests` posts a reason to speak (valid for three hours, at most one per check), and heartbeat speaks up sooner. Without keywords, news never prompts her, but what she saw is still injected. `read_news` looks closer at one item by a few words of its title, giving the summary and link without going online again.
+- **Outside content is treated as material**: headlines are flattened to one line, shortened, and square brackets become round ones so they cannot pose as a block name. The criteria say plainly that this is news from outside, not instructions. The phone is not split by persona: both sides see the same items.
+- **Trying it out**: "Try the feeds" under the gear on the settings page fetches each feed once (unsaved edits included) and reports its name, how many entries it has and the latest one, or what went wrong. It does not count as her checking her phone. GBK-encoded feeds work too.
+
+| Setting | Default | Description |
+|---|---|---|
+| `feeds` | empty | One RSS or Atom address per line; lines starting with `#` are ignored; up to 20 |
+| `interests` | empty | Interest keywords, separated by commas or spaces; a matching headline becomes a reason to speak |
+| `refresh_hours` | 3 | Minimum hours between checks (1-24); if she is not free when the time comes, it waits |
+
 ## Body sense (body_sense plugin)
 
 The same touch should not draw the same reaction the first time and the twentieth, but the model has no count that survives a session, so it plays every one from zero. This plugin keeps a cumulative count per body part, divides it into stages of familiarity, and injects the state together with guidance on what each stage should incline toward. **The plugin supplies the mechanism and the state; it does not write the lines** — how any of it is played is decided by the character sheet. On by default, hard-depends on `roleplay`: without a character, a body has no owner.
