@@ -74,14 +74,14 @@ func TestBindAlreadyBoundWithoutCreds(t *testing.T) {
 // -14 之后的暂停期里发送也停下
 func TestSendPausedAfterStaleToken(t *testing.T) {
 	p, f, _, _ := newBound(t, echoTurn, "")
-	p.pauseUntil(time.Now().Add(time.Hour))
+	p.pauseFor("TESTTOKEN", time.Now().Add(time.Hour))
 	p.send(context.Background(), binderID, "在吗", "CTX")
 	select {
 	case m := <-f.sends:
 		t.Fatalf("暂停期里不该发送: %+v", m)
 	case <-time.After(300 * time.Millisecond):
 	}
-	p.pauseUntil(time.Time{})
+	p.pauseFor("TESTTOKEN", time.Time{})
 	p.send(context.Background(), binderID, "在吗", "CTX")
 	if m := f.expectSend(t); m.text != "在吗" {
 		t.Fatalf("暂停结束后应恢复发送: %+v", m)
@@ -172,7 +172,10 @@ func TestLifecycleNotices(t *testing.T) {
 func TestRebindClearsStalePause(t *testing.T) {
 	f := newFakeILink(t)
 	p := startBind(t, f)
-	p.pauseUntil(time.Now().Add(time.Hour))
+	p.mu.Lock()
+	p.creds.BotToken = "OLDTOKEN" // 旧凭证上收到过 -14
+	p.mu.Unlock()
+	p.pauseFor("OLDTOKEN", time.Now().Add(time.Hour))
 	f.qrStatus <- statusResponse{Status: "confirmed", BotToken: "TESTTOKEN", IlinkBotID: "bot-1",
 		BaseURL: f.srv.URL, IlinkUserID: binderID}
 	waitFor(t, func() bool {
@@ -185,5 +188,24 @@ func TestRebindClearsStalePause(t *testing.T) {
 	f.pushText(binderID, "在吗")
 	if m := f.expectSend(t); m.text != "收到：在吗" {
 		t.Fatalf("重新绑定后应能回复: %+v", m)
+	}
+}
+
+// 换凭证之后，旧收信循环在途请求晚到的 -14 不能把新凭证的发送也停掉
+func TestLateStaleTokenFromOldLoopIgnored(t *testing.T) {
+	p, f, _, _ := newBound(t, echoTurn, "")
+	p.mu.Lock()
+	p.creds.BotToken = "NEWTOKEN" // 已经重新绑定
+	p.mu.Unlock()
+	p.pauseFor("TESTTOKEN", time.Now().Add(time.Hour)) // 旧循环拿着旧 token 晚到一步
+	if p.paused() {
+		t.Fatal("旧 token 的暂停不该作用在新凭证上")
+	}
+	p.mu.Lock()
+	p.creds.BotToken = "TESTTOKEN" // 换回假服务认的 token，确认发送畅通
+	p.mu.Unlock()
+	p.send(context.Background(), binderID, "在吗", "CTX")
+	if m := f.expectSend(t); m.text != "在吗" {
+		t.Fatalf("应能发送: %+v", m)
 	}
 }

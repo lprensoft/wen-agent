@@ -285,7 +285,6 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 			}
 			p.mu.Lock()
 			p.creds = creds
-			p.pausedUntil = time.Time{} // 暂停是旧 token 失效引起的，换了凭证就不再作数
 			p.mu.Unlock()
 			i18n.Logf(lang, "log.wechat.bind_ok", "wechat_bot: 绑定成功，bot_id=%s 绑定人=%s", creds.BotID, creds.BinderUserID)
 			p.setBind(gen, plugin.ActionDone,

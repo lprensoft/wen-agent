@@ -89,7 +89,7 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 				i18n.Logf(p.langOf(), "log.wechat.session_expired", "wechat_bot: 微信侧 token 已失效（errcode %d），收发都暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
 					errcodeExpired, pause)
 				fails = 0
-				p.pauseUntil(time.Now().Add(pause))
+				p.pauseFor(creds.BotToken, time.Now().Add(pause))
 				sleepCtx(ctx, pause)
 				continue
 			}

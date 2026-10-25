@@ -77,8 +77,10 @@ type Plugin struct {
 	// 绑定流程状态（插件操作入口）
 	bind bindState
 
-	// pausedUntil 是 -14 之后全部请求暂停到几点：收信循环自己睡，发送与输入状态按它跳过
+	// pausedUntil 是 -14 之后全部请求暂停到几点：收信循环自己睡，发送与输入状态按它跳过。
+	// pausedToken 是引起暂停的那把 token，换了凭证暂停就不作数（见 pauseFor）
 	pausedUntil time.Time
+	pausedToken string
 	// 测试注入：过期暂停时长（默认 expiredPause）
 	pauseOnExpired time.Duration
 }
@@ -205,7 +207,6 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.whitelist = whitelist
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.creds = creds
-	p.pausedUntil = time.Time{} // 重新 Init（含换凭证）后旧暂停不再作数；收信循环遇到 -14 会重新设
 	p.stateDir = ictx.StateDir
 	p.tokens = tokens
 	p.typing = map[string]string{}
