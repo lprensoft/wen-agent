@@ -22,9 +22,9 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | [The character's life](life.md) | `scene` | The stage setting and scene memories | on |
 | | `weather` | Real weather by city, injected each turn as ambient state | off |
 | | `belongings` | What is in the fridge and the wardrobe | on |
-| | `people` | The character's social circle: friends, family and closeness | on |
+| | `people` | The character's social circle: friends, family, closeness and their recent news | on |
 | | `agenda` | A plan it makes for itself each day and goes and does; a ledger of commitments and promises | on |
-| | `relationship` | The stage you are at, what you call each other, understandings and off-limits subjects | on |
+| | `relationship` | The stage you are at, what you call each other, understandings, off-limits subjects and the days worth remembering | on |
 | | `unspoken` | What it has not said out loud | on |
 | | `body_sense` | Per-part familiarity with touch, plus arousal and fatigue | on |
 | | `mood` | A mood moved by interaction and drifting back over time | on |

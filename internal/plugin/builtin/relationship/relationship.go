@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -27,9 +28,17 @@ type Plugin struct {
 	// 设置页操作的状态。StartAction 与 ActionState 会被 HTTP 并发调用，自带一把锁。
 	actMu    sync.Mutex
 	actState plugin.ActionState
+
+	// 日子提醒的投递记录：cuedDay 是记录所属的日期，cued 是当天投出过的提醒（含已经
+	// 被心跳取走的）。整个刷新在 cueMu 内串行进行，见 refreshDateCues。只在内存里，
+	// 重启后当天会再投一次——代价是一句可能重复的提醒，换来不必为它落盘。clock 供测试替换。
+	cueMu   sync.Mutex
+	cuedDay string
+	cued    map[string]bool
+	clock   func() time.Time
 }
 
-func New() *Plugin { return &Plugin{} }
+func New() *Plugin { return &Plugin{clock: time.Now} }
 
 func (p *Plugin) Name() string { return "relationship" }
 
@@ -87,7 +96,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	body := renderSnapshot(lang, snap, time.Now())
+	body := renderSnapshot(lang, snap, p.clock())
 	if body == "" {
 		return "", nil
 	}
@@ -148,7 +157,105 @@ func renderSnapshot(lang string, snap Snapshot, now time.Time) string {
 		lines = append(lines, prompt.Tf(lang, "prompt.relationship.render.their_now", "对方近况：%s",
 			sentence(snap.TheirNow)))
 	}
+	if line := renderDates(lang, snap.Dates, now); line != "" {
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// renderDates 只在今天或明天碰上日子时出一行，平常不出现：日子本身的清单对每轮
+// 对话没有用，碰上的那一天才有话可说。带上明天，是给准备留出余地（买花要提前）。
+//
+//	日子：今天是「在一起」1 周年；明天是「对方生日」。
+func renderDates(lang string, dates []DateMark, now time.Time) string {
+	if len(dates) == 0 {
+		return ""
+	}
+	sep := prompt.T(lang, "prompt.relationship.result.field_sep", "、")
+	var parts []string
+	if hits := dateHits(lang, dates, now); len(hits) > 0 {
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.dates_today", "今天是%s", strings.Join(hits, sep)))
+	}
+	if hits := dateHits(lang, dates, now.AddDate(0, 0, 1)); len(hits) > 0 {
+		parts = append(parts, prompt.Tf(lang, "prompt.relationship.render.dates_tomorrow", "明天是%s", strings.Join(hits, sep)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return prompt.Tf(lang, "prompt.relationship.render.dates", "日子：%s。",
+		strings.Join(parts, prompt.T(lang, "prompt.relationship.result.part_sep", "；")))
+}
+
+// OnTurnEnd 在每天第一轮结束时看一眼今天有没有碰上日子，有就投一条开口理由：心跳
+// 当天会提前开口，说不说、怎么过归模型。本插件没有后台循环，挂在轮次收尾上就够了——
+// 心跳最慢两小时跳一拍，当天一定会遇到一轮。
+//
+// 只看共享域（表人格）的日子：开口理由公告板不分人格，心跳拿到理由时在哪个人格上
+// 说话是不确定的，里人格的纪念日从表人格嘴里说出来就是泄漏。里人格的日子照样在它
+// 自己的 [关系] 里出现，只是不主动开口。
+func (p *Plugin) OnTurnEnd(ctx context.Context, _ plugin.TurnEndEvent) {
+	if plugin.ScopeFrom(ctx).Write != "" {
+		return
+	}
+	now := p.clock()
+	p.cueMu.Lock()
+	done := p.cuedDay == now.Format(dateLayout)
+	p.cueMu.Unlock()
+	if !done {
+		p.refreshDateCues(now)
+	}
+}
+
+// refreshDateCues 让公告板上今天的日子提醒与当前快照对上：不再成立的撤回，新成立的
+// 补投，一直成立的不动。每天第一轮与表人格的日子一改都走这里。
+//
+// 是**差量**而不是「全部撤回再全部重投」：心跳取走一条提醒时公告板上就没有它了，按 Key
+// 去重拦不住重投——之后加一个与今天无关的日子，也会让已经说过的生日提醒再送一次。所以
+// 记着当天投出过的（含已被取走的），只对差异动手。
+//
+// 整个过程（读快照、比对、撤回、投递、登记）在 cueMu 内串行：两个会话同时改日子时，
+// 不串行的话 A 投出了生日却还没登记、B 删掉生日来撤回时看不到它，A 投出的那条就留在
+// 公告板上了。串行之后最后一次刷新一定对应最新的快照。
+func (p *Plugin) refreshDateCues(now time.Time) {
+	p.cueMu.Lock()
+	defer p.cueMu.Unlock()
+	today := now.Format(dateLayout)
+	if p.cuedDay != today || p.cued == nil {
+		p.cuedDay, p.cued = today, map[string]bool{}
+	}
+	lang := p.langOf()
+
+	store := p.storeFor("")
+	if store == nil {
+		return
+	}
+	snap, _, err := store.Load()
+	if err != nil {
+		return // 读不出来就维持原样：撤回一条还成立的提醒比留着一条更糟
+	}
+	type want struct{ key, text string }
+	var wants []want
+	keep := map[string]bool{}
+	for _, hit := range dateHits(lang, snap.Dates, now) {
+		key := "date|" + today + "|" + hit
+		wants = append(wants, want{key, prompt.Tf(lang, "prompt.relationship.cue.date", "今天是%s。", hit)})
+		keep[key] = true
+	}
+	for key := range p.cued {
+		if !keep[key] {
+			cue.Drop("relationship", key) // 已经被取走的话这一步什么也不做
+			delete(p.cued, key)
+		}
+	}
+	y, m, d := now.Date()
+	endOfDay := time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
+	for _, w := range wants {
+		if p.cued[w.key] {
+			continue // 今天已经投过：还在公告板上就不必再投，已经被取走就更不该再投
+		}
+		cue.Post(cue.Cue{Source: "relationship", Key: w.key, Text: w.text, Expire: endOfDay})
+		p.cued[w.key] = true
+	}
 }
 
 // renderHead 渲染第一行：阶段与称呼。三项都可缺，缺哪项省哪句。

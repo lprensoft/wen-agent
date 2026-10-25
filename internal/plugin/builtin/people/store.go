@@ -32,6 +32,11 @@ const (
 	maxRelationRunes = 40
 	maxProfileRunes  = 200
 	maxNoteRunes     = 60
+	maxLatelyRunes   = 40
+
+	// latelyTTL 是近况的有效期：听说了一个月还没更新的近况多半已经变了，不再注入，
+	// 免得旧消息一直当新闻说（落盘保留，list_people 仍看得到）。
+	latelyTTL = 30 * 24 * time.Hour
 )
 
 // closenessLevels 是亲近度的四档，由疏到亲。做成枚举而不是数值：模型对「熟」「亲近」
@@ -70,6 +75,10 @@ type Person struct {
 	// LastMet 是上次实际互动（见面、通话、一起做了件事）的时刻，零值表示没有记录。
 	LastMet  time.Time `json:"last_met"`
 	LastNote string    `json:"last_note,omitempty"`
+	// Lately 是这个人自己最近的状况（「在闹离职」），LatelyAt 是听说的时刻。与 LastNote
+	// 不同：那是角色和他之间的事，这是他自己的生活——社交圈里的人也在过日子。
+	Lately   string    `json:"lately,omitempty"`
+	LatelyAt time.Time `json:"lately_at,omitempty"`
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
 	// Domain 是这个人所属的可见域标签，不落盘：它由所在的库决定，
@@ -86,6 +95,7 @@ type Update struct {
 	Closeness *string
 	MetNow    bool
 	LastNote  *string
+	Lately    *string
 }
 
 // Limits 是写入时生效的上限，来自插件配置。
@@ -178,6 +188,9 @@ func (s *Store) Upsert(u Update, now time.Time, lim Limits) (UpsertResult, error
 			p.LastMet = now
 			p.LastNote = trimmed(u.LastNote)
 		}
+		if l := trimmed(u.Lately); l != "" {
+			p.Lately, p.LatelyAt = l, now
+		}
 		ps = append(ps, p)
 		if err := s.save(ps); err != nil {
 			return UpsertResult{}, err
@@ -217,6 +230,17 @@ func (s *Store) Upsert(u Update, now time.Time, lim Limits) (UpsertResult, error
 	} else if u.LastNote != nil && trimmed(u.LastNote) != p.LastNote {
 		p.LastNote = trimmed(u.LastNote)
 		res.Changes = append(res.Changes, prompt.T(s.lang, "prompt.people.change.last_note", "上次互动的摘要已更新"))
+	}
+	if u.Lately != nil {
+		// 传了就是「刚听说」：同一句话再传一次也刷新时刻，与关系的「最近」同一个口径
+		switch l := trimmed(u.Lately); {
+		case l == "" && p.Lately != "":
+			p.Lately, p.LatelyAt = "", time.Time{}
+			res.Changes = append(res.Changes, prompt.T(s.lang, "prompt.people.change.lately_cleared", "近况已清除"))
+		case l != "":
+			p.Lately, p.LatelyAt = l, now
+			res.Changes = append(res.Changes, prompt.T(s.lang, "prompt.people.change.lately", "近况已更新"))
+		}
 	}
 	if len(res.Changes) == 0 {
 		return res, nil // 什么都没变就不写盘
@@ -282,6 +306,9 @@ func validateFields(lang string, u Update) error {
 		return err
 	}
 	if err := checkRunes(lang, u.LastNote, "last_note", maxNoteRunes); err != nil {
+		return err
+	}
+	if err := checkRunes(lang, u.Lately, "lately", maxLatelyRunes); err != nil {
 		return err
 	}
 	if u.Closeness != nil && *u.Closeness != "" {

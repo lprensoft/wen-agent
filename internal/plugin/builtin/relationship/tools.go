@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -25,7 +24,8 @@ func (t *updateTool) Description() string {
 }
 
 const updateDescZH = "更新与对方的关系状态。只传发生了变化的字段：非空值覆盖该项，空串清除该项，没提到的字段保持原样；" +
-	"bonds 整体覆盖，传空数组清空。只在关系真的变了时调用（表白、吵架、和好、称呼变了、定下新的默契或禁区），不是每轮都调。"
+	"bonds 整体覆盖，传空数组清空。只在关系真的变了时调用（表白、吵架、和好、称呼变了、定下新的默契或禁区），不是每轮都调。" +
+	"值得记住的日子（第一次见面、对方生日）用 add_date 记下，不再算数的用 remove_date 去掉。"
 
 func (t *updateTool) Schema() json.RawMessage {
 	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.relationship.tool.update_relationship.schema", updateSchemaZH))
@@ -39,39 +39,54 @@ const updateSchemaZH = `{
 		"their_call": {"type": "string", "description": "对方怎么叫你（10 字内）"},
 		"recent": {"type": "string", "description": "最近一次关系上的变动，一句话，如「为忘了纪念日吵过一架，昨天和好了」（60 字内）；记录时刻会一并记下"},
 		"bonds": {"type": "array", "items": {"type": "string"}, "description": "相处出来的默契与不碰的禁区，每条一句（30 字内），最多 5 条；整体覆盖，传空数组清空"},
-		"their_now": {"type": "string", "description": "对方的近况，一句话，如「项目上线前在赶工」（40 字内）"}
+		"their_now": {"type": "string", "description": "对方的近况，一句话，如「项目上线前在赶工」（40 字内）"},
+		"add_date": {"type": "object", "description": "记下一个值得记住的日子；同名的改日子", "properties": {
+			"what": {"type": "string", "description": "什么日子，如「第一次见面」「对方生日」（20 字内）"},
+			"date": {"type": "string", "description": "2006-01-02；每年一次又不知道年份的（生日这类）写月日 01-02"}
+		}, "required": ["what", "date"]},
+		"remove_date": {"type": "string", "description": "去掉一个日子，写它的名字"}
 	}
 }`
 
 func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	// 指针区分「没传」与「传了空值」：前者保持原样，后者是清除
 	var a struct {
-		Stage     *string   `json:"stage"`
-		MyCall    *string   `json:"my_call"`
-		TheirCall *string   `json:"their_call"`
-		Recent    *string   `json:"recent"`
-		Bonds     *[]string `json:"bonds"`
-		TheirNow  *string   `json:"their_now"`
+		Stage      *string   `json:"stage"`
+		MyCall     *string   `json:"my_call"`
+		TheirCall  *string   `json:"their_call"`
+		Recent     *string   `json:"recent"`
+		Bonds      *[]string `json:"bonds"`
+		TheirNow   *string   `json:"their_now"`
+		AddDate    *DateArg  `json:"add_date"`
+		RemoveDate *string   `json:"remove_date"`
 	}
 	lang := t.p.langOf()
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", plugin.BadArgs(lang, err)
 	}
-	if a.Stage == nil && a.MyCall == nil && a.TheirCall == nil && a.Recent == nil && a.Bonds == nil && a.TheirNow == nil {
+	if a.Stage == nil && a.MyCall == nil && a.TheirCall == nil && a.Recent == nil && a.Bonds == nil && a.TheirNow == nil &&
+		a.AddDate == nil && a.RemoveDate == nil {
 		return "", fmt.Errorf("%s", prompt.T(lang, "prompt.relationship.result.no_field", "至少要传一个字段"))
 	}
 
 	// 快照只读写本轮的写入域：关系属于人格，两条故事线各有各的关系
-	store := t.p.storeFor(plugin.ScopeFrom(ctx).Write)
+	tag := plugin.ScopeFrom(ctx).Write
+	store := t.p.storeFor(tag)
 	if store == nil {
 		return "", errNotReady(lang)
 	}
+	now := t.p.clock()
 	updated, cleared, err := store.Apply(Update{
 		Stage: a.Stage, MyCall: a.MyCall, TheirCall: a.TheirCall,
 		Recent: a.Recent, Bonds: a.Bonds, TheirNow: a.TheirNow,
-	}, time.Now())
+		AddDate: a.AddDate, RemoveDate: a.RemoveDate,
+	}, now)
 	if err != nil {
 		return "", err
+	}
+	// 表人格的日子改了：公告板上今天投出的提醒可能已经不成立，撤回重投
+	if tag == "" && (a.AddDate != nil || a.RemoveDate != nil) {
+		t.p.refreshDateCues(now)
 	}
 
 	var parts []string
