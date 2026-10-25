@@ -97,7 +97,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 }
 
 func (p *Plugin) Tools() []plugin.Tool {
-	return []plugin.Tool{&readTool{p: p}, &noteTool{p: p}}
+	return []plugin.Tool{&readTool{p: p}, &noteTool{p: p}, &listTool{p: p}}
 }
 
 // SystemPrompt 注入读书的判据，全部为静态内容。进度与印象随本轮可见域走 TurnPrompt。
@@ -179,16 +179,18 @@ func render(lang string, books []book, st State, now time.Time, idle bool) strin
 
 	var lines []string
 	var titles []string
-	for i, b := range books {
-		if i == maxListed {
-			break
-		}
-		titles = append(titles, titleOf(b))
-	}
 	if len(books) > maxListed {
-		lines = append(lines, prompt.Tf(lang, "prompt.bookshelf.render.shelf_more", "书架上有 %d 本书：%s 等。",
-			len(books), strings.Join(titles, sep)))
+		// 列不下时没读过的排前面：在读的与读完的下面各有一行，书架这一行要让她看见
+		// 还有什么可以开始读的。再多的书名由 list_books 给全
+		for _, b := range shelfOrder(books, st)[:maxListed] {
+			titles = append(titles, titleOf(b))
+		}
+		lines = append(lines, prompt.Tf(lang, "prompt.bookshelf.render.shelf_more",
+			"书架上有 %d 本书，其中：%s 等。全部书名用 list_books 查。", len(books), strings.Join(titles, sep)))
 	} else {
+		for _, b := range books {
+			titles = append(titles, titleOf(b))
+		}
 		lines = append(lines, prompt.Tf(lang, "prompt.bookshelf.render.shelf", "书架上有：%s。", strings.Join(titles, sep)))
 	}
 
@@ -266,6 +268,24 @@ func render(lang string, books []book, st State, now time.Time, idle bool) strin
 		lines = append(lines, prompt.T(lang, "prompt.bookshelf.render.idle", "此刻没人在跟前，想读的话可以翻一段。"))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// shelfOrder 按「没读过的、在读的、读完的」排书架，组内保持书名顺序。
+func shelfOrder(books []book, st State) []book {
+	rank := func(b book) int {
+		pr := st.Books[b.File]
+		switch {
+		case pr == nil:
+			return 0
+		case pr.Finished.IsZero():
+			return 1
+		default:
+			return 2
+		}
+	}
+	out := append([]book(nil), books...)
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	return out
 }
 
 // agoText 把时刻化成「今天 / 昨天 / N 天前」，按日历日算。零值或倒流时说「不久前」。

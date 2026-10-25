@@ -3,6 +3,7 @@ package bookshelf
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +22,8 @@ import (
 // 只认顶层文件，不进子目录——书架不需要分类，多一层目录只多一种「放进去了却找不到」。
 
 // maxBookBytes 是单本书的大小上限。一部长篇小说几 MB，三十二兆足够；再大的多半不是书。
-const maxBookBytes = 32 << 20
+// 是变量只为测试能调小。
+var maxBookBytes int64 = 32 << 20
 
 // book 是书架上的一本书。进度按文件名记，改了文件名就是另一本书。
 type book struct {
@@ -60,11 +62,27 @@ func listBooks(dir string) ([]book, error) {
 // findBook 按书名找书：先认全名，再认唯一的部分匹配（不分大小写）。找不到时返回
 // 空，多于一本时返回全部候选，由调用方报给模型。
 func findBook(books []book, name string) (book, []book) {
-	name = strings.TrimSpace(strings.Trim(strings.TrimSpace(name), "《》"))
+	name = strings.TrimSpace(strings.Trim(strings.TrimSpace(name), "《》“”\""))
 	for _, b := range books {
 		if b.Title == name || b.File == name {
 			return b, nil
 		}
+	}
+	// [在读的书] 里过长的书名截断后带省略号：拿那个名字来找时，去掉省略号按前缀认
+	if cut, ok := strings.CutSuffix(name, "…"); ok && cut != "" {
+		var hits []book
+		for _, b := range books {
+			if strings.HasPrefix(b.Title, cut) {
+				hits = append(hits, b)
+			}
+		}
+		if len(hits) == 1 {
+			return hits[0], nil
+		}
+		if len(hits) > 1 {
+			return book{}, hits
+		}
+		name = cut
 	}
 	low := strings.ToLower(name)
 	var hits []book
@@ -108,7 +126,7 @@ func (c *textCache) load(path string) (string, error) {
 	}
 	c.mu.Unlock()
 
-	raw, err := os.ReadFile(path)
+	raw, err := readBounded(path)
 	if err != nil {
 		return "", err
 	}
@@ -128,6 +146,32 @@ func (c *textCache) load(path string) (string, error) {
 		c.order = c.order[1:]
 	}
 	return text, nil
+}
+
+// readBounded 读一本书，超过上限时不读内容直接返回 errTooBig。先看大小再读，读的时候
+// 还要再设一道上限：误放进来的几个 G 的文件不该先整个进内存再被拒绝，而查过大小之后
+// 文件仍可能被追加写大。
+func readBounded(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if st.Size() > maxBookBytes {
+		return nil, errTooBig
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxBookBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBookBytes {
+		return nil, errTooBig
+	}
+	return raw, nil
 }
 
 // decodeText 把文件内容转成 UTF-8 并统一换行。中文 txt 很多是 GBK 存的，记事本另存的

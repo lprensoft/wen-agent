@@ -2,8 +2,8 @@ package bookshelf
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -66,13 +66,14 @@ func (p *Plugin) report(lang, shelf string) plugin.ActionState {
 	}
 	b.WriteString(i18n.Tf(lang, "plugin.bookshelf.report.count", "有 %d 本书：\n", len(books)))
 	for _, bk := range books {
-		raw, err := os.ReadFile(filepath.Join(shelf, bk.File))
+		// 与读书走同一条有界读取：误放进来的大文件在读内容之前就被拒绝
+		raw, err := readBounded(filepath.Join(shelf, bk.File))
 		switch {
+		case errors.Is(err, errTooBig):
+			b.WriteString(i18n.Tf(lang, "plugin.bookshelf.report.line_too_big", "· %s：太大了，读不了\n", bk.Title))
+			continue
 		case err != nil:
 			b.WriteString(i18n.Tf(lang, "plugin.bookshelf.report.line_bad", "· %s：打不开（%v）\n", bk.Title, err))
-			continue
-		case len(raw) > maxBookBytes:
-			b.WriteString(i18n.Tf(lang, "plugin.bookshelf.report.line_too_big", "· %s：太大了，读不了\n", bk.Title))
 			continue
 		}
 		state := i18n.T(lang, "plugin.bookshelf.report.unread", "还没读")

@@ -18,17 +18,22 @@ func errNotReady(lang string) error {
 	return fmt.Errorf("%s", prompt.T(lang, "prompt.bookshelf.not_ready", "书架尚未就绪"))
 }
 
-// shelfList 是报错时附上的书名清单，让模型下一次能叫对名字。
+// shelfList 是报错时附上的书名清单，让模型下一次能叫对名字。书名给全的，不截断：
+// 截断过的名字拿去调工具对不上，两本前缀相同的书截断后更是分不出来。列不下的指向
+// list_books，不能只写个省略号——那样第九本书她永远不知道叫什么。
 func shelfList(lang string, books []book) string {
 	var titles []string
 	for i, b := range books {
 		if i == maxListed {
-			titles = append(titles, "…")
 			break
 		}
-		titles = append(titles, prompt.Tf(lang, "prompt.bookshelf.render.title", "《%s》", clipRunes(b.Title, maxTitleRunes)))
+		titles = append(titles, prompt.Tf(lang, "prompt.bookshelf.render.title", "《%s》", b.Title))
 	}
-	return strings.Join(titles, prompt.T(lang, "prompt.bookshelf.render.sep", "、"))
+	s := strings.Join(titles, prompt.T(lang, "prompt.bookshelf.render.sep", "、"))
+	if len(books) > maxListed {
+		s += prompt.Tf(lang, "prompt.bookshelf.err.more", "等 %d 本（全部书名用 list_books 查）", len(books))
+	}
+	return s
 }
 
 // resolve 把模型给的书名对到书架上的一本书；不给书名时接着读手上那本。
@@ -125,7 +130,7 @@ func (t *readTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 			pr = &Progress{Started: now}
 			st.Books[b.File] = pr
 		}
-		title := clipRunes(b.Title, maxTitleRunes)
+		title := b.Title // 工具结果只出现一次，给全名：截断过的名字拿去调工具对不上
 		if a.FromStart {
 			pr.Offset, pr.Finished, pr.Started = 0, time.Time{}, now
 		}
@@ -161,11 +166,119 @@ func (t *readTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 }
 
 func openErr(lang string, b book, err error) error {
-	title := clipRunes(b.Title, maxTitleRunes)
+	title := b.Title
 	if errors.Is(err, errTooBig) {
 		return fmt.Errorf(prompt.T(lang, "prompt.bookshelf.err.too_big", "《%s》太大了，读不了。"), title)
 	}
 	return fmt.Errorf(prompt.T(lang, "prompt.bookshelf.err.open", "《%s》打不开：%v"), title, err)
+}
+
+// ---------- list_books ----------
+
+// listTool 给出书架的完整目录。[在读的书] 只列得下八本，书再多的时候她得有办法知道
+// 其余的叫什么；目录走工具结果，只在需要时出现一次，不必压进每轮的注入里。
+type listTool struct{ p *Plugin }
+
+func (t *listTool) Name() string { return "list_books" }
+
+func (t *listTool) Description() string {
+	return prompt.T(t.p.langOf(), "prompt.bookshelf.tool.list_books.desc", listDescZH)
+}
+
+const listDescZH = "列出书架上的书（完整书名）与你各读到了哪儿，没读过的排前面。[在读的书] 列不下时用它；" +
+	"书多时分页，也可以按书名里的字筛。"
+
+func (t *listTool) Schema() json.RawMessage {
+	return json.RawMessage(prompt.T(t.p.langOf(), "prompt.bookshelf.tool.list_books.schema", listSchemaZH))
+}
+
+const listSchemaZH = `{
+	"type": "object",
+	"properties": {
+		"query": {"type": "string", "description": "只列书名里含这些字的书"},
+		"page": {"type": "integer", "description": "第几页，从 1 开始；不写就是第 1 页"}
+	}
+}`
+
+// catalogPage 是目录一页的条数：单次输出要有界，再多的书靠翻页与筛选找到。
+const catalogPage = 100
+
+func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Query string `json:"query"`
+		Page  int    `json:"page"`
+	}
+	lang := t.p.langOf()
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", plugin.BadArgs(lang, err)
+		}
+	}
+	store := t.p.storeFor(plugin.ScopeFrom(ctx).Write)
+	if store == nil {
+		return "", errNotReady(lang)
+	}
+	shelf, _ := t.p.settings()
+	books, err := listBooks(shelf)
+	if err != nil {
+		return "", err
+	}
+	if len(books) == 0 {
+		return "", fmt.Errorf("%s", prompt.T(lang, "prompt.bookshelf.err.empty", "书架上还没有书。"))
+	}
+	st, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	ordered := shelfOrder(books, st)
+	query := strings.ToLower(strings.TrimSpace(a.Query))
+	if query != "" {
+		var hits []book
+		for _, bk := range ordered {
+			if strings.Contains(strings.ToLower(bk.Title), query) {
+				hits = append(hits, bk)
+			}
+		}
+		if len(hits) == 0 {
+			return prompt.Tf(lang, "prompt.bookshelf.list.no_match", "书架上的 %d 本书里，书名都不含「%s」。",
+				len(books), a.Query), nil
+		}
+		ordered = hits
+	}
+	pages := (len(ordered) + catalogPage - 1) / catalogPage
+	page := max(a.Page, 1)
+	if page > pages {
+		return prompt.Tf(lang, "prompt.bookshelf.list.no_page", "只有 %d 页。", pages), nil
+	}
+	start := (page - 1) * catalogPage
+	end := min(start+catalogPage, len(ordered))
+
+	var b strings.Builder
+	switch {
+	case query != "":
+		b.WriteString(prompt.Tf(lang, "prompt.bookshelf.list.head_query", "书名含「%s」的有 %d 本：", a.Query, len(ordered)))
+	default:
+		b.WriteString(prompt.Tf(lang, "prompt.bookshelf.list.head", "书架上有 %d 本书：", len(books)))
+	}
+	if pages > 1 {
+		b.WriteString(prompt.Tf(lang, "prompt.bookshelf.list.page", "（第 %d / %d 页）", page, pages))
+	}
+	for _, bk := range ordered[start:end] {
+		state := prompt.T(lang, "prompt.bookshelf.list.unread", "没读过")
+		if pr := st.Books[bk.File]; pr != nil {
+			if pr.Finished.IsZero() {
+				state = prompt.Tf(lang, "prompt.bookshelf.list.reading", "读到约 %d%%", percent(pr.Offset, pr.Length))
+			} else {
+				state = prompt.T(lang, "prompt.bookshelf.list.finished", "读完了")
+			}
+		}
+		b.WriteString(prompt.Tf(lang, "prompt.bookshelf.list.item", "\n· 《%s》：%s", bk.Title, state))
+	}
+	if page < pages {
+		b.WriteString(prompt.Tf(lang, "prompt.bookshelf.list.next", "\n……还有 %d 本，用 page=%d 看下一页。",
+			len(ordered)-end, page+1))
+	}
+	return b.String(), nil
 }
 
 // ---------- note_book ----------
@@ -233,7 +346,7 @@ func (t *noteTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		pr := st.Books[b.File]
 		if pr == nil || (pr.Offset == 0 && pr.Finished.IsZero()) {
 			return fmt.Errorf(prompt.T(lang, "prompt.bookshelf.err.unread",
-				"还没读过《%s》，读过了才有印象。"), clipRunes(b.Title, maxTitleRunes))
+				"还没读过《%s》，读过了才有印象。"), b.Title)
 		}
 		pct := percent(pr.Offset, pr.Length)
 		if !pr.Finished.IsZero() {

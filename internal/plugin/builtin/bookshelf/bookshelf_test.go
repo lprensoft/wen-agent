@@ -3,6 +3,7 @@ package bookshelf
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,6 +192,111 @@ func TestBookNameMatching(t *testing.T) {
 	}
 	if _, err := call(t, read, ctx, map[string]any{}); err != nil {
 		t.Errorf("不写书名应接着读手上那本: %v", err)
+	}
+}
+
+// 第九本及之后的书：书架这一行列不下时没读过的排前面，并指向 list_books；
+// list_books 给全部书名，报错时的清单也指向它
+func TestBooksBeyondTheListAreDiscoverable(t *testing.T) {
+	p, shelf := newPlugin(t, nil)
+	for i := 1; i <= 10; i++ {
+		put(t, shelf, fmt.Sprintf("书%02d.txt", i), "正文。")
+	}
+	ctx := context.Background()
+	// 前八本读完
+	for i := 1; i <= 8; i++ {
+		if _, err := call(t, &readTool{p: p}, ctx, map[string]any{"book": fmt.Sprintf("书%02d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := p.TurnPrompt(ctx, plugin.TurnEvent{})
+	for _, want := range []string{"《书09》", "《书10》", "list_books"} {
+		if !strings.Contains(strings.SplitN(got, "\n", 3)[1], want) {
+			t.Errorf("书架一行应列出没读过的书并指向 list_books，缺 %q:\n%s", want, got)
+		}
+	}
+	out, err := call(t, &listTool{p: p}, ctx, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "10 本") || !strings.Contains(out, "《书10》：没读过") || !strings.Contains(out, "《书01》：读完了") {
+		t.Errorf("目录不全: %s", out)
+	}
+	_, err = call(t, &readTool{p: p}, ctx, map[string]any{"book": "没有这本"})
+	if err == nil || !strings.Contains(err.Error(), "list_books") {
+		t.Errorf("列不下时报错应指向 list_books: %v", err)
+	}
+}
+
+// 目录超过一页时靠翻页与筛选找到最后一本
+func TestCatalogPagesAndQuery(t *testing.T) {
+	p, shelf := newPlugin(t, nil)
+	for i := 1; i <= 2*catalogPage+1; i++ {
+		put(t, shelf, fmt.Sprintf("书%03d.txt", i), "正文。")
+	}
+	list := &listTool{p: p}
+	ctx := context.Background()
+	last := fmt.Sprintf("《书%03d》", 2*catalogPage+1)
+
+	first, err := call(t, list, ctx, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(first, last) || !strings.Contains(first, "第 1 / 3 页") || !strings.Contains(first, "page=2") {
+		t.Errorf("第一页不对:\n%.200s", first)
+	}
+	third, _ := call(t, list, ctx, map[string]any{"page": 3})
+	if !strings.Contains(third, last) || strings.Contains(third, "page=4") {
+		t.Errorf("最后一页应有最后一本且没有下一页:\n%s", third)
+	}
+	if out, _ := call(t, list, ctx, map[string]any{"page": 4}); !strings.Contains(out, "只有 3 页") {
+		t.Errorf("超出页数: %s", out)
+	}
+	hit, _ := call(t, list, ctx, map[string]any{"query": fmt.Sprintf("%03d", 2*catalogPage+1)})
+	if !strings.Contains(hit, last) || !strings.Contains(hit, "有 1 本") {
+		t.Errorf("按书名筛选应找到: %s", hit)
+	}
+	if out, _ := call(t, list, ctx, map[string]any{"query": "不存在"}); !strings.Contains(out, "都不含") {
+		t.Errorf("筛不到时应说明: %s", out)
+	}
+}
+
+// 注入里截断的长书名拿来调工具要认得出；前缀相同时候选给全名
+func TestClippedTitlesResolve(t *testing.T) {
+	p, shelf := newPlugin(t, nil)
+	long := strings.Repeat("长", maxTitleRunes+5)
+	put(t, shelf, long+"上.txt", "上卷。")
+	put(t, shelf, "一本"+long+".txt", "另一本。")
+	ctx := context.Background()
+	shown := clipRunes("一本"+long, maxTitleRunes)
+	if out, err := call(t, &readTool{p: p}, ctx, map[string]any{"book": shown}); err != nil || !strings.Contains(out, "另一本") {
+		t.Fatalf("按注入里的截断名应读得到: %v %s", err, out)
+	}
+	put(t, shelf, long+"下.txt", "下卷。")
+	_, err := call(t, &readTool{p: p}, ctx, map[string]any{"book": clipRunes(long+"上", maxTitleRunes)})
+	if err == nil || !strings.Contains(err.Error(), long+"上") || !strings.Contains(err.Error(), long+"下") {
+		t.Errorf("前缀相同时候选应给全名: %v", err)
+	}
+}
+
+// 超限的文件在读内容之前就被拒绝
+func TestOversizedBookIsRejectedBeforeReading(t *testing.T) {
+	old := maxBookBytes
+	maxBookBytes = 16
+	defer func() { maxBookBytes = old }()
+	p, shelf := newPlugin(t, nil)
+	put(t, shelf, "大.txt", strings.Repeat("x", 17))
+	put(t, shelf, "小.txt", "刚好。")
+	if _, err := readBounded(filepath.Join(shelf, "大.txt")); err != errTooBig {
+		t.Errorf("超限应返回 errTooBig: %v", err)
+	}
+	if _, err := call(t, &readTool{p: p}, context.Background(), map[string]any{"book": "大"}); err == nil || !strings.Contains(err.Error(), "太大") {
+		t.Errorf("读书应拒绝超限的文件: %v", err)
+	}
+	_ = p.StartAction(context.Background(), actionShelf)
+	st, _ := p.ActionState(actionShelf)
+	if !strings.Contains(st.Message, "大：太大了") || !strings.Contains(st.Message, "小：约 3 字") {
+		t.Errorf("报表不对: %s", st.Message)
 	}
 }
 
