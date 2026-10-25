@@ -167,3 +167,23 @@ func TestLifecycleNotices(t *testing.T) {
 	p.Stop()
 	expect("notifystop")
 }
+
+// 按提示重新扫码绑定后，旧 token 引起的暂停不再拦着发送
+func TestRebindClearsStalePause(t *testing.T) {
+	f := newFakeILink(t)
+	p := startBind(t, f)
+	p.pauseUntil(time.Now().Add(time.Hour))
+	f.qrStatus <- statusResponse{Status: "confirmed", BotToken: "TESTTOKEN", IlinkBotID: "bot-1",
+		BaseURL: f.srv.URL, IlinkUserID: binderID}
+	waitFor(t, func() bool {
+		st, _ := p.ActionState("bind")
+		return st.Status == plugin.ActionDone
+	}, "等待重新绑定完成")
+	if p.paused() {
+		t.Fatal("换了凭证之后旧暂停应作废")
+	}
+	f.pushText(binderID, "在吗")
+	if m := f.expectSend(t); m.text != "收到：在吗" {
+		t.Fatalf("重新绑定后应能回复: %+v", m)
+	}
+}

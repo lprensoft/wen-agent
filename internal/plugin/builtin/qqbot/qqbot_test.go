@@ -703,3 +703,25 @@ func TestPushFallsBackToWakeup(t *testing.T) {
 		t.Fatalf("应只试一次召回，实际 %d 次", n)
 	}
 }
+
+// 「正在输入」每条入站消息至多一次，发完之后正文还有三条被动回复额度
+func TestTypingSlotOncePerMessage(t *testing.T) {
+	l := newReplyLimiter()
+	if ok, _ := l.typingSlot("m1"); !ok {
+		t.Fatal("第一次应放行")
+	}
+	if ok, _ := l.typingSlot("m1"); ok {
+		t.Fatal("同一条入站消息不该再发第二次")
+	}
+	for i := range 3 {
+		if ok, _ := l.next("m1"); !ok {
+			t.Fatalf("正文第 %d 段应仍能被动回复", i+1)
+		}
+	}
+	// 已经被正文用掉额度的消息上不再发「正在输入」
+	l.next("m2")
+	l.next("m2")
+	if ok, _ := l.typingSlot("m2"); ok {
+		t.Error("剩余额度不够给正文留三条时不该发")
+	}
+}

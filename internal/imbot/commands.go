@@ -81,16 +81,19 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	}
 
 	// 边写边显示：只在回复原路回本通道时做。转投到别的通道时，预览出现在这一侧就等于
-	// 把另一面的话露在这一面的窗口里
+	// 把另一面的话露在这一面的窗口里。路由要在**每次送预览时**重查而不是在这里查一次：
+	// 本轮要不要换人格是 RunTurn 里裁决的（说出暗号的那一轮当场就转投），轮次开始时
+	// 查到的还是上一轮的去向
 	stopPreview := func() {}
 	if c.cfg.Preview != nil {
-		if target := Target(sid); target == "" || target == c.cfg.PluginName {
-			var feed func(string)
-			feed, stopPreview = startPreview(ctx, func(pctx context.Context, text string) {
-				c.cfg.Preview(pctx, msg, text)
-			})
-			tctx = plugin.WithReplyPreview(tctx, feed)
-		}
+		var feed func(string)
+		feed, stopPreview = startPreview(ctx, func(pctx context.Context, text string) {
+			if target := Target(sid); target != "" && target != c.cfg.PluginName {
+				return
+			}
+			c.cfg.Preview(pctx, msg, text)
+		})
+		tctx = plugin.WithReplyPreview(tctx, feed)
 	}
 
 	c.typing(ctx, msg, true)

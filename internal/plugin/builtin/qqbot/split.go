@@ -91,7 +91,7 @@ func (p *Plugin) sendChunk(ctx context.Context, openid, chunk string, m sendMode
 
 // typing 在这一轮开始时发「正在输入」。它挂在入站消息上发（被动回复），官方没说清它
 // 算不算被动回复的四条额度，这里按「算」处理、照常记账：要是不记而它其实算，第四段
-// 正文会被平台拒掉而丢失；多记一条的代价只是长回复的最后一段改走主动消息。
+// 正文会被平台拒掉而丢失。每条入站消息至多发一次，且要给正文留够额度（见 typingSlot）。
 // 主动推送没有入站消息可挂，不发。
 func (p *Plugin) typing(ctx context.Context, msg imbot.Message, active bool) {
 	if !active || msg.ReplyTo == "" {
@@ -100,7 +100,7 @@ func (p *Plugin) typing(ctx context.Context, msg imbot.Message, active bool) {
 	p.mu.Lock()
 	limiter := p.limiter
 	p.mu.Unlock()
-	ok, seq := limiter.next(msg.ReplyTo)
+	ok, seq := limiter.typingSlot(msg.ReplyTo)
 	if !ok {
 		return
 	}

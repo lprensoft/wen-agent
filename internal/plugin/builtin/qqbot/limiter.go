@@ -17,8 +17,12 @@ type replyLimiter struct {
 type replyEntry struct {
 	count int
 	first time.Time
-	base  int // 序号起点，见 seqBase
+	base  int  // 序号起点，见 seqBase
+	typed bool // 这条入站消息上已经发过「正在输入」
 }
+
+// typingReserve 是发「正在输入」之后至少要给正文留下的被动回复额度。
+const typingReserve = 3
 
 // seqBase 按秒取一个起点，每条 msg_id 至多用 replyLimit 个序号，不同秒的起点互不重叠。
 func seqBase(now time.Time) int { return int(now.Unix()%100000) * replyLimit }
@@ -42,6 +46,11 @@ func (l *replyLimiter) next(msgID string) (bool, int) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.nextLocked(msgID)
+}
+
+// nextLocked 是 next 的本体，调用方须持 mu。
+func (l *replyLimiter) nextLocked(msgID string) (bool, int) {
 	now := time.Now()
 	e, ok := l.entries[msgID]
 	if !ok {
@@ -56,6 +65,25 @@ func (l *replyLimiter) next(msgID string) (bool, int) {
 	}
 	e.count++
 	return true, e.base + e.count
+}
+
+// typingSlot 判定能不能在 msgID 上发一次「正在输入」：每条入站消息至多一次（分条发送
+// 时骨架会在每两段之间再要一次，每次都占额度的话四条额度两轮就耗光了），且发完之后
+// 还得给正文留够 typingReserve 条。可以则记账并返回序号。
+func (l *replyLimiter) typingSlot(msgID string) (bool, int) {
+	if msgID == "" {
+		return false, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.entries[msgID]; ok && (e.typed || replyLimit-e.count <= typingReserve) {
+		return false, 0
+	}
+	ok, seq := l.nextLocked(msgID)
+	if ok {
+		l.entries[msgID].typed = true
+	}
+	return ok, seq
 }
 
 func (l *replyLimiter) evictLocked(now time.Time) {

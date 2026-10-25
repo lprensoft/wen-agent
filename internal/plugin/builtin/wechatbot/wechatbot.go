@@ -205,6 +205,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.whitelist = whitelist
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.creds = creds
+	p.pausedUntil = time.Time{} // 重新 Init（含换凭证）后旧暂停不再作数；收信循环遇到 -14 会重新设
 	p.stateDir = ictx.StateDir
 	p.tokens = tokens
 	p.typing = map[string]string{}
