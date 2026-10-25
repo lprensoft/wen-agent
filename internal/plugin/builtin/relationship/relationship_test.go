@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -538,5 +539,53 @@ func TestChangingDatesWithdrawsStaleCues(t *testing.T) {
 	exec(`{"remove_date":"对方生日"}`)
 	if cue.Pending(now) {
 		t.Error("去掉的日子不该还留着提醒")
+	}
+}
+
+// 生日提醒被心跳取走之后，再加一个与今天无关的日子，不能把已经说过的生日提醒再送一次。
+func TestConsumedCueIsNotReposted(t *testing.T) {
+	p := newTestPlugin(t)
+	now := day(2026, 5, 12)
+	p.clock = func() time.Time { return now }
+	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
+	exec := func(args string) {
+		t.Helper()
+		if _, err := p.Tools()[0].Execute(scopedCtx(""), json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`{"add_date":{"what":"对方生日","date":"05-12"}}`)
+	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	if got := cue.Take(now); len(got) != 1 {
+		t.Fatalf("前提：生日提醒投出并被心跳取走：%+v", got)
+	}
+	exec(`{"add_date":{"what":"第一次见面","date":"2025-09-01"}}`)
+	if got := cue.Take(now); len(got) != 0 {
+		t.Errorf("已经取走的提醒不该再投：%+v", got)
+	}
+}
+
+// 两个会话同时改日子：一边在刷新（会投出生日提醒），一边删掉生日再刷新。不论谁先谁后，
+// 最后公告板上都不该留着已经删掉的生日。
+func TestConcurrentRefreshesEndConsistent(t *testing.T) {
+	p := newTestPlugin(t)
+	now := day(2026, 5, 12)
+	p.clock = func() time.Time { return now }
+	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
+	store := p.storeFor("")
+	for i := 0; i < 200; i++ {
+		_, _, _ = store.Apply(Update{AddDate: &DateArg{What: "对方生日", Date: "05-12"}}, now)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); p.refreshDateCues(now) }()
+		go func() {
+			defer wg.Done()
+			_, _, _ = store.Apply(Update{RemoveDate: str("对方生日")}, now)
+			p.refreshDateCues(now)
+		}()
+		wg.Wait()
+		if cue.Pending(now) {
+			t.Fatalf("第 %d 次：生日已经删掉，公告板上却还留着它的提醒", i)
+		}
 	}
 }
