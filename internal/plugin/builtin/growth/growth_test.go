@@ -58,6 +58,10 @@ func asTurn(ctx context.Context, tag string) context.Context {
 // 经 TurnPrompt 认领这个域——不认领的话两个改动工具一律拒绝。
 func claimed(t *testing.T, p *Plugin, tag string) context.Context {
 	t.Helper()
+	// 上一次直接调用留下的认领当作那次反思已经收尾（真实流程里由 runReflect 清理）
+	p.mu.Lock()
+	delete(p.claimedBy, tag)
+	p.mu.Unlock()
 	ctx := reflecting(tag)
 	if _, err := p.TurnPrompt(ctx, plugin.TurnEvent{SessionID: "s-" + tag}); err != nil {
 		t.Fatal(err)
@@ -615,5 +619,27 @@ func TestOverlappingReflectionsKeepTheirOwnClaims(t *testing.T) {
 	}
 	if st := load(t, p, ""); st.LastReflect != logicalDay(c.now()) || len(st.Details) != 1 {
 		t.Errorf("表人格应记作今天反思过并留下改动：%+v", st)
+	}
+}
+
+// 旧窗口显示 outer 的提议 A（编号 c1）；另一个窗口清空了成长；随后同一个域的新提议 B
+// 又拿到编号 c1。旧窗口按下批准必须拒绝：凭据认的是提议的随机身份，不是会被重用的编号。
+func TestStaleTokenAfterClearDoesNotApproveNewProposal(t *testing.T) {
+	p, _ := newTestPlugin(t, nil, nil, nil)
+	_, _ = call(t, p.Tools()[1], claimed(t, p, ""), `{"text":"提议A","basis":"x","why":"y"}`)
+	old := openWindow(p)
+	if err := openWindow(p).click(p, actionClear); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = call(t, p.Tools()[1], claimed(t, p, ""), `{"text":"提议B","basis":"x","why":"y"}`)
+	if st := load(t, p, ""); st.Pending == nil || st.Pending.ID != "c1" {
+		t.Fatalf("前提：清空后新提议重新拿到 c1：%+v", st.Pending)
+	}
+	err := old.click(p, actionApprove)
+	if err == nil || !strings.Contains(err.Error(), "刷新") {
+		t.Errorf("旧窗口的凭据指的是已经清掉的提议 A，应请用户刷新：%v", err)
+	}
+	if st := load(t, p, ""); st.Pending == nil || st.Pending.Text != "提议B" || len(st.Core) != 0 {
+		t.Errorf("提议 B 不该被批准：%+v", st)
 	}
 }

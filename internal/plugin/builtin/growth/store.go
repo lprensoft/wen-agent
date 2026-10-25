@@ -2,6 +2,8 @@ package growth
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,6 +45,19 @@ type Entry struct {
 	Basis string    `json:"basis"`
 	Why   string    `json:"why"`
 	Since time.Time `json:"since"`
+	// Nonce 是提议的随机身份，进设置页按钮的展示凭据。编号不够：清空成长会连同
+	// NextID 一起清掉，之后同一个域的新提议会再拿到 c1，旧窗口上的批准按钮就又「对上」了。
+	Nonce string `json:"nonce,omitempty"`
+}
+
+// newNonce 生成一个不会复用的随机身份。随机源出错时退到纳秒时刻——只要不与旧的
+// 撞上就行，这里不需要密码学强度。
+func newNonce(now time.Time) string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("t%x", now.UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // Quota 是某个逻辑日里已经用掉的枝叶改动次数。

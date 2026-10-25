@@ -31,13 +31,13 @@ const (
 // logView 是「查看成长记录」列出的条数。
 const logView = 30
 
-// Actions 给批准与驳回两个按钮挂上展示凭据：说明里显示的是哪一条提议（域与编号），
+// Actions 给批准与驳回两个按钮挂上展示凭据：说明里显示的是哪一条提议（域与它的身份），
 // 按下时界面原样带回来，见 decide。
 func (p *Plugin) Actions() []plugin.ActionDef {
 	pending, token := "· —", ""
 	if tag, st, ok := p.nextPending(); ok {
 		pending = "· " + st.Pending.Text
-		token = pendingKey(tag, st.Pending.ID)
+		token = pendingKey(tag, *st.Pending)
 	}
 	return []plugin.ActionDef{
 		{Key: actionApprove, Label: "批准这条改变", Description: "让角色提议的那个大变化生效：", Detail: pending, Token: token},
@@ -81,21 +81,30 @@ func (p *Plugin) nextPending() (string, State, bool) {
 	return bestTag, best, found
 }
 
-// pendingKey 是一条提议的身份：哪个域、哪个编号。它就是批准与驳回按钮的展示凭据。
-func pendingKey(tag, id string) string { return tag + "/" + id }
+// pendingKey 是一条提议的身份：哪个域、它的随机身份。它就是批准与驳回按钮的展示凭据。
+// 不用编号：清空成长会把编号一并重置，新提议会再拿到 c1，旧窗口上的凭据就又对上了。
+func pendingKey(tag string, e Entry) string { return tag + "/" + entryIdent(e) }
+
+// entryIdent 取提议的身份。随机身份是后来加的，早先存下的提议没有，退到编号。
+func entryIdent(e Entry) string {
+	if e.Nonce != "" {
+		return e.Nonce
+	}
+	return "id:" + e.ID
+}
 
 // parsePendingKey 拆开展示凭据，并只认磁盘上真有的域：凭据来自客户端，域名会被拿去
 // 拼目录，不能任它指向别处。
-func (p *Plugin) parsePendingKey(token string) (tag, id string, ok bool) {
+func (p *Plugin) parsePendingKey(token string) (tag, ident string, ok bool) {
 	i := strings.LastIndex(token, "/")
 	if i < 0 || i == len(token)-1 {
 		return "", "", false
 	}
-	tag, id = token[:i], token[i+1:]
+	tag, ident = token[:i], token[i+1:]
 	if !slices.Contains(p.domains(), tag) {
 		return "", "", false
 	}
-	return tag, id, true
+	return tag, ident, true
 }
 
 func (p *Plugin) StartAction(ctx context.Context, key string) error {
@@ -144,8 +153,8 @@ func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 //
 // 按下时重新挑一次「下一条」是不够的，记住「最后一次展示的是哪条」也不够（那是全局的，
 // 别的窗口一刷新就改了）：窗口 A 停在提议 A 上，窗口 B 驳回了 A、刷新出 B，A 上的按钮
-// 按下去就成了批准 B。所以只认凭据里的域与编号，写入时在锁内核对那一条还在等；不在了
-// （别处已经处理掉）或者没带凭据，一律拒绝并请用户刷新。
+// 按下去就成了批准 B。所以只认凭据里的域与提议的随机身份，写入时在锁内核对那一条还在
+// 等；不在了（别处已经处理掉、或整个清空了）或者没带凭据，一律拒绝并请用户刷新。
 func (p *Plugin) decide(lang string, approve bool, token string) (string, error) {
 	stale := fmt.Errorf("%s", i18n.T(lang, "plugin.growth.action.stale",
 		"等待批准的改变已经变了，请刷新后看清楚再操作。"))
@@ -155,14 +164,14 @@ func (p *Plugin) decide(lang string, approve bool, token string) (string, error)
 		}
 		return "", stale
 	}
-	tag, id, ok := p.parsePendingKey(token)
+	tag, ident, ok := p.parsePendingKey(token)
 	if !ok {
 		return "", stale
 	}
 	now := p.now()
 	var text string
 	_, err := p.storeFor(tag).Update(func(st *State) (bool, []LogEntry, error) {
-		if st.Pending == nil || st.Pending.ID != id {
+		if st.Pending == nil || entryIdent(*st.Pending) != ident {
 			return false, nil, stale
 		}
 		e := *st.Pending

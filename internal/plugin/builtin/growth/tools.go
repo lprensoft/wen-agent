@@ -247,7 +247,7 @@ func (t *proposeTool) Execute(ctx context.Context, args json.RawMessage) (string
 			return false, nil, fmt.Errorf(prompt.T(s.lang, "prompt.growth.err.core_full",
 				"已经定下来的大变化有 %d 条，到上限了，不再接受新的提议"), len(st.Core))
 		}
-		e := Entry{ID: st.newID(layerCore), Text: a.Text, Basis: a.Basis, Why: a.Why, Since: now}
+		e := Entry{ID: st.newID(layerCore), Text: a.Text, Basis: a.Basis, Why: a.Why, Since: now, Nonce: newNonce(now)}
 		st.Pending = &e
 		return true, []LogEntry{{At: now, Layer: layerCore, Op: opPropose, Text: e.Text, Basis: e.Basis, Why: e.Why}}, nil
 	})
