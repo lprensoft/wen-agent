@@ -53,6 +53,14 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 	timeout := longPollTimeout
 	fails := 0
 	i18n.Logf(p.langOf(), "log.wechat.connected", "wechat_bot: 已连接微信收信通道（bot_id=%s）", creds.BotID)
+	// 上线与下线各告诉服务端一声（官方渠道包的生命周期行为）。下线那一声用自己的
+	// 短超时：收信的 ctx 那时已经取消了，而 Stop 会等这个 goroutine 退出，不能久等
+	p.notifyLifecycle(ctx, creds, "/ilink/bot/msg/notifystart")
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeout)
+		defer cancel()
+		p.notifyLifecycle(sctx, creds, "/ilink/bot/msg/notifystop")
+	}()
 
 	for ctx.Err() == nil {
 		resp, err := p.getUpdates(ctx, creds, buf, timeout)
@@ -105,6 +113,25 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 			p.dispatch(ctx, msg)
 		}
 	}
+}
+
+// lifecycleTimeout 是上线、下线通知的超时：只是知会一声，失败不影响收发。
+const lifecycleTimeout = 3 * time.Second
+
+// notifyLifecycle 发一次上线或下线通知。失败与非零 ret 只记日志，不阻断启动或停止。
+func (p *Plugin) notifyLifecycle(ctx context.Context, creds credentials, endpoint string) {
+	raw, err := apiPost(ctx, creds.BaseURL, endpoint, map[string]any{"base_info": newBaseInfo()}, creds.BotToken, lifecycleTimeout)
+	var resp struct {
+		Ret    int    `json:"ret"`
+		Errmsg string `json:"errmsg"`
+	}
+	if err == nil && json.Unmarshal(raw, &resp) == nil && resp.Ret == 0 {
+		return
+	}
+	if err == nil {
+		err = fmt.Errorf("ret=%d %s", resp.Ret, resp.Errmsg)
+	}
+	i18n.Logf(p.langOf(), "log.wechat.lifecycle_failed", "wechat_bot: %s 未成功（忽略）: %v", endpoint, err)
 }
 
 // getUpdates 发一次长轮询请求。

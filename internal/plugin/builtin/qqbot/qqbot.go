@@ -210,6 +210,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		HoldWhenBusy:   holdWhenBusy,
 		WakeAfter:      wakeAfter,
 		Allow:          p.allowed,
+		Typing:         p.typing,
 		Push:           p.push,
 		Notice:         ictx.Notice,
 		RunTurn:        ictx.RunTurn,

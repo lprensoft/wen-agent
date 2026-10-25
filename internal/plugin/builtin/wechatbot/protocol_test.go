@@ -148,3 +148,22 @@ func TestAppHeadersOnAuthedRequests(t *testing.T) {
 		t.Errorf("base_info 不对: %+v", bi)
 	}
 }
+
+// 开始收信时报上线，停下时报下线
+func TestLifecycleNotices(t *testing.T) {
+	p, f, _, _ := newBound(t, echoTurn, "")
+	expect := func(want string) {
+		t.Helper()
+		select {
+		case got := <-f.lifecycle:
+			if got != want {
+				t.Fatalf("应收到 %s，实际 %s", want, got)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("没收到 %s", want)
+		}
+	}
+	expect("notifystart")
+	p.Stop()
+	expect("notifystop")
+}

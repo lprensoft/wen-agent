@@ -39,13 +39,15 @@ type fakeILink struct {
 	bufSeq         atomic.Int32
 	lastReqBuf     atomic.Value // 最近一次 getupdates 请求携带的游标
 	lastStatusHost atomic.Value // 最近一次查扫码状态打到的主机
+	lifecycle      chan string  // 收到的上线、下线通知（notifystart / notifystop）
 }
 
 func newFakeILink(t *testing.T) *fakeILink {
 	f := &fakeILink{
-		t:     t,
-		inbox: make(chan wxMessage, 32),
-		sends: make(chan sentWx, 32),
+		t:         t,
+		inbox:     make(chan wxMessage, 32),
+		sends:     make(chan sentWx, 32),
+		lifecycle: make(chan string, 8),
 	}
 	f.qrStatus = make(chan statusResponse, 8)
 	f.lastReqBuf.Store("")
@@ -78,6 +80,17 @@ func newFakeILink(t *testing.T) *fakeILink {
 		case <-time.After(100 * time.Millisecond):
 			_ = json.NewEncoder(w).Encode(statusResponse{Status: "wait"})
 		}
+	})
+	mux.HandleFunc("POST /ilink/bot/msg/{op}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer TESTTOKEN" {
+			w.WriteHeader(401)
+			return
+		}
+		select { // 不阻塞：别的用例不读这个通道
+		case f.lifecycle <- r.PathValue("op"):
+		default:
+		}
+		_, _ = w.Write([]byte(`{"ret":0}`))
 	})
 	mux.HandleFunc("POST /ilink/bot/getupdates", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer TESTTOKEN" {

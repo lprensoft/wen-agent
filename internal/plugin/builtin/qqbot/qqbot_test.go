@@ -30,20 +30,23 @@ type sentMsg struct {
 }
 
 type fakeQQ struct {
-	t     *testing.T
-	srv   *httptest.Server
-	sends chan sentMsg
+	t      *testing.T
+	srv    *httptest.Server
+	sends  chan sentMsg
+	typing chan sentMsg // msg_type=6 的「正在输入」单独收，不混进正文
 
 	mu             sync.Mutex
 	conn           *websocket.Conn
 	seq            int64
 	rejectMarkdown bool // 模拟平台「不允许发送原生 markdown」(40034012)
+	rejectActive   bool // 模拟主动消息被拒（不带 msg_id 也不是召回的）
+	wakeups        int  // 收到的互动召回条数
 
 	ready chan struct{} // 收到 Identify 并回了 READY
 }
 
 func newFakeQQ(t *testing.T) *fakeQQ {
-	f := &fakeQQ{t: t, sends: make(chan sentMsg, 32), ready: make(chan struct{}, 4)}
+	f := &fakeQQ{t: t, sends: make(chan sentMsg, 32), typing: make(chan sentMsg, 32), ready: make(chan struct{}, 4)}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /app/getAppAccessToken", func(w http.ResponseWriter, r *http.Request) {
@@ -89,13 +92,28 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 			Markdown *struct {
 				Content string `json:"content"`
 			} `json:"markdown"`
-			MsgID  string `json:"msg_id"`
-			MsgSeq int    `json:"msg_seq"`
+			MsgID    string `json:"msg_id"`
+			MsgSeq   int    `json:"msg_seq"`
+			IsWakeup bool   `json:"is_wakeup"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.MsgType == 6 {
+			f.typing <- sentMsg{openid: r.PathValue("openid"), msgType: 6, msgID: body.MsgID, seq: body.MsgSeq}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "typing-1"})
+			return
+		}
 		f.mu.Lock()
 		reject := f.rejectMarkdown
+		if body.IsWakeup {
+			f.wakeups++
+		}
+		rejectActive := f.rejectActive && body.MsgID == "" && !body.IsWakeup
 		f.mu.Unlock()
+		if rejectActive {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "主动消息被拒", "code": 40034024})
+			return
+		}
 		if body.MsgType == 2 && reject {
 			w.WriteHeader(400)
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 40034012})
@@ -644,5 +662,44 @@ func TestTokenRefreshWindow(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Errorf("取回来的仍快到期时不该每次都重取: %d 次", calls.Load())
+	}
+}
+
+// 一轮开始时挂在入站消息上发「正在输入」，并占用一条被动回复额度（序号不与正文重复）
+func TestTypingNotify(t *testing.T) {
+	reply := func(context.Context, string, string) (string, error) { return "ok", nil }
+	_, f, _ := newInited(t, reply, "user1")
+	id := f.pushC2C("user1", "你好")
+	select {
+	case ty := <-f.typing:
+		if ty.msgID != id || ty.seq <= 0 {
+			t.Fatalf("「正在输入」应挂在入站消息上: %+v", ty)
+		}
+		m := f.expectSend(t)
+		if m.seq == ty.seq {
+			t.Fatalf("正文与「正在输入」的序号不能重复: %d", m.seq)
+		}
+	case <-time.After(8 * time.Second): // 入站有合并窗口，一轮要等它过去才开始
+		t.Fatal("没收到「正在输入」")
+	}
+}
+
+// 主动推送被拒时退一步用互动召回，一次发送只试一次
+func TestPushFallsBackToWakeup(t *testing.T) {
+	reply := func(context.Context, string, string) (string, error) { return "ok", nil }
+	p, f, _ := newInited(t, reply, "user1")
+	f.mu.Lock()
+	f.rejectActive = true
+	f.mu.Unlock()
+	p.send(context.Background(), "user1", "早上好", "")
+	m := f.expectSend(t)
+	if m.content != "早上好" || m.msgID != "" {
+		t.Fatalf("应以召回送达: %+v", m)
+	}
+	f.mu.Lock()
+	n := f.wakeups
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("应只试一次召回，实际 %d 次", n)
 	}
 }
