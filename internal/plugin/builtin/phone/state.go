@@ -77,17 +77,23 @@ func saveState(dir string, st State) error {
 	return nil
 }
 
-// merge 把一个源这次取到的条目并进状态，返回其中新留下来的几条。
+// merge 把一个源这次取到的条目记进去重表，返回其中新留下来的几条。条目本身由调用方
+// 在全部源都并完之后用 keep 一次收进缓存——逐源裁剪的话，后面的源会把前面的源刚刷到
+// 的挤掉，而开口理由是从全部新条目里挑的，挑中的那条可能已经不在了。
 //
 // 每个源只留最新的 keepPerFeed 条，其余新条目只记进去重表：第一次启用、或者睡了一夜
 // 醒来时，一个源可能一下子冒出二十条，人刷手机也不会一条条看完，往下划过去的就是
 // 划过去了，下次也不会再当新的冒出来。
-func merge(st *State, source string, entries []entry, interests []string, now time.Time) []Item {
+//
+// 去重键带上订阅源地址：没有 guid 与链接的条目只能按标题认，两个源恰好发了同名的
+// 消息时，不带源的话后一个会被当成见过而吞掉。
+func merge(st *State, feedURL, source string, entries []entry, interests []string, now time.Time) []Item {
 	if st.Seen == nil {
 		st.Seen = map[string]time.Time{}
 	}
 	var fresh []entry
 	for _, e := range entries {
+		e.ID = hashID(feedURL + "\x00" + e.ID)
 		if _, ok := st.Seen[e.ID]; ok {
 			continue
 		}
@@ -110,11 +116,23 @@ func merge(st *State, source string, entries []entry, interests []string, now ti
 		}
 		added = append(added, it)
 	}
-	st.Items = append(added, st.Items...)
+	return added
+}
+
+// keep 把这次新刷到的收进缓存：新的在前（发布晚的先），pick 指定的那条（开口理由选中
+// 的）排在最前，然后统一裁到 maxKept——理由说的那条新闻必须还能用 read_news 细看。
+func keep(st *State, added []Item, pick string) {
+	fresh := append([]Item(nil), added...)
+	sort.SliceStable(fresh, func(i, j int) bool {
+		if (fresh[i].ID == pick) != (fresh[j].ID == pick) {
+			return fresh[i].ID == pick
+		}
+		return fresh[i].when().After(fresh[j].when())
+	})
+	st.Items = append(fresh, st.Items...)
 	if len(st.Items) > maxKept {
 		st.Items = st.Items[:maxKept]
 	}
-	return added
 }
 
 // prune 清掉去重表里太旧的记录，并把总数压在上限内。

@@ -56,6 +56,10 @@ type Plugin struct {
 
 	dataMu sync.RWMutex
 	st     State
+	// 忙碌的起止，只在内存里：重启后最坏是忙完那一刻少等几分钟
+	wasBusy   bool
+	busyUntil time.Time // 上次看到的忙碌预计到几点
+	busyEnded time.Time // 最近一次忙碌实际结束的时刻
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -117,6 +121,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	p.dataMu.Lock()
 	p.st = st
+	p.wasBusy, p.busyUntil, p.busyEnded = false, time.Time{}, time.Time{}
 	p.dataMu.Unlock()
 
 	p.mu.Lock()
@@ -272,24 +277,67 @@ func (p *Plugin) plan(now time.Time) (time.Duration, bool) {
 	if earliest := s.started.Add(startGrace); due.Before(earliest) {
 		due = earliest
 	}
+	// 三样各自给出「最早能刷的时刻」，取最晚的那个
+	var wait time.Duration
 	if now.Before(due) {
-		return due.Sub(now), false
+		wait = due.Sub(now)
+	}
+	// 忙完之后的缓冲要在这里算，不能只靠公告板：日程提前做完会 Clear 并叫醒循环，
+	// 那一刻公告板已经是空闲了，只看它的话忙完那一秒就刷
+	avail, availUntil := availBusy(now)
+	if end := p.noteBusy(now, avail, availUntil); now.Before(end.Add(afterBusy)) {
+		wait = max(wait, end.Add(afterBusy).Sub(now))
 	}
 	if until, busy := busyUntil(now, s.sessions); busy {
-		return max(until.Sub(now), time.Minute), false
+		wait = max(wait, until.Sub(now), time.Minute)
+	}
+	if wait > 0 {
+		return wait, false
 	}
 	return 0, true
 }
 
+// noteBusy 记下忙碌的起止，返回最近一次忙碌结束的时刻（还在忙或从没忙过时为零值）。
+//
+// 结束时刻按实际算：上次看到的忙碌带着结束时刻、而那个时刻已经过了，就是到点自然结束，
+// 结束在那个时刻（定时器本来就是按它加缓冲设的，不能再加一遍）；否则是被提前撤掉的，
+// 结束在此刻——plan 是被公告板的变化叫醒的，「此刻」就是撤掉的那一刻。
+func (p *Plugin) noteBusy(now time.Time, busy bool, until time.Time) time.Time {
+	p.dataMu.Lock()
+	defer p.dataMu.Unlock()
+	switch {
+	case busy:
+		p.wasBusy, p.busyUntil = true, until
+	case p.wasBusy:
+		end := now
+		if !p.busyUntil.IsZero() && p.busyUntil.Before(now) {
+			end = p.busyUntil
+		}
+		p.wasBusy, p.busyEnded = false, end
+	}
+	if p.wasBusy {
+		return time.Time{}
+	}
+	return p.busyEnded
+}
+
+// availBusy 看忙碌公告板：睡着、重忙或不回算忙。轻忙不算——人在轻忙时也会瞄两眼手机。
+func availBusy(now time.Time) (bool, time.Time) {
+	if st, ok := availability.Current(now); ok && (st.Sleeping || st.Level >= availability.Heavy) {
+		return true, st.Until
+	}
+	return false, time.Time{}
+}
+
 // busyUntil 判断她此刻有没有空刷手机：睡着、重忙或不回、正和对方聊天都不刷。
-// 轻忙不拦——人在轻忙时也会瞄两眼手机。返回最早能刷的时刻。
+// 返回最早能刷的时刻。
 func busyUntil(now time.Time, sessions plugin.SessionQuery) (time.Time, bool) {
 	var until time.Time
 	busy := false
-	if st, ok := availability.Current(now); ok && (st.Sleeping || st.Level >= availability.Heavy) {
+	if avail, end := availBusy(now); avail {
 		until, busy = now.Add(recheck), true
-		if st.Until.After(now) {
-			until = st.Until.Add(afterBusy)
+		if end.After(now) {
+			until = end.Add(afterBusy)
 		}
 	}
 	if sessions != nil {
@@ -344,31 +392,36 @@ func (p *Plugin) refresh(ctx context.Context) {
 		if name == "" {
 			name = hostOf(r.url)
 		}
-		added = append(added, merge(&p.st, name, r.entries, s.interests, now)...)
+		added = append(added, merge(&p.st, r.url, name, r.entries, s.interests, now)...)
 	}
+	// 先挑出开口理由要说的那条，再统一收进缓存并保证它留着
+	pick, hit := pickCue(added)
+	keep(&p.st, added, pick.ID)
 	p.st.LastRefresh = now
 	prune(&p.st, now)
 	snap := p.st
 	p.dataMu.Unlock()
 
 	_ = saveState(s.dir, snap)
-	postCue(s.lang, added, now)
+	if hit {
+		postCue(s.lang, pick, now)
+	}
 }
 
-// postCue 刷到碰上兴趣的新闻时投一条开口理由，一次刷新至多一条：一下子冒出好几条，
-// 心跳也只该开一次口，挑最新的那条说，其余的在注入里看得到。
-func postCue(lang string, added []Item, now time.Time) {
-	var hits []Item
+// pickCue 从这次新刷到的里挑一条值得开口的：碰上兴趣的里面发布最晚的那条。一次刷新
+// 至多一条——一下子冒出好几条，心跳也只该开一次口，其余的在注入里看得到。
+func pickCue(added []Item) (Item, bool) {
+	var best Item
+	found := false
 	for _, it := range added {
-		if it.Hit {
-			hits = append(hits, it)
+		if it.Hit && (!found || it.when().After(best.when())) {
+			best, found = it, true
 		}
 	}
-	if len(hits) == 0 {
-		return
-	}
-	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Published.After(hits[j].Published) })
-	h := hits[0]
+	return best, found
+}
+
+func postCue(lang string, h Item, now time.Time) {
 	text := prompt.Tf(lang, "prompt.phone.cue.news", "你刚刷手机看到一条：「%s」（%s）。", h.Title, h.Source)
 	// 同一个键：新刷到的覆盖还没说出口的旧的，「刚看到」只有最新那条算数
 	cue.Post(cue.Cue{Source: "phone", Key: "news", Text: text, Expire: now.Add(cueTTL)})

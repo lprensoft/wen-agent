@@ -3,6 +3,7 @@ package phone
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,7 +86,7 @@ func TestMergeDedupesAndKeepsNewestFew(t *testing.T) {
 		es = append(es, entry{ID: string(rune('a' + i)), Title: "相机" + string(rune('A'+i)), Published: now.Add(-time.Duration(i) * time.Hour)})
 	}
 	var st State
-	added := merge(&st, "源", es, []string{"相机a"}, now)
+	added := merge(&st, "https://a.example/rss", "源", es, []string{"相机a"}, now)
 	if len(added) != keepPerFeed || added[0].Title != "相机A" {
 		t.Fatalf("一次只该留最新的 %d 条: %+v", keepPerFeed, added)
 	}
@@ -95,8 +96,92 @@ func TestMergeDedupesAndKeepsNewestFew(t *testing.T) {
 	if len(st.Seen) != 12 {
 		t.Errorf("划过去的也要记进去重表: %d", len(st.Seen))
 	}
-	if again := merge(&st, "源", es, nil, now.Add(time.Hour)); len(again) != 0 {
+	if again := merge(&st, "https://a.example/rss", "源", es, nil, now.Add(time.Hour)); len(again) != 0 {
 		t.Errorf("见过的不该再当新的: %+v", again)
+	}
+}
+
+// 两个源发了同名的消息（没有 guid 与链接，只能按标题认）：各是各的，不互相吞
+func TestDedupeIsPerFeed(t *testing.T) {
+	now := time.Date(2026, 10, 25, 8, 0, 0, 0, time.Local)
+	_, es, err := parseFeed([]byte(`<rss><channel><title>甲</title><item><title>今日要闻</title></item></channel></rss>`))
+	if err != nil || len(es) != 1 {
+		t.Fatal(err)
+	}
+	var st State
+	a := merge(&st, "https://a.example/rss", "甲", es, nil, now)
+	b := merge(&st, "https://b.example/rss", "乙", es, nil, now)
+	if len(a) != 1 || len(b) != 1 || a[0].ID == b[0].ID {
+		t.Errorf("不同源的同名消息不该互相吞掉: %+v %+v", a, b)
+	}
+}
+
+// 七个源各冒出五条新的，开口理由挑中的那条在第一个源、发布得早：缓存统一裁剪时
+// 它也得留着，否则理由说的新闻 read_news 看不到
+func TestCuedItemSurvivesTrim(t *testing.T) {
+	now := time.Date(2026, 10, 25, 8, 0, 0, 0, time.Local)
+	var st State
+	var added []Item
+	for f := range 7 {
+		var es []entry
+		for i := range keepPerFeed {
+			title := fmt.Sprintf("源%d第%d条", f, i)
+			if f == 0 && i == keepPerFeed-1 {
+				title = "相机降价"
+			}
+			es = append(es, entry{ID: title, Title: title, Published: now.Add(-time.Duration(f*10+i) * time.Minute)})
+		}
+		added = append(added, merge(&st, fmt.Sprintf("https://%d.example/rss", f), "源", es, []string{"相机"}, now)...)
+	}
+	pick, ok := pickCue(added)
+	if !ok || pick.Title != "相机降价" {
+		t.Fatalf("应挑中兴趣条目: %+v", pick)
+	}
+	keep(&st, added, pick.ID)
+	if len(st.Items) != maxKept || st.Items[0].ID != pick.ID {
+		t.Fatalf("挑中的那条应留在缓存最前: %d 条，首条 %q", len(st.Items), st.Items[0].Title)
+	}
+	p := New()
+	p.st = st
+	raw, _ := json.Marshal(map[string]any{"title": "相机降价"})
+	if _, err := (&readTool{p: p}).Execute(context.Background(), raw); err != nil {
+		t.Errorf("理由说的那条应能细看: %v", err)
+	}
+}
+
+// 忙碌被提前撤掉时，缓冲从撤掉那一刻算；到点自然结束时不重复加缓冲
+func TestBufferAfterBusyEnds(t *testing.T) {
+	now := time.Date(2026, 10, 25, 15, 0, 0, 0, time.Local)
+	p := newPlugin(t, &now, "", nil)
+	p.mu.Lock()
+	p.started = now.Add(-time.Hour)
+	p.mu.Unlock()
+	p.st.LastRefresh = now.Add(-5 * time.Hour) // 早就到点了
+
+	const src = "phone_test_buffer"
+	defer availability.Clear(src)
+	availability.Set(availability.State{Source: src, Level: availability.Heavy, Since: now, Until: now.Add(time.Hour)})
+	if _, run := p.plan(now); run {
+		t.Fatal("重忙时不刷")
+	}
+	now = now.Add(20 * time.Minute)
+	availability.Clear(src) // 提前做完
+	if wait, run := p.plan(now); run || wait != afterBusy {
+		t.Fatalf("提前忙完也要缓一缓: %v %v", wait, run)
+	}
+	now = now.Add(afterBusy)
+	if _, run := p.plan(now); !run {
+		t.Fatal("缓冲过后应刷")
+	}
+
+	// 到点自然结束：定时器本来就设在结束之后加缓冲，醒来时直接刷
+	availability.Set(availability.State{Source: src, Level: availability.Heavy, Since: now, Until: now.Add(time.Hour)})
+	if wait, _ := p.plan(now); wait != time.Hour+afterBusy {
+		t.Fatalf("重忙应挪到忙完之后: %v", wait)
+	}
+	now = now.Add(time.Hour + afterBusy)
+	if _, run := p.plan(now); !run {
+		t.Error("自然结束时不该再加一遍缓冲")
 	}
 }
 
@@ -138,6 +223,10 @@ func TestPlanWaitsUntilIdle(t *testing.T) {
 
 	const src = "phone_test"
 	defer availability.Clear(src)
+	availability.Set(availability.State{Source: src, Level: availability.Light, Since: now, Until: now.Add(time.Hour)})
+	if _, run := p.plan(now); !run {
+		t.Error("轻忙不拦")
+	}
 	availability.Set(availability.State{Source: src, Level: availability.Away, Sleeping: true, Since: now, Until: now.Add(6 * time.Hour)})
 	if wait, run := p.plan(now); run || wait != 6*time.Hour+afterBusy {
 		t.Errorf("睡着时应挪到醒来之后: %v %v", wait, run)
@@ -146,12 +235,9 @@ func TestPlanWaitsUntilIdle(t *testing.T) {
 	if wait, run := p.plan(now); run || wait != time.Hour+afterBusy {
 		t.Errorf("重忙时应挪到忙完之后: %v %v", wait, run)
 	}
-	availability.Set(availability.State{Source: src, Level: availability.Light, Since: now, Until: now.Add(time.Hour)})
-	if _, run := p.plan(now); !run {
-		t.Error("轻忙不拦")
-	}
 	availability.Clear(src)
 
+	// 刚忙完（缓冲 5 分钟）又正聊着天（还要 10 分钟）：取晚的那个
 	sess.last = now.Add(-5 * time.Minute)
 	if wait, run := p.plan(now); run || wait != 10*time.Minute {
 		t.Errorf("正聊着天时应等聊完一阵: %v %v", wait, run)
