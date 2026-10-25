@@ -15,7 +15,7 @@
 | GET | `/api/plugins` | The plugin list and their state (including the `source`, the `config_fields` declarations and the `config` values currently in effect) |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` toggles a plugin at runtime |
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` saves a plugin's settings; once validated they take effect immediately and are persisted |
-| POST | `/api/plugins/{name}/actions/{key}` | Triggers an action a plugin declares (binding WeChat by QR code, say). Returns immediately; the work runs in the background |
+| POST | `/api/plugins/{name}/actions/{key}` | Triggers an action a plugin declares (binding WeChat by QR code, say). Returns immediately; the work runs in the background. The body is optional: `{"config": {...}, "token": "..."}`. `config` holds unsaved values from the config dialog, and `token` echoes back the action's `token` from the listing (which thing the button refers to, such as which proposal is being approved) |
 | GET | `/api/plugins/{name}/actions/{key}` | Polls that action's progress: its state, its explanatory text and an optional PNG (delivered from memory, never written to disk) |
 | GET | `/api/status` | The model configuration and the plugins' status lines; with a `session_id` query parameter, that session's usage as well |
 | GET | `/api/events` | A long-lived SSE stream carrying session notices (the lines background work leaves in a session that the model never sees) |

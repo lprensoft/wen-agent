@@ -15,7 +15,7 @@
 | GET | `/api/plugins` | 插件列表与状态（含来源 `source`、可配置项声明 `config_fields` 与当前生效值 `config`） |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` 运行时开关插件 |
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
-| POST | `/api/plugins/{name}/actions/{key}` | 触发插件声明的操作（如微信扫码绑定），立即返回，流程在后台跑 |
+| POST | `/api/plugins/{name}/actions/{key}` | 触发插件声明的操作（如微信扫码绑定），立即返回，流程在后台跑。请求体可选：`{"config": {...}, "token": "..."}`，`config` 是配置弹窗里尚未保存的值，`token` 原样带回列表里该操作的 `token`（按钮指的是哪一个，如批准的是哪一条提议） |
 | GET | `/api/plugins/{name}/actions/{key}` | 轮询该操作的进展：状态、说明文字与一张可选 PNG（只经内存下发，不落盘） |
 | GET | `/api/status` | 模型配置与插件状态行；带 `session_id` 查询参数时附上该会话的用量 |
 | GET | `/api/events` | 常驻 SSE 流，推送会话注记（后台任务在会话里留下的、模型看不到的一行说明） |

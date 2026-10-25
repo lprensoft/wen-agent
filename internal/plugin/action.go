@@ -19,6 +19,34 @@ type ActionDef struct {
 	// 所以插件只说事实，缀字的动作挪到翻译那一层（见 Localize），与 ConfigOption
 	// 的 Unavailable 是同一条道理。Detail 本身不翻译：它是路径与名字。
 	Detail string `json:"detail,omitempty"`
+	// Token 是这个按钮此刻**指的是哪一个东西**：插件列出操作时填上，界面点按钮时原样
+	// 带回来（经 ctx，见 ActionTokenFrom）。核心与界面都不解释它。
+	//
+	// 存在的理由是「按钮的含义取决于展示时的内容」：批准的是说明里显示的那一条提议、
+	// 安装的是显示的那个版本。按下时让插件重新挑一次「当前那个」是不够的——两个窗口
+	// 各开一份设置页，一边处理掉了 A、刷新出 B，另一边停在 A 上的按钮按下去就成了 B。
+	// 插件也不能自己记「最后一次展示的是哪个」：那是全局的，任何一个客户端的刷新都会
+	// 改掉它。只有请求本身带着它看到的东西，才答得了「这个人点的是哪一个」。
+	Token string `json:"token,omitempty"`
+}
+
+// actionTokenKey 是 ctx 中展示凭据的键。
+type actionTokenKey struct{}
+
+// WithActionToken 把按钮展示时的凭据（ActionDef.Token）附到 ctx 上，供操作核对。
+// 空串不附。
+func WithActionToken(ctx context.Context, token string) context.Context {
+	if token == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actionTokenKey{}, token)
+}
+
+// ActionTokenFrom 取出本次操作附带的展示凭据；没有则返回空串。与 ActionValuesFrom
+// 一样必须在 StartAction 内同步取出。值来自客户端，插件要把它当作不可信的输入核对。
+func ActionTokenFrom(ctx context.Context) string {
+	v, _ := ctx.Value(actionTokenKey{}).(string)
+	return v
 }
 
 // 操作的运行状态。

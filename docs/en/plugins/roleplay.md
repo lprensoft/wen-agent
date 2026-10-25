@@ -67,3 +67,26 @@ The outer persona uses `roleplay`'s character sheet; the inner one gets a sheet 
 | `max_text_bytes` | 8192 | The combined limit on the inner persona's sheet and samples; over it the sheet is kept and samples are dropped block by block |
 
 > **This is context isolation, not a sandbox.** `read_file` and `exec_command` are general file and command channels, and can read session files, memory directories and this plugin's own state file directly, going around every prompt-level and tool-level filter. The plugin declares those two as conflicts, so the settings page warns when they are on together, but it does not block them — you may genuinely want a character that can get work done, and the trade-off is yours to make.
+
+## Growth (growth plugin)
+
+People change over time together: they pick up a phrase from the other person, get hooked on something, stop talking around things. A character sheet is fixed text, though, so a character after three months of conversation is exactly who it was on day one. This plugin lets the character **slowly grow while staying the same person**. The idea comes from the self-growth design in [project-sue-](https://github.com/lzh830913-wq/project-sue-). On by default, and hard-depends on `roleplay` and `memory`.
+
+- **Three layers, each with its own rules**:
+  - **The roots** are the character sheet and voice samples you wrote. **The plugin never rewrites them.** Growth is a layer on top, and where the two conflict, the sheet wins.
+  - **Bigger changes** are shifts in personality, in how the character treats people, or in how they talk, held over several days. The character can only **propose** one. It takes effect once you approve it on the settings page, and only one can wait at a time.
+  - **Small changes** are a new like or dislike, a habit, a catchphrase, a small detail of their life, or a leaning some experience left behind. The character records these itself, with a log. At most three changes a day, and a total limit; when full, the character can only replace or let go of old ones.
+- **Change happens only in the daily reflection**: after the first conversation turn or heartbeat of a new day, the character looks back at yesterday and decides whether anything has grown. If nobody talked the day before it is skipped, and if nothing is worth recording nothing happens. Both editing tools are refused in ordinary conversation, because changing yourself on the fly is exactly how drift starts. Morning rather than night is deliberate: states like mood have settled overnight, and the guidance also says to change nothing on days with big emotional swings.
+- **Every change has to say why it is still the same person**: each one must give its basis (which day, what happened) and which part of the character sheet it connects to and how it grew from there. If that cannot be said, it is not growth.
+- **Only what is in the character**: the other person's habits and interests belong to [long-term memory](memory.md), and the understandings between the two of you to [relationship](life.md#relationship-relationship-plugin). Nothing is duplicated here. Stored per visibility scope, so the outer and inner persona each grow on their own.
+- **Visible and under your control**: when a reflection changes something, a line "🌱 Growth: …" is left in the session (for you only; it never enters the model's context), and `/status` gets a summary line. The gear on the settings page has "Approve this change" and "Reject this change" (with the proposal's text after the description), "Undo the last change", "View growth log" (with basis and reasons) and "Clear all growth".
+- **Settled changes are not written back into the character sheet**: they stay a separate layer, so you can always tell what you wrote from what the character grew. To make one permanent, copy it into the sheet yourself and clear it here.
+- **Injection**: approved bigger changes and the small changes are injected every turn as `[Changes These Days]`, with guidance to let them show naturally rather than announce "I have changed". Nothing is injected until something has grown, so it costs nothing before then.
+
+| Setting | Default | Description |
+|---|---|---|
+| `daily_reflect` | On | Reflect once a day (one extra model call a day). Turned off, existing growth still applies; nothing new grows |
+| `max_details` | 12 | How many small changes to keep at most |
+| `max_core` | 6 | How many approved bigger changes to keep at most; when full, no new proposals are accepted |
+| `daily_changes` | 3 | How many small changes per day; adding, modifying and letting go each count once |
+| `max_inject_bytes` | 1536 | The injection byte limit; past it, dates are dropped first, then only the most recent entries are kept with a note of how many more there are |

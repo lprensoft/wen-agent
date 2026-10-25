@@ -18,6 +18,7 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | | `skills` | Skill manuals (SKILL.md) read on demand | off |
 | [Roleplay](roleplay.md) | `roleplay` | Character sheet, sample lines, natural expression and time-consistency rules | on |
 | | `dual_persona` | An outer and an inner persona switched by trigger phrases, with memory and history invisible across them | off |
+| | `growth` | Slowly picks up new likes and habits over time; bigger changes need your approval, and the character sheet is never altered | on |
 | [The character's life](life.md) | `scene` | The stage setting and scene memories | on |
 | | `weather` | Real weather by city, injected each turn as ambient state | off |
 | | `belongings` | What is in the fridge and the wardrobe | on |

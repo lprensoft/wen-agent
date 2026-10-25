@@ -1408,7 +1408,9 @@ async function startPluginAction(pluginName, actionDef, draft) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: draft || {} }),
+      // token 是这个按钮展示时插件给的凭据，原样带回：插件据此核对点的是哪一个
+      //（批准的是这一页上显示的那条，而不是别的窗口刷新出来的另一条）
+      body: JSON.stringify({ config: draft || {}, token: actionDef.token || "" }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -1501,7 +1503,10 @@ const configSaveBtn = $("#btn-config-save");
 
 let configPlugin = null; // 当前编辑的插件状态
 let configInputs = new Map(); // 配置项 key -> 输入元素
-let configActionEls = new Map(); // 操作 key -> {btn, desc}，操作结束后就地更新文案用
+// 操作 key -> {btn, desc, action}：操作结束后就地更新文案用。action 是这个按钮此刻对应的
+// 那份操作声明，点击时现取——它带着展示凭据（token），文案刷新了而凭据还是旧的，
+// 按下去就成了对上一个东西的操作。
+let configActionEls = new Map();
 
 function openPluginConfig(p) {
   configPlugin = p;
@@ -1525,14 +1530,19 @@ function openPluginConfig(p) {
     btn.textContent = a.label;
     // 配置弹窗不关：进展窗盖在它上面，测试完回到原处，填了一半的内容还在。
     // 「测试」类操作正是为「保存之前先验一下」而存在的，关掉就等于要求先保存。
-    btn.addEventListener("click", () => startPluginAction(p.name, a, readConfigValues()));
+    // 点击时现取这个按钮当前对应的操作声明，不用闭包里捕获的那份：弹窗开着时文案与
+    // 凭据会随 refreshOpenPluginActions 一起换新
+    const entry = { btn: null, desc: null, action: a };
+    btn.addEventListener("click", () => startPluginAction(p.name, entry.action, readConfigValues()));
     row.appendChild(btn);
     const desc = document.createElement("div");
     desc.className = "field-desc";
     desc.textContent = a.description || "";
     desc.classList.toggle("hidden", !a.description);
     row.appendChild(desc);
-    configActionEls.set(a.key, { btn, desc });
+    entry.btn = btn;
+    entry.desc = desc;
+    configActionEls.set(a.key, entry);
     configFormEl.appendChild(row);
   }
   // 没有配置项（纯操作入口）时保存与恢复默认没有意义
@@ -1550,6 +1560,9 @@ function openPluginConfig(p) {
 // 为「保存之前先验一下」而存在的（见 openPluginConfig 里那条注释）。文案会变是因为
 // 插件的状态变了——「检查更新」在查到新版之后就该变成「更新到 vX 并重启」，
 // 不然按钮上写的和点下去发生的事就对不上了。
+//
+// 换文案的同时换掉按钮对应的那份操作声明：它带着展示凭据（批准的是哪一条提议），
+// 说明换成了提议 B 而凭据还是 A 的话，B 永远批不了，只能关掉弹窗重开。
 async function refreshOpenPluginActions(name) {
   if (!configPlugin || configPlugin.name !== name) return;
   try {
@@ -1560,12 +1573,14 @@ async function refreshOpenPluginActions(name) {
     for (const a of configPlugin.actions) {
       const els = configActionEls.get(a.key);
       if (!els) continue;
+      els.action = a;
       els.btn.textContent = a.label;
       els.desc.textContent = a.description || "";
       els.desc.classList.toggle("hidden", !a.description);
     }
   } catch (e) {
-    // 拿不到就维持原样：按钮点下去以插件当时的状态为准，文案旧一点不影响正确性
+    // 拿不到就维持原样：文案与凭据仍是同一份，按下去要么正是看到的那个，要么插件
+    // 认出凭据过期、请用户刷新——不会对一个没看到的东西动手
   }
 }
 

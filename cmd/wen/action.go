@@ -23,7 +23,7 @@ const (
 
 // runAction 触发一个插件操作并跟踪到结束。
 func runAction(b backend, pluginName string, act plugin.ActionDef) error {
-	if err := b.startPluginAction(pluginName, act.Key); err != nil {
+	if err := b.startPluginAction(pluginName, act.Key, act.Token); err != nil {
 		return err
 	}
 	note(trf("cli.action.started", "▶ %s 已开始（Ctrl+C 只是退出查看，不会中断服务端流程）", act.Label))

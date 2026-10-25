@@ -29,6 +29,7 @@ import (
 	"wen/internal/plugin/builtin/bundles"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
+	"wen/internal/plugin/builtin/growth"
 	"wen/internal/plugin/builtin/health"
 	"wen/internal/plugin/builtin/heartbeat"
 	"wen/internal/plugin/builtin/larkbot"
@@ -344,7 +345,8 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 	return []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
-		// 后者才能形成追加与覆盖的语义；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，
+		// 后者才能形成追加与覆盖的语义；growth 紧跟两套人格设定：成长是长在设定之上的一层，
+		// 它的 [这些日子的变化] 读起来是「设定之后的补充」；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，
 		// weather 紧跟 scene：它讲的是舞台之外那个现实地方的天气，与舞台冲突时以舞台为准，
 		// 这条规则得排在舞台设定之后才读得通；
 		// belongings 排在舞台之后：持有物是舞台上的资产，先立角色与舞台才有归属对象；
@@ -357,7 +359,7 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近；
 		// style_watch 跟在 presence 之后：它不注入任何提示词，只观察轮次结束，放在
 		// 角色演绎这组的末尾是为了设置页上与 mood、presence 同节展示
-		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), presence.New(),
+		roleplay.New(), dualpersona.New(), growth.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), presence.New(),
 		stylewatch.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
