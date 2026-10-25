@@ -35,9 +35,10 @@ type fakeILink struct {
 	qrStatus chan statusResponse // 扫码状态剧本，空时返回 wait
 	qrCount  atomic.Int32        // get_bot_qrcode 被调用的次数
 
-	expireOnce atomic.Bool // 下一次 getupdates 返回 errcode -14
-	bufSeq     atomic.Int32
-	lastReqBuf atomic.Value // 最近一次 getupdates 请求携带的游标
+	expireOnce     atomic.Bool // 下一次 getupdates 返回 errcode -14
+	bufSeq         atomic.Int32
+	lastReqBuf     atomic.Value // 最近一次 getupdates 请求携带的游标
+	lastStatusHost atomic.Value // 最近一次查扫码状态打到的主机
 }
 
 func newFakeILink(t *testing.T) *fakeILink {
@@ -50,7 +51,16 @@ func newFakeILink(t *testing.T) *fakeILink {
 	f.lastReqBuf.Store("")
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ilink/bot/get_bot_qrcode", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /ilink/bot/get_bot_qrcode", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			LocalTokenList []string `json:"local_token_list"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LocalTokenList == nil {
+			f.t.Error("取二维码应 POST 一个带 local_token_list 的请求体")
+		}
+		if r.Header.Get("iLink-App-Id") != iLinkAppID || r.Header.Get("Authorization") != "" {
+			f.t.Error("取二维码应带应用请求头、不带鉴权")
+		}
 		n := f.qrCount.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"qrcode":             fmt.Sprintf("QR%d", n),
@@ -58,6 +68,10 @@ func newFakeILink(t *testing.T) *fakeILink {
 		})
 	})
 	mux.HandleFunc("GET /ilink/bot/get_qrcode_status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("iLink-App-Id") != iLinkAppID || r.Header.Get("iLink-App-ClientVersion") != clientVersionHeader {
+			f.t.Error("查扫码状态应带应用请求头")
+		}
+		f.lastStatusHost.Store(r.Host)
 		select {
 		case st := <-f.qrStatus:
 			_ = json.NewEncoder(w).Encode(st)
@@ -126,10 +140,10 @@ func newFakeILink(t *testing.T) *fakeILink {
 	return f
 }
 
-var wxMsgCounter atomic.Int64
+var wxMsgCounter atomic.Uint64
 
 // pushText 注入一条私聊文本消息，返回其去重键（message_id）。
-func (f *fakeILink) pushText(from, text string) int64 {
+func (f *fakeILink) pushText(from, text string) uint64 {
 	id := wxMsgCounter.Add(1)
 	f.inbox <- wxMessage{
 		MessageID: id, FromUserID: from, ToUserID: "bot@im.bot",

@@ -39,7 +39,7 @@ func (p *Plugin) setTyping(ctx context.Context, userID, contextToken string, on 
 		"ilink_user_id": userID,
 		"typing_ticket": ticket,
 		"status":        status,
-		"base_info":     baseInfo{ChannelVersion: channelVersion},
+		"base_info":     newBaseInfo(),
 	}
 	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/sendtyping", body, creds.BotToken, apiTimeout)
 	if err != nil {
@@ -61,7 +61,7 @@ func (p *Plugin) fetchTypingTicket(ctx context.Context, creds credentials, userI
 	body := map[string]any{
 		"ilink_user_id": userID,
 		"context_token": contextToken,
-		"base_info":     baseInfo{ChannelVersion: channelVersion},
+		"base_info":     newBaseInfo(),
 	}
 	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/getconfig", body, creds.BotToken, apiTimeout)
 	if err != nil {

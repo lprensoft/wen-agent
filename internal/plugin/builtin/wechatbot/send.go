@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"wen/internal/i18n"
 
@@ -27,9 +28,15 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 		i18n.Logf(p.langOf(), "log.wechat.reply_no_token", "wechat_bot: 缺少 context_token，无法回复 %s", userID)
 		return
 	}
+	if p.paused() {
+		i18n.Logf(p.langOf(), "log.wechat.send_paused", "wechat_bot: 微信侧 token 已失效，暂停期间丢弃发给 %s 的消息", userID)
+		return
+	}
 
 	if format == formatPlain {
 		text = mdtext.ToPlainText(p.langOf(), text)
+	} else {
+		text = filterMarkdown(text)
 	}
 	chunks := mdtext.ChunkMarkdown(text, chunkLimit)
 	total := len(chunks)
@@ -46,6 +53,20 @@ func (p *Plugin) send(ctx context.Context, userID, text, contextToken string) {
 	}
 }
 
+// pauseUntil 记下 -14 之后的暂停截止时刻。
+func (p *Plugin) pauseUntil(t time.Time) {
+	p.mu.Lock()
+	p.pausedUntil = t
+	p.mu.Unlock()
+}
+
+// paused 判断此刻是否在 -14 之后的暂停期里。
+func (p *Plugin) paused() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return time.Now().Before(p.pausedUntil)
+}
+
 // sendMessage 发送单条文本消息（message_state=FINISH，非流式）。
 func (p *Plugin) sendMessage(ctx context.Context, creds credentials, userID, text, contextToken string) error {
 	body := map[string]any{
@@ -57,7 +78,7 @@ func (p *Plugin) sendMessage(ctx context.Context, creds credentials, userID, tex
 			ContextToken: contextToken,
 			ItemList:     []messageItem{{Type: 1, TextItem: &textItem{Text: text}}},
 		},
-		"base_info": baseInfo{ChannelVersion: channelVersion},
+		"base_info": newBaseInfo(),
 	}
 	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/sendmessage", body, creds.BotToken, apiTimeout)
 	if err != nil {

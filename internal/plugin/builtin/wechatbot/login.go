@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,11 +160,14 @@ type qrResponse struct {
 }
 
 type statusResponse struct {
-	Status      string `json:"status"` // wait / scaned / confirmed / expired
-	BotToken    string `json:"bot_token"`
-	IlinkBotID  string `json:"ilink_bot_id"`
-	BaseURL     string `json:"baseurl"`
-	IlinkUserID string `json:"ilink_user_id"` // 扫码人
+	// wait / scaned / confirmed / expired，以及官方 2.x 新增的 need_verifycode /
+	// verify_code_blocked / scaned_but_redirect / binded_redirect
+	Status       string `json:"status"`
+	RedirectHost string `json:"redirect_host"` // scaned_but_redirect 时切到这里继续轮询
+	BotToken     string `json:"bot_token"`
+	IlinkBotID   string `json:"ilink_bot_id"`
+	BaseURL      string `json:"baseurl"`
+	IlinkUserID  string `json:"ilink_user_id"` // 扫码人
 }
 
 // bindFlow 是绑定流程主体：取二维码 → 轮询扫码状态（过期自动刷新）→ 持久化凭证并起轮询。
@@ -192,13 +196,14 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 		"请用微信扫码并确认（微信 App：我 → 设置 → 插件 → ClawBot）"), png, qr.QrcodeImgContent)
 
 	refreshes := 0
+	pollBase := apiBase // 跨机房时服务端会让我们换个地址继续轮询
 	for {
 		if ctx.Err() != nil {
 			p.setBind(gen, plugin.ActionError, i18n.T(lang, "plugin.wechat_bot.bind.timeout",
 				"绑定超时或已取消，请重新发起。"), nil, "")
 			return
 		}
-		st, err := p.pollQRStatus(ctx, apiBase, qr.Qrcode)
+		st, err := p.pollQRStatus(ctx, pollBase, qr.Qrcode)
 		if err != nil {
 			if ctx.Err() != nil {
 				p.setBind(gen, plugin.ActionError, i18n.T(lang, "plugin.wechat_bot.bind.timeout",
@@ -209,6 +214,34 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 			return
 		}
 		switch st.Status {
+		case "scaned_but_redirect":
+			if st.RedirectHost != "" {
+				pollBase = redirectBase(apiBase, st.RedirectHost)
+				i18n.Logf(lang, "log.wechat.bind_redirect", "wechat_bot: 扫码后切到 %s 继续查询", st.RedirectHost)
+			}
+			p.setBind(gen, plugin.ActionPending, i18n.T(lang, "plugin.wechat_bot.bind.scanned",
+				"已扫码，请在微信中确认连接…"), nil, "")
+		case "need_verifycode":
+			// 这里没有输入验证码的入口：设置页的操作只有按钮。如实说明，不让它一声不响地
+			// 等到超时
+			fail("%s", i18n.T(lang, "plugin.wechat_bot.bind.err_verifycode",
+				"微信要求输入手机上显示的验证数字，这里暂不支持输入。请稍后重新发起绑定，或换个网络再试"))
+			return
+		case "verify_code_blocked":
+			fail("%s", i18n.T(lang, "plugin.wechat_bot.bind.err_verify_blocked", "验证失败次数过多，请稍后再试"))
+			return
+		case "binded_redirect":
+			p.mu.Lock()
+			bound := p.creds.valid()
+			p.mu.Unlock()
+			if bound {
+				p.setBind(gen, plugin.ActionDone, i18n.T(lang, "plugin.wechat_bot.bind.already",
+					"微信提示已经绑定过，无需重复绑定。"), nil, "")
+			} else {
+				fail("%s", i18n.T(lang, "plugin.wechat_bot.bind.err_already",
+					"微信提示已经绑定过，但这里没有保存凭证；请在微信的 ClawBot 插件里解除绑定后重新扫码"))
+			}
+			return
 		case "scaned":
 			p.setBind(gen, plugin.ActionPending, i18n.T(lang, "plugin.wechat_bot.bind.scanned",
 				"已扫码，请在微信中确认连接…"), nil, "")
@@ -219,6 +252,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 				return
 			}
 			qr, err = p.fetchQR(ctx, apiBase)
+			pollBase = apiBase // 新码从固定地址重新开始
 			if err != nil {
 				fail(i18n.T(lang, "plugin.wechat_bot.bind.err_refresh", "刷新二维码出错: %v"), err)
 				return
@@ -268,7 +302,10 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, lang s
 
 func (p *Plugin) fetchQR(ctx context.Context, apiBase string) (qrResponse, error) {
 	var qr qrResponse
-	raw, err := apiGet(ctx, apiBase, "/ilink/bot/get_bot_qrcode?bot_type=3", nil, apiTimeout)
+	// 官方 2.3 起改为 POST，带本机保存过的 bot token（至多 10 个）；我们不把凭证发给
+	// 无鉴权的接口，传空列表——它本来就允许为空
+	raw, err := apiPost(ctx, apiBase, "/ilink/bot/get_bot_qrcode?bot_type=3",
+		map[string]any{"local_token_list": []string{}}, "", apiTimeout)
 	if err != nil {
 		return qr, err
 	}
@@ -281,13 +318,24 @@ func (p *Plugin) fetchQR(ctx context.Context, apiBase string) (qrResponse, error
 	return qr, nil
 }
 
-// pollQRStatus 长轮询一次扫码状态；客户端超时按 wait 处理（长轮询的正常情形）。
+// redirectBase 把服务端给的 redirect_host 拼成地址。官方固定用 https；这里沿用当前
+// 地址的协议，线上就是 https，本地测试的假服务是 http。
+func redirectBase(current, host string) string {
+	scheme := "https"
+	if u, err := url.Parse(current); err == nil && u.Scheme != "" {
+		scheme = u.Scheme
+	}
+	return scheme + "://" + host
+}
+
+// pollQRStatus 长轮询一次扫码状态。请求失败（超时与网络错误）按 wait 处理，与官方一致：
+// 跨机房切换、手机网络抖动时一次失败不该让整个绑定作废，总时限由绑定流程的 ctx 兜住。
 func (p *Plugin) pollQRStatus(ctx context.Context, apiBase, qrcodeID string) (statusResponse, error) {
 	var st statusResponse
-	raw, err := apiGet(ctx, apiBase, "/ilink/bot/get_qrcode_status?qrcode="+qrcodeID,
-		map[string]string{"iLink-App-ClientVersion": "1"}, longPollTimeout)
+	raw, err := apiGet(ctx, apiBase, "/ilink/bot/get_qrcode_status?qrcode="+url.QueryEscape(qrcodeID),
+		nil, longPollTimeout)
 	if err != nil {
-		if ctx.Err() == nil && isTimeout(err) {
+		if ctx.Err() == nil {
 			return statusResponse{Status: "wait"}, nil
 		}
 		return st, err

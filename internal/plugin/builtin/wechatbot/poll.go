@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,9 +78,10 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 		}
 		if resp.Ret != 0 || resp.Errcode != 0 {
 			if resp.Ret == errcodeExpired || resp.Errcode == errcodeExpired {
-				i18n.Logf(p.langOf(), "log.wechat.session_expired", "wechat_bot: 微信侧会话已过期（errcode %d），暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
+				i18n.Logf(p.langOf(), "log.wechat.session_expired", "wechat_bot: 微信侧 token 已失效（errcode %d），收发都暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
 					errcodeExpired, pause)
 				fails = 0
+				p.pauseUntil(time.Now().Add(pause))
 				sleepCtx(ctx, pause)
 				continue
 			}
@@ -110,7 +112,7 @@ func (p *Plugin) getUpdates(ctx context.Context, creds credentials, buf string, 
 	var resp getUpdatesResp
 	body := map[string]any{
 		"get_updates_buf": buf,
-		"base_info":       baseInfo{ChannelVersion: channelVersion},
+		"base_info":       newBaseInfo(),
 	}
 	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/getupdates", body, creds.BotToken, timeout)
 	if err != nil {
@@ -162,7 +164,7 @@ func (p *Plugin) dispatch(ctx context.Context, msg wxMessage) {
 	}
 	dedupKey := msg.ClientID
 	if msg.MessageID != 0 {
-		dedupKey = fmt.Sprintf("%d", msg.MessageID)
+		dedupKey = strconv.FormatUint(msg.MessageID, 10)
 	}
 	p.handleInbound(ctx, in, dedupKey, unsupported)
 }
