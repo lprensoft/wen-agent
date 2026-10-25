@@ -1408,7 +1408,9 @@ async function startPluginAction(pluginName, actionDef, draft) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: draft || {} }),
+      // token 是这个按钮展示时插件给的凭据，原样带回：插件据此核对点的是哪一个
+      //（批准的是这一页上显示的那条，而不是别的窗口刷新出来的另一条）
+      body: JSON.stringify({ config: draft || {}, token: actionDef.token || "" }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

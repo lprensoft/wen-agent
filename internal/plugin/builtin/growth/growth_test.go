@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,10 +38,20 @@ func newTestPlugin(t *testing.T, cfg map[string]any, run plugin.RunTurnFunc, not
 	return p, c
 }
 
-// reflecting 是反思轮次里的 ctx：发起方是 growth，可见域按 tag。
+// testRuns 给直接调用的用例发反思编号，从很大的数起，不与插件自己发的号撞上。
+var testRuns atomic.Int64
+
+func init() { testRuns.Store(1 << 40) }
+
+// reflecting 是一次新反思的轮次 ctx：自己的反思编号、发起方是 growth、可见域按 tag。
 func reflecting(tag string) context.Context {
-	ctx := plugin.WithTurnOrigin(context.Background(), "growth")
-	return plugin.WithScope(ctx, plugin.Scope{Write: tag})
+	return asTurn(withRun(context.Background(), testRuns.Add(1)), tag)
+}
+
+// asTurn 把 runReflect 交给 runTurn 的 ctx（里面带着那次反思的编号）变成 Agent 裁决
+// 之后的轮次 ctx：发起方是 growth（Manager 注入），可见域是此刻裁决出的 tag。
+func asTurn(ctx context.Context, tag string) context.Context {
+	return plugin.WithScope(plugin.WithTurnOrigin(ctx, "growth"), plugin.Scope{Write: tag})
 }
 
 // claimed 模拟一轮反思：发起方是 growth、可见域按 tag，并像真实轮次那样在裁决之后
@@ -165,7 +176,7 @@ func TestProposeOneAtATimeThenApproveAndUndo(t *testing.T) {
 		t.Errorf("批准按钮的说明应接着那条提议：%+v", acts[0])
 	}
 
-	if err := p.StartAction(context.Background(), actionApprove); err != nil {
+	if err := openWindow(p).click(p, actionApprove); err != nil {
 		t.Fatal(err)
 	}
 	st := load(t, p, "")
@@ -192,8 +203,7 @@ func TestRejectAndUndoDetail(t *testing.T) {
 	p, _ := newTestPlugin(t, nil, nil, nil)
 	ctx := claimed(t, p, "")
 	_, _ = call(t, p.Tools()[1], ctx, `{"text":"变得爱热闹","basis":"x","why":"y"}`)
-	p.Actions() // 设置页先把列表拉出来，用户看到了这一条
-	if err := p.StartAction(context.Background(), actionReject); err != nil {
+	if err := openWindow(p).click(p, actionReject); err != nil {
 		t.Fatal(err)
 	}
 	if st := load(t, p, ""); st.Pending != nil || len(st.Core) != 0 {
@@ -260,16 +270,16 @@ type turnRec struct {
 	inputs []string
 	err    error
 	ch     chan struct{}
-	onTurn func(sid string)
+	onTurn func(ctx context.Context, sid string)
 }
 
-func (r *turnRec) run(_ context.Context, sid, input string) (string, error) {
+func (r *turnRec) run(ctx context.Context, sid, input string) (string, error) {
 	r.mu.Lock()
 	r.inputs = append(r.inputs, input)
 	err, on := r.err, r.onTurn
 	r.mu.Unlock()
 	if on != nil {
-		on(sid)
+		on(ctx, sid)
 	}
 	r.ch <- struct{}{}
 	return "", err
@@ -309,8 +319,8 @@ func TestReflectOncePerDayAfterConversation(t *testing.T) {
 		return nil
 	})
 	// 反思轮次里模型记下一条，模拟真实的工具调用（发起方由 Manager 注入，这里手工补上）
-	rec.onTurn = func(sid string) {
-		ctx := reflecting("")
+	rec.onTurn = func(rctx context.Context, sid string) {
+		ctx := asTurn(rctx, "")
 		_, _ = p.TurnPrompt(ctx, plugin.TurnEvent{SessionID: sid}) // 裁决之后认领，与真实轮次一样
 		_, _ = p.Tools()[0].Execute(ctx, json.RawMessage(`{"action":"add","text":"爱上手冲","basis":"x","why":"y"}`))
 	}
@@ -408,10 +418,10 @@ func TestReflectionFollowsPersonaDecidedAtRunTime(t *testing.T) {
 
 	var listing string
 	var innerErr error
-	rec.onTurn = func(sid string) {
+	rec.onTurn = func(rctx context.Context, sid string) {
 		// Agent 在会话锁内重新裁决：此刻是表人格
-		listing, _ = p.TurnPrompt(reflecting(""), plugin.TurnEvent{SessionID: sid})
-		_, innerErr = p.Tools()[0].Execute(reflecting("inner"), json.RawMessage(`{"action":"add","text":"x","basis":"y","why":"z"}`))
+		listing, _ = p.TurnPrompt(asTurn(rctx, ""), plugin.TurnEvent{SessionID: sid})
+		_, innerErr = p.Tools()[0].Execute(asTurn(rctx, "inner"), json.RawMessage(`{"action":"add","text":"x","basis":"y","why":"z"}`))
 	}
 	endTurnIn(p, "inner", "s1", false) // 触发时是里人格
 	rec.wait(t)
@@ -448,16 +458,33 @@ func TestSecondReflectionSameDayIsNotClaimed(t *testing.T) {
 	}
 }
 
-// 设置页显示的是表人格那条提议，之后里人格新提了一条：按下批准处理的仍是看到的那一条；
-// 看到的那条在别处被处理掉了，就拒绝并请用户刷新，而不是批准一条没读过的。
+// window 是一个设置页窗口：拉一次列表，记下各按钮的展示凭据。
+type window map[string]string
+
+func openWindow(p *Plugin) window {
+	w := window{}
+	for _, a := range p.Actions() {
+		w[a.Key] = a.Token
+	}
+	return w
+}
+
+// click 在这个窗口上按下一个按钮：请求带着这个窗口展示时的凭据。
+func (w window) click(p *Plugin, key string) error {
+	return p.StartAction(plugin.WithActionToken(context.Background(), w[key]), key)
+}
+
+// 设置页显示的是表人格那条提议，之后里人格新提了一条：按下批准处理的仍是看到的那一条。
+// 两个窗口：A 停在提议 X 上，B 驳回了 X、刷新出新的提议 Y；A 上的按钮按下去必须拒绝，
+// 而不是批准 Y——只记「最后一次展示的是哪条」的做法在这里会通过校验。
 func TestApproveActsOnTheShownProposal(t *testing.T) {
 	p, c := newTestPlugin(t, nil, nil, nil)
 	_, _ = call(t, p.Tools()[1], claimed(t, p, ""), `{"text":"说话直了","basis":"x","why":"y"}`)
-	p.Actions() // 用户看到的是「说话直了」
+	shown := openWindow(p) // 用户看到的是「说话直了」
 	c.add(time.Minute)
 	_, _ = call(t, p.Tools()[1], claimed(t, p, "inner"), `{"text":"里人格的变化","basis":"x","why":"y"}`)
 
-	if err := p.StartAction(context.Background(), actionApprove); err != nil {
+	if err := shown.click(p, actionApprove); err != nil {
 		t.Fatal(err)
 	}
 	if st := load(t, p, ""); len(st.Core) != 1 || st.Core[0].Text != "说话直了" {
@@ -467,18 +494,30 @@ func TestApproveActsOnTheShownProposal(t *testing.T) {
 		t.Error("没看到的那一条不该被处理")
 	}
 
-	// 界面停在「里人格的变化」，它在别处被驳回了，又冒出一条新的：按下去必须拒绝
-	p.Actions()
+	winA := openWindow(p) // 两个窗口此刻都显示「里人格的变化」
+	winB := openWindow(p)
+	if err := winB.click(p, actionReject); err != nil {
+		t.Fatal(err)
+	}
 	_, _ = p.storeFor("inner").Update(func(st *State) (bool, []LogEntry, error) {
 		st.Pending = &Entry{ID: "c99", Text: "另一条没给人看过的", Since: c.now()}
 		return true, nil, nil
 	})
-	err := p.StartAction(context.Background(), actionApprove)
+	_ = openWindow(p) // 窗口 B 刷新，看到了新的那条
+	err := winA.click(p, actionApprove)
 	if err == nil || !strings.Contains(err.Error(), "刷新") {
-		t.Errorf("看到的那条变了，应请用户刷新：%v", err)
+		t.Errorf("窗口 A 看到的那条已经没了，应请用户刷新：%v", err)
 	}
 	if st := load(t, p, "inner"); st.Pending == nil || len(st.Core) != 0 {
 		t.Errorf("没看过的那条不该被批准：%+v", st)
+	}
+
+	// 不带凭据（旧客户端）一律拒绝；伪造一个不存在的域也一样
+	if err := p.StartAction(context.Background(), actionApprove); err == nil {
+		t.Error("没带凭据不该放行")
+	}
+	if err := p.StartAction(plugin.WithActionToken(context.Background(), "../x/c99"), actionApprove); err == nil {
+		t.Error("凭据里的域不在磁盘上，不该放行")
 	}
 }
 
@@ -490,8 +529,8 @@ func TestReflectionKeepsActivityThatHappenedDuringIt(t *testing.T) {
 		p, c := newTestPlugin(t, nil, rec.run, nil)
 		endTurnIn(p, "", "s1", true) // 第一天有人来过
 		c.add(24 * time.Hour)
-		rec.onTurn = func(sid string) {
-			_, _ = p.TurnPrompt(reflecting(""), plugin.TurnEvent{SessionID: sid})
+		rec.onTurn = func(rctx context.Context, sid string) {
+			_, _ = p.TurnPrompt(asTurn(rctx, ""), plugin.TurnEvent{SessionID: sid})
 			if during {
 				c.add(time.Minute)
 				endTurnIn(p, "", "s2", true) // 反思进行中，另一个会话里有人说话
@@ -503,5 +542,78 @@ func TestReflectionKeepsActivityThatHappenedDuringIt(t *testing.T) {
 		if st := load(t, p, ""); st.Dirty != during {
 			t.Errorf("反思期间有人来过=%v，收尾后 Dirty 应为 %v，实际 %v", during, during, st.Dirty)
 		}
+	}
+}
+
+// 人格切换让同一个会话上排着两次反思：先到的那次认领了表人格、还在跑；另一次一直撞上
+// 会话忙、重试耗尽后收尾。后者不能把前者的认领当成自己的去记账、去清理——前者接下来
+// 的改动照样生效，注记也照样留下。
+func TestOverlappingReflectionsKeepTheirOwnClaims(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		calls   int
+		release = make(chan struct{})
+		toolErr = make(chan error, 1)
+		notices []string
+	)
+	var p *Plugin
+	run := func(ctx context.Context, sid, _ string) (string, error) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if !first {
+			return "", plugin.ErrSessionBusy // 第二次反思：会话正被第一次占着
+		}
+		turn := asTurn(ctx, "")
+		_, _ = p.TurnPrompt(turn, plugin.TurnEvent{SessionID: sid}) // 认领表人格
+		<-release                                                   // 第二次在这期间收尾
+		_, err := p.Tools()[0].Execute(turn, json.RawMessage(`{"action":"add","text":"爱上手冲","basis":"x","why":"y"}`))
+		toolErr <- err
+		return "", nil
+	}
+	p, c := newTestPlugin(t, nil, run, func(_ context.Context, _, text string) error {
+		mu.Lock()
+		notices = append(notices, text)
+		mu.Unlock()
+		return nil
+	})
+	yesterday := logicalDay(c.now())
+	for _, tag := range []string{"", "inner"} {
+		_, _ = p.storeFor(tag).Update(func(st *State) (bool, []LogEntry, error) {
+			st.LastReflect, st.Dirty = yesterday, true
+			return true, nil, nil
+		})
+	}
+	c.add(24 * time.Hour)
+	endTurnIn(p, "inner", "s1", false)
+	endTurnIn(p, "", "s1", false)
+
+	// 等第二次重试耗尽、收尾（只剩第一次还在跑）
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		p.mu.Lock()
+		n := len(p.reflecting)
+		p.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("第二次反思没有收尾")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	if err := <-toolErr; err != nil {
+		t.Fatalf("第一次反思的认领被另一次清掉了：%v", err)
+	}
+	waitIdle(t, p)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notices) != 1 || !strings.Contains(notices[0], "爱上手冲") {
+		t.Errorf("第一次反思的改动应汇成一条注记：%v", notices)
+	}
+	if st := load(t, p, ""); st.LastReflect != logicalDay(c.now()) || len(st.Details) != 1 {
+		t.Errorf("表人格应记作今天反思过并留下改动：%+v", st)
 	}
 }

@@ -267,15 +267,19 @@ func (s *Server) setPluginConfig(w http.ResponseWriter, r *http.Request) {
 
 // startPluginAction 触发插件的一个操作入口（长流程在插件后台进行，本请求立即返回）。
 //
-// 请求体可选，形如 {"config": {...}}：配置弹窗里当前填写、尚未保存的值。它随 ctx 交给
-// 插件（见 plugin.WithActionValues），使「测试」类操作能验证还没保存的配置。空 body 合法，
-// 解析失败也只当作没带草稿值——操作本身不该因为这个失败。
+// 请求体可选，形如 {"config": {...}, "token": "..."}：config 是配置弹窗里当前填写、尚未
+// 保存的值，随 ctx 交给插件（见 plugin.WithActionValues），使「测试」类操作能验证还没保存
+// 的配置；token 是按钮展示时插件给的凭据（见 plugin.ActionDef.Token），原样交回，插件据此
+// 核对用户点的是哪一个。空 body 合法，解析失败也只当作两样都没带——操作本身不该因为这个
+// 失败，需要凭据的插件自己会拒绝。
 func (s *Server) startPluginAction(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Config map[string]any `json:"config"`
+		Token  string         `json:"token"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	ctx := plugin.WithActionValues(r.Context(), req.Config)
+	ctx = plugin.WithActionToken(ctx, req.Token)
 	if err := s.plugins.StartAction(ctx, r.PathValue("name"), r.PathValue("key")); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

@@ -18,16 +18,18 @@ import (
 // inReflection 判定本轮是不是 growth 自己发起的反思。
 func inReflection(ctx context.Context) bool { return plugin.TurnOriginFrom(ctx) == "growth" }
 
-// mayChange 判定本轮能不能改这个域：是反思轮次，且这一轮已经在裁决之后认领了它
-// （见 reflectionPrompt）。没认领的——人格今天已经反思过、或别的会话正在替它反思——
+// mayChange 判定本轮能不能改这个域：是反思轮次，且正是**这次**反思在裁决之后认领了它
+// （见 reflectionPrompt）。没认领的——人格今天已经反思过、或别的那次反思正认领着它——
 // 一律拒绝，否则一轮反思可能改到它没看过清单的那个人格上。
 func (p *Plugin) mayChange(ctx context.Context) bool {
-	if !inReflection(ctx) {
+	run := runFrom(ctx)
+	if !inReflection(ctx) || run == 0 {
 		return false
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.claimed[plugin.ScopeFrom(ctx).Write]
+	owner, ok := p.claimedBy[plugin.ScopeFrom(ctx).Write]
+	return ok && owner == run
 }
 
 func errNotInReflection(lang string) error {
@@ -46,11 +48,12 @@ func checkLen(lang, field, v string, max int) error {
 	return nil
 }
 
-// recordChange 记下本轮反思做了什么，轮次结束后汇成一条会话注记。
-func (p *Plugin) recordChange(tag, line string) {
+// recordChange 记下这次反思做了什么，收尾时汇成一条会话注记。
+func (p *Plugin) recordChange(ctx context.Context, line string) {
+	run := runFrom(ctx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.changed[tag] = append(p.changed[tag], line)
+	p.changed[run] = append(p.changed[run], line)
 }
 
 // ---------- grow_detail ----------
@@ -175,7 +178,7 @@ func (t *detailTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	p.recordChange(tag, noticeLine)
+	p.recordChange(ctx, noticeLine)
 	return result, nil
 }
 
@@ -251,7 +254,7 @@ func (t *proposeTool) Execute(ctx context.Context, args json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	p.recordChange(tag, i18n.Tf(s.lang, "plugin.growth.notice.proposed", "提议了一个大的变化「%s」，等你在设置页批准", a.Text))
+	p.recordChange(ctx, i18n.Tf(s.lang, "plugin.growth.notice.proposed", "提议了一个大的变化「%s」，等你在设置页批准", a.Text))
 	return prompt.Tf(s.lang, "prompt.growth.result.proposed",
 		"提议已经交上去了：%s。它要等对方批准才生效，在那之前照旧就好。", a.Text), nil
 }

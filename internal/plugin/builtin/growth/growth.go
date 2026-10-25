@@ -72,19 +72,22 @@ type Plugin struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	reflecting map[string]bool
-	// claims 是「这个会话上的反思轮次认领了哪个域」，claimed 是被认领的域：反思落在
-	// 哪个人格上由那一轮在裁决之后自己认领（见 runReflect），工具只接受已认领的域。
-	claims  map[string]string
-	claimed map[string]bool
-	// changed 记下反思轮次里每个域做了哪些改动，轮次结束后汇成一条会话注记。
-	changed map[string][]string
+	// 每一次反思有自己的编号（runSeq 发号，随 ctx 进入那一轮）。claims 是「这次反思
+	// 认领了哪个域」，claimedBy 是「这个域被哪次反思认领了」：反思落在哪个人格上由那
+	// 一轮在裁决之后自己认领（见 runReflect），工具只接受本次反思认领的域。按编号而
+	// 不按会话记，是因为同一个会话上可能排着两次反思（人格切换会让两个域各触发一次），
+	// 按会话记的话一次会把另一次的认领当成自己的去记账、去清理。
+	runSeq    int64
+	claims    map[int64]string
+	claimedBy map[string]int64
+	// changed 记下每次反思做了哪些改动，收尾时汇成一条会话注记。
+	changed map[int64][]string
 	// lastActive 是每个域最近一次真人对话的时刻（只在内存里）：反思收尾时只消费它
 	// 开始之前的那些。
 	lastActive map[string]time.Time
 
 	actMu    sync.Mutex
 	actState map[string]plugin.ActionState
-	shown    string // 设置页最后一次展示的待批准提议（域/编号），批准与驳回只认它
 }
 
 func New() *Plugin {
@@ -93,8 +96,8 @@ func New() *Plugin {
 		dailyChanges: defDailyChanges, maxInjectBytes: defMaxInjectBytes,
 		now: time.Now, settle: 20 * time.Second, busyRetry: time.Minute, busyMax: 3,
 		runTimeout: 5 * time.Minute,
-		stores:     map[string]*Store{}, reflecting: map[string]bool{}, changed: map[string][]string{},
-		claims: map[string]string{}, claimed: map[string]bool{}, lastActive: map[string]time.Time{},
+		stores:     map[string]*Store{}, reflecting: map[string]bool{}, changed: map[int64][]string{},
+		claims: map[int64]string{}, claimedBy: map[string]int64{}, lastActive: map[string]time.Time{},
 		actState: map[string]plugin.ActionState{},
 	}
 }
@@ -166,8 +169,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.notice = ictx.Notice
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.reflecting = map[string]bool{}
-	p.claims, p.claimed, p.lastActive = map[string]string{}, map[string]bool{}, map[string]time.Time{}
-	p.changed = map[string][]string{}
+	p.claims, p.claimedBy, p.lastActive = map[int64]string{}, map[string]int64{}, map[string]time.Time{}
+	p.changed = map[int64][]string{}
 	return nil
 }
 
@@ -245,7 +248,7 @@ func (p *Plugin) storeFor(tag string) *Store {
 // 习惯不是表人格的习惯。
 func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, error) {
 	if inReflection(ctx) {
-		return p.reflectionPrompt(ctx, ev.SessionID)
+		return p.reflectionPrompt(ctx)
 	}
 	s := p.snapshot()
 	store := p.storeFor(plugin.ScopeFrom(ctx).Write)

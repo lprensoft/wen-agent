@@ -28,7 +28,8 @@ type backend interface {
 	setPluginConfig(name string, cfg map[string]any) error
 	// 插件操作（扫码绑定这类）。只有在线模式可用：操作是运行时行为，
 	// 离线模式下插件根本没有初始化，Status 里也不会暴露任何操作。
-	startPluginAction(name, key string) error
+	// token 是该操作列出时插件给的展示凭据（plugin.ActionDef.Token），原样带回。
+	startPluginAction(name, key, token string) error
 	pluginActionState(name, key string) (plugin.ActionState, error)
 
 	loadModels() (modelsDoc, error)
@@ -108,8 +109,8 @@ func (b *onlineBackend) setPluginConfig(name string, cfg map[string]any) error {
 	return b.c.do("PUT", "/api/plugins/"+name+"/config", map[string]any{"config": cfg}, nil)
 }
 
-func (b *onlineBackend) startPluginAction(name, key string) error {
-	return b.c.do("POST", "/api/plugins/"+name+"/actions/"+key, map[string]any{}, nil)
+func (b *onlineBackend) startPluginAction(name, key, token string) error {
+	return b.c.do("POST", "/api/plugins/"+name+"/actions/"+key, map[string]any{"token": token}, nil)
 }
 
 func (b *onlineBackend) pluginActionState(name, key string) (plugin.ActionState, error) {
@@ -196,7 +197,7 @@ func (b *offlineBackend) setPluginConfig(name string, cfg map[string]any) error 
 	return b.plugins.SetConfig(name, cfg)
 }
 
-func (b *offlineBackend) startPluginAction(string, string) error {
+func (b *offlineBackend) startPluginAction(string, string, string) error {
 	return fmt.Errorf("%s", tr("cli.err.action_needs_server", "插件操作需要服务在运行，请先启动 wen"))
 }
 

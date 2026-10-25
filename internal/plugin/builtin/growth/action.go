@@ -3,6 +3,7 @@ package growth
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,22 +31,17 @@ const (
 // logView 是「查看成长记录」列出的条数。
 const logView = 30
 
-// Actions 顺手记下这次展示的是哪一条提议（shown）：批准与驳回只处理用户看到的那一条，
-// 见 decide。这是 Actions 唯一的副作用，与「廉价、随时可调」的契约不冲突——它只记
-// 一个标识，不读写任何别的东西。
+// Actions 给批准与驳回两个按钮挂上展示凭据：说明里显示的是哪一条提议（域与编号），
+// 按下时界面原样带回来，见 decide。
 func (p *Plugin) Actions() []plugin.ActionDef {
-	pending := "· —"
-	shown := ""
+	pending, token := "· —", ""
 	if tag, st, ok := p.nextPending(); ok {
 		pending = "· " + st.Pending.Text
-		shown = pendingKey(tag, st.Pending.ID)
+		token = pendingKey(tag, st.Pending.ID)
 	}
-	p.actMu.Lock()
-	p.shown = shown
-	p.actMu.Unlock()
 	return []plugin.ActionDef{
-		{Key: actionApprove, Label: "批准这条改变", Description: "让角色提议的那个大变化生效：", Detail: pending},
-		{Key: actionReject, Label: "驳回这条改变", Description: "不接受角色提议的那个大变化，角色照旧：", Detail: pending},
+		{Key: actionApprove, Label: "批准这条改变", Description: "让角色提议的那个大变化生效：", Detail: pending, Token: token},
+		{Key: actionReject, Label: "驳回这条改变", Description: "不接受角色提议的那个大变化，角色照旧：", Detail: pending, Token: token},
 		{Key: actionUndo, Label: "撤销最近一次改变", Description: "把最近一次成长（新增、修改、放下或批准）还原回去。"},
 		{Key: actionLog, Label: "查看成长记录", Description: "最近的改变，连同依据与「为什么这还是自己」。"},
 		{Key: actionClear, Label: "清空全部成长", Description: "回到只有角色设定的状态，包括各人格分开保存的那几份。成长记录保留。不可撤销。"},
@@ -85,10 +81,24 @@ func (p *Plugin) nextPending() (string, State, bool) {
 	return bestTag, best, found
 }
 
-// pendingKey 是一条提议的身份：哪个域、哪个编号。
+// pendingKey 是一条提议的身份：哪个域、哪个编号。它就是批准与驳回按钮的展示凭据。
 func pendingKey(tag, id string) string { return tag + "/" + id }
 
-func (p *Plugin) StartAction(_ context.Context, key string) error {
+// parsePendingKey 拆开展示凭据，并只认磁盘上真有的域：凭据来自客户端，域名会被拿去
+// 拼目录，不能任它指向别处。
+func (p *Plugin) parsePendingKey(token string) (tag, id string, ok bool) {
+	i := strings.LastIndex(token, "/")
+	if i < 0 || i == len(token)-1 {
+		return "", "", false
+	}
+	tag, id = token[:i], token[i+1:]
+	if !slices.Contains(p.domains(), tag) {
+		return "", "", false
+	}
+	return tag, id, true
+}
+
+func (p *Plugin) StartAction(ctx context.Context, key string) error {
 	lang := p.langOf()
 	var (
 		msg string
@@ -96,7 +106,7 @@ func (p *Plugin) StartAction(_ context.Context, key string) error {
 	)
 	switch key {
 	case actionApprove, actionReject:
-		msg, err = p.decide(lang, key == actionApprove)
+		msg, err = p.decide(lang, key == actionApprove, plugin.ActionTokenFrom(ctx))
 	case actionUndo:
 		msg, err = p.undo(lang)
 	case actionLog:
@@ -130,30 +140,30 @@ func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	return plugin.ActionState{Status: plugin.ActionIdle}, nil
 }
 
-// decide 批准或驳回那条在等的提议——只认用户看到的那一条。
+// decide 批准或驳回按钮上显示的那一条提议——由请求带回的展示凭据指明，不由这里挑。
 //
-// 按下按钮时重新挑一次「下一条」是不够的：界面显示的是 A，这期间 A 在别处被处理掉、
-// 或者别的什么让「下一条」变成了 B，按下去就批准了一条用户根本没读过的改变。所以对上
-// Actions 最后一次展示的那条（域与编号），对不上就拒绝并请用户刷新；写入时再在锁内
-// 核对一遍编号。
-func (p *Plugin) decide(lang string, approve bool) (string, error) {
-	tag, cur, ok := p.nextPending()
-	if !ok {
-		return i18n.T(lang, "plugin.growth.action.no_pending", "现在没有在等批准的改变。"), nil
+// 按下时重新挑一次「下一条」是不够的，记住「最后一次展示的是哪条」也不够（那是全局的，
+// 别的窗口一刷新就改了）：窗口 A 停在提议 A 上，窗口 B 驳回了 A、刷新出 B，A 上的按钮
+// 按下去就成了批准 B。所以只认凭据里的域与编号，写入时在锁内核对那一条还在等；不在了
+// （别处已经处理掉）或者没带凭据，一律拒绝并请用户刷新。
+func (p *Plugin) decide(lang string, approve bool, token string) (string, error) {
+	stale := fmt.Errorf("%s", i18n.T(lang, "plugin.growth.action.stale",
+		"等待批准的改变已经变了，请刷新后看清楚再操作。"))
+	if token == "" {
+		if _, _, ok := p.nextPending(); !ok {
+			return i18n.T(lang, "plugin.growth.action.no_pending", "现在没有在等批准的改变。"), nil
+		}
+		return "", stale
 	}
-	p.actMu.Lock()
-	shown := p.shown
-	p.actMu.Unlock()
-	id := cur.Pending.ID
-	if shown != pendingKey(tag, id) {
-		return "", fmt.Errorf("%s", i18n.T(lang, "plugin.growth.action.stale",
-			"等待批准的改变已经变了，请刷新后看清楚再操作。"))
+	tag, id, ok := p.parsePendingKey(token)
+	if !ok {
+		return "", stale
 	}
 	now := p.now()
 	var text string
 	_, err := p.storeFor(tag).Update(func(st *State) (bool, []LogEntry, error) {
 		if st.Pending == nil || st.Pending.ID != id {
-			return false, nil, nil
+			return false, nil, stale
 		}
 		e := *st.Pending
 		text = e.Text

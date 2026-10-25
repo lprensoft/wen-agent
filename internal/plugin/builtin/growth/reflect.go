@@ -93,18 +93,26 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 // 会话忙限次重试；跑完（不论改没改）都记下认领的那个域今天反思过，失败也记——明天
 // 再说，不在同一天反复烧调用。startedAt 是触发时刻：收尾时只消费它之前的真人对话，
 // 之后来的（包括另一个会话里的）留给下一次。
+//
+// 每次反思发一个编号随 ctx 进入那一轮，认领、改动与收尾都只认自己的编号：同一个会话
+// 上可能同时排着两次反思，不能一次替另一次记账或清理。
 func (p *Plugin) runReflect(ctx context.Context, tag, sid, today string, startedAt time.Time) {
 	defer p.wg.Done()
+	p.mu.Lock()
+	p.runSeq++
+	run := p.runSeq
+	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		delete(p.reflecting, tag)
-		if claimed, ok := p.claims[sid]; ok {
-			delete(p.claimed, claimed)
-			delete(p.changed, claimed)
+		if claimed, ok := p.claims[run]; ok && p.claimedBy[claimed] == run {
+			delete(p.claimedBy, claimed)
 		}
-		delete(p.claims, sid)
+		delete(p.claims, run)
+		delete(p.changed, run)
 		p.mu.Unlock()
 	}()
+	ctx = withRun(ctx, run)
 	select {
 	case <-time.After(p.settle):
 	case <-ctx.Done():
@@ -140,8 +148,8 @@ func (p *Plugin) runReflect(ctx context.Context, tag, sid, today string, started
 	}
 
 	p.mu.Lock()
-	actual, claimed := p.claims[sid]
-	lines := p.changed[actual]
+	actual, claimed := p.claims[run]
+	lines := p.changed[run]
 	p.mu.Unlock()
 	if !claimed {
 		if errors.Is(err, plugin.ErrSessionBusy) {
@@ -178,12 +186,26 @@ func (p *Plugin) runReflect(ctx context.Context, tag, sid, today string, started
 	}
 }
 
+// runKey 是 ctx 中反思编号的键。
+type runKey struct{}
+
+func withRun(ctx context.Context, run int64) context.Context {
+	return context.WithValue(ctx, runKey{}, run)
+}
+
+// runFrom 取出本轮所属的反思编号；不是 growth 发起的反思时为 0。
+func runFrom(ctx context.Context) int64 {
+	v, _ := ctx.Value(runKey{}).(int64)
+	return v
+}
+
 // reflectionPrompt 是反思轮次里的 TurnPrompt：在 Agent 按会话当时的状态裁决了人格
 // 之后调用，于是这里的可见域就是这一轮真正落在的那个人格。认领它，并给出它自己的
-// 成长清单；它今天已经反思过（另一轮先到了），就不认领，只叫这一轮什么都别做。
-func (p *Plugin) reflectionPrompt(ctx context.Context, sid string) (string, error) {
+// 成长清单；它今天已经反思过、或正被另一次反思认领着，就不认领，只叫这一轮什么都别做。
+func (p *Plugin) reflectionPrompt(ctx context.Context) (string, error) {
 	s := p.snapshot()
 	tag := plugin.ScopeFrom(ctx).Write
+	run := runFrom(ctx)
 	store := p.storeFor(tag)
 	if store == nil {
 		return "", nil
@@ -194,13 +216,14 @@ func (p *Plugin) reflectionPrompt(ctx context.Context, sid string) (string, erro
 	}
 	now := p.now()
 	p.mu.Lock()
-	taken := p.claimed[tag]
-	if st.LastReflect != logicalDay(now) && !taken {
-		p.claims[sid] = tag
-		p.claimed[tag] = true
-		p.changed[tag] = nil
+	_, taken := p.claimedBy[tag]
+	_, mine := p.claims[run]
+	if run != 0 && st.LastReflect != logicalDay(now) && !taken && !mine {
+		p.claims[run] = tag
+		p.claimedBy[tag] = run
 	}
-	ok := p.claims[sid] == tag && p.claimed[tag]
+	owner, held := p.claimedBy[tag]
+	ok := run != 0 && held && owner == run
 	p.mu.Unlock()
 	if !ok {
 		return prompt.T(s.lang, "prompt.growth.listing.done", listingDoneZH), nil
