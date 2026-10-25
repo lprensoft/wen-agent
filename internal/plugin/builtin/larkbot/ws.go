@@ -16,7 +16,8 @@ import (
 	"wen/internal/i18n"
 )
 
-// runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出。
+// runWS 起长连接。SDK 的 Start 会阻塞并自带重连，ctx 取消即退出（v3.11.0 起才如此：
+// 更早的版本连上之后是一个不看 ctx 的 select{}，见 ws_test.go）。
 //
 // 长连接的线格式是 protobuf 私有协议，官方不公开，只能用 SDK——这是本项目里
 // 唯一一处「协议层不自己写」的地方。发消息仍是手写 HTTP。
