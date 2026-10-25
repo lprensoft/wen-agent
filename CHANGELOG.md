@@ -9,6 +9,90 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v1.0.0] - 2026-10-25
+
+### 新增
+
+- 角色会犯困，困了去睡觉，睡着时整理上下文
+- 睡着的角色收到消息会被叫醒
+- 角色睡着或忙碌时，心跳不主动找人
+- 消息通道新增「忙时晚点回」开关，默认关闭
+- 新增 `growth` 插件，角色在相处中长出新的喜好与习惯
+- 角色的大变化要在设置页批准后才生效
+- `relationship` 记得值得纪念的日子，当天会主动提起
+- `people` 记下身边人物的近况
+- 新增 `bookshelf` 插件，角色在没人时读你放上书架的书
+- 新增 `phone` 插件，角色闲下来时刷你配置的订阅源
+- Telegram 新增「边写边显示」开关，默认关闭
+- QQ 回复前显示「正在输入」
+- QQ 主动推送被拒时改用互动召回送达
+
+### 变更
+
+- `growth` 默认开启，有人聊天的日子每天多一次模型调用
+- Kimi 预置的默认模型改为 `kimi-k3.1-pro`
+- MiniMax 预置的模型改为 `MiniMax-M3` 与 `MiniMax-M3.1-Flash`
+- MiniMax 不能关闭思考，选「关闭」时照常思考
+- 硅基流动预置的默认模型改为 `DeepSeek-V4.1-Flash`
+- 豆包、MiniMax、OpenRouter 预置的 API Key 领取链接已更新
+- QQ 的默认接口地址改为 `api.bot.qq.com`
+- 飞书 / Lark 的卡片消息能渲染标题、列表与代码块
+
+### 修复
+
+- 飞书 / Lark 连上后，停用、改配置或退出程序不再卡住
+- 微信扫码遇到跨机房跳转时不再一直等到超时
+- 微信扫码要求输入验证码时会直接提示
+- 微信收到超大的消息 ID 时不再停止收信
+- 发到微信的消息不再露出无法显示的 markdown 符号
+- QQ 机器人被下架或封禁后不再反复重连
+- QQ 网关断线后能接上原来的会话
+- QQ 的 token 快到期时不再反复重新获取
+- Anthropic 密钥没绑定工作区时，报错会说明该怎么改
+- 飞书 / Lark 连接失败的提示点名所需的单聊消息权限
+
+---
+
+### Added
+
+- The character gets sleepy, goes to sleep, and tidies up its context while asleep
+- A sleeping character is woken up by incoming messages
+- Heartbeat does not reach out while the character is asleep or busy
+- New "Reply later when busy" switch for message channels, off by default
+- New `growth` plugin: the character picks up new likes and habits as you spend time together
+- Bigger changes to the character take effect only after you approve them on the settings page
+- `relationship` remembers dates worth remembering and brings them up on the day
+- `people` keeps track of what the people around the character are up to
+- New `bookshelf` plugin: the character reads the books you put on the shelf when nobody is around
+- New `phone` plugin: the character checks the feeds you set up when it is free
+- New "Show replies as they are written" switch for Telegram, off by default
+- QQ shows a typing indicator before replying
+- QQ falls back to an interaction recall when a proactive push is refused
+
+### Changed
+
+- `growth` is on by default and adds one model call on each day someone chats
+- The Kimi presets now default to `kimi-k3.1-pro`
+- The MiniMax presets now offer `MiniMax-M3` and `MiniMax-M3.1-Flash`
+- MiniMax thinking cannot be turned off, and choosing "off" still thinks
+- The SiliconFlow presets now default to `DeepSeek-V4.1-Flash`
+- API key links for the Doubao, MiniMax and OpenRouter presets are updated
+- QQ now uses `api.bot.qq.com` as its default endpoint
+- Feishu / Lark card messages render headings, lists and code blocks
+
+### Fixed
+
+- Disabling, reconfiguring or quitting no longer hangs once Feishu / Lark has connected
+- WeChat binding no longer waits until timeout when the scan is redirected to another data center
+- WeChat binding says right away when it asks for a verification code
+- WeChat keeps receiving messages when a message ID is very large
+- Messages sent to WeChat no longer show markdown symbols WeChat cannot display
+- QQ stops reconnecting once the bot has been taken down or banned
+- QQ picks up its previous gateway session after a disconnect
+- QQ no longer fetches its token again and again as it nears expiry
+- When an Anthropic key is not tied to a workspace, the error says how to fix it
+- The Feishu / Lark connection error names the permission needed for direct messages
+
 ## [v0.9.0] - 2026-10-02
 
 ### 破坏性变更
