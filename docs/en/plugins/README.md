@@ -6,7 +6,7 @@ The core (agent / session / server / llm) contains no concrete tools; every capa
 
 Everything a plugin sends to the model — the prompts it injects, the block names, the tool descriptions and their parameters — **follows `lang:`** (see [Configuration and models](../configuration.md#language)). That includes the editable prompts among the settings (the heartbeat prompt, the fallback line and so on): under English the textarea is pre-filled with the English version, and "restore defaults" returns to it.
 
-**Out of the box you get a character, not an assistant.** Everything except the eleven marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
+**Out of the box you get a character, not an assistant.** Everything except the twelve marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
 
 | Group | Plugin | In one line | Default |
 |---|---|---|---|
@@ -27,6 +27,7 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | | `relationship` | The stage you are at, what you call each other, understandings, off-limits subjects and the days worth remembering | on |
 | | `unspoken` | What it has not said out loud | on |
 | | `bookshelf` | Reads the books you put on the shelf, and knows only what she has read | off |
+| | `phone` | Scrolls through the feeds you set up when she is free, and brings up what interests her | off |
 | | `body_sense` | Per-part familiarity with touch, plus arousal and fatigue | on |
 | | `mood` | A mood moved by interaction and drifting back over time | on |
 | | `health` | The occasional everyday ailment, rising and falling over its course | on |
