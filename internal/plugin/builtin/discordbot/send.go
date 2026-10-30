@@ -70,9 +70,9 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	}
 }
 
-// chunkText 先按 markdown 结构分段，再按 Discord 的 UTF-16 长度兜底切一刀：
-// 2000 的上限按 UTF-16 code unit 计，一个 emoji 占两个单位；只按 rune 数切，
-// emoji 密集的长回复会在平台侧超限被拒。前缀 (i/n) 的余量也在 1900 里。
+// chunkText 先按 markdown 结构分段，再按 UTF-16 长度兜底切一刀：
+// Discord 单条上限 2000，emoji 在 UTF-16 里占两个单位；只按 rune 数切，
+// emoji 密集的长回复可能超限被拒。前缀 (i/n) 的余量也在 1900 里。
 func chunkText(text string) []string {
 	var out []string
 	for _, c := range mdtext.ChunkMarkdown(text, chunkLimit) {
