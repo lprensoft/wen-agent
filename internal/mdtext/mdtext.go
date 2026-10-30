@@ -6,6 +6,8 @@ package mdtext
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
+
 	"wen/internal/i18n"
 )
 
@@ -74,6 +76,63 @@ func ToPlainText(lang, text string) string {
 // 代码整体变成正文）；超长单行硬切（不能整体保留，平台会拒收超限消息）。
 // 纯文本输入同样适用（没有围栏时退化为按行分段）。
 func ChunkMarkdown(s string, limit int) []string {
+	return chunkMarkdown(s, limit, runeUnit)
+}
+
+// ChunkMarkdownBytes 与 ChunkMarkdown 相同，只是按 UTF-8 字节数而不是 rune 数
+// 限长。企业微信这类按字节计上限的平台用它：20480 字节能装六千多个汉字，换成
+// 四字节的 emoji 只剩五千个；按 rune 数限长会以为两者一样长，实际字节早已超限。
+func ChunkMarkdownBytes(s string, limit int) []string {
+	return chunkMarkdown(s, limit, byteUnit)
+}
+
+// chunkUnit 抽象「怎么量一行」与「怎么硬切超长行」，让 rune 与 byte 两种上限
+// 共用同一套围栏维护逻辑。
+type chunkUnit struct {
+	length func(string) int
+	split  func(string, int) []string
+}
+
+var runeUnit = chunkUnit{
+	length: func(s string) int { return len([]rune(s)) },
+	split: func(s string, limit int) []string {
+		r := []rune(s)
+		out := make([]string, 0, len(r)/limit+1)
+		for i := 0; i < len(r); i += limit {
+			out = append(out, string(r[i:min(i+limit, len(r))]))
+		}
+		return out
+	},
+}
+
+var byteUnit = chunkUnit{
+	length: func(s string) int { return len(s) },
+	split: func(s string, limit int) []string {
+		var out []string
+		start, n := 0, 0
+		for i := 0; i < len(s); {
+			_, size := utf8.DecodeRuneInString(s[i:])
+			if n+size > limit && i > start {
+				out = append(out, s[start:i])
+				start, n = i, 0
+			}
+			n += size
+			i += size
+		}
+		if start < len(s) {
+			out = append(out, s[start:])
+		}
+		if len(out) == 0 {
+			out = []string{""}
+		}
+		return out
+	},
+}
+
+func chunkMarkdown(s string, limit int, u chunkUnit) []string {
+	if limit <= 0 {
+		return []string{s}
+	}
 	var chunks []string
 	var cur []string
 	curLen := 0
@@ -92,27 +151,23 @@ func ChunkMarkdown(s string, limit int) []string {
 	}
 	appendLine := func(line string) {
 		cur = append(cur, line)
-		curLen += len([]rune(line)) + 1
+		curLen += u.length(line) + 1
 	}
 
 	for _, line := range strings.Split(s, "\n") {
-		lineRunes := []rune(line)
 		// 超长单行：先冲掉当前段，再按 limit 硬切成独立段
-		if len(lineRunes) > limit {
+		if u.length(line) > limit {
 			if inCode {
-				appendLine(fence)
+				appendLine("```")
 			}
 			flush()
-			for i := 0; i < len(lineRunes); i += limit {
-				end := min(i+limit, len(lineRunes))
-				chunks = append(chunks, string(lineRunes[i:end]))
-			}
+			chunks = append(chunks, u.split(line, limit)...)
 			if inCode {
 				appendLine(fence)
 			}
 			continue
 		}
-		if curLen+len(lineRunes)+1 > limit {
+		if curLen+u.length(line)+1 > limit {
 			if inCode {
 				appendLine("```") // 闭合本段的代码块
 				flush()
