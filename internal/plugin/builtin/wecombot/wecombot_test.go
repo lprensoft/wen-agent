@@ -601,6 +601,44 @@ func TestLateAckDoesNotCompleteNextSegment(t *testing.T) {
 	f.expectNoSend(t, 200*time.Millisecond)
 }
 
+func TestCanceledReplyIsolatesReqID(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil, func(p *Plugin) {
+		p.ackWait = 2 * time.Second // 让取消先于回执超时发生
+	})
+	f.mu.Lock()
+	f.holdAck = 1
+	f.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() { done <- p.send(ctx, "user1", "第一段", "cb-1") }()
+
+	if m := f.expectSend(t); m.kind != "reply" || m.content != "第一段" {
+		t.Fatalf("第一段应走回复: %+v", m)
+	}
+	cancel()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("上下文取消后不应报告发送成功")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("取消后发送没有返回")
+	}
+
+	// 迟到的成功回执属于已取消的那次请求，不能影响下一段
+	f.ack("cb-1", 0)
+
+	if !p.send(context.Background(), "user1", "第二段", "cb-1") {
+		t.Fatal("后续段落应通过主动推送送达")
+	}
+	second := f.expectSend(t)
+	if second.kind != "push" || second.content != "第二段" {
+		t.Fatalf("取消未确认的 req_id 不能复用，第二段应改走主动推送: %+v", second)
+	}
+	f.expectNoSend(t, 150*time.Millisecond)
+}
+
 func TestInitRequiresCredentials(t *testing.T) {
 	p := New()
 	err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"bot_id": "123"})

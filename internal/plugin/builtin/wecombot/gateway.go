@@ -145,20 +145,33 @@ func (w *wsConn) request(ctx context.Context, reqID string, frame any, timeout t
 	case <-timer.C:
 		// 到点时回执可能刚好到：先看等待槽是否还在。不在说明 respond 已经
 		// 取走并投递了，读结果；还在才判超时并封掉这个 req_id。
-		w.mu.Lock()
-		cur, ok := w.pending[reqID]
-		if ok && cur == ch {
-			delete(w.pending, reqID)
-			w.stale[reqID] = struct{}{}
-			w.mu.Unlock()
+		if w.poisonIfPending(reqID, ch) {
 			return wsResponse{}, fmt.Errorf("%w: %s", errReplyTimeout, reqID)
 		}
-		w.mu.Unlock()
 		r := <-ch
 		return r.resp, r.err
 	case <-ctx.Done():
-		return wsResponse{}, ctx.Err()
+		// 取消同样发生在帧已发出、回执未到之时：这一段可能已经送达，迟到的
+		// 回执不能留给下一次同 req_id 的回复，按「未确认」隔离掉。
+		if w.poisonIfPending(reqID, ch) {
+			return wsResponse{}, ctx.Err()
+		}
+		r := <-ch
+		return r.resp, r.err
 	}
+}
+
+// poisonIfPending 在等待槽仍属于本次请求时删掉它，并把 req_id 标成不可复用。
+// 回执已经抢先到达（槽已被 respond 取走）时返回 false，让调用方去读结果。
+func (w *wsConn) poisonIfPending(reqID string, ch chan wsResult) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if cur, ok := w.pending[reqID]; ok && cur == ch {
+		delete(w.pending, reqID)
+		w.stale[reqID] = struct{}{}
+		return true
+	}
+	return false
 }
 
 // call 发一帧并检查回执：errcode 非 0 也算失败。
