@@ -6,7 +6,7 @@
 
 - [命令行](cli.md) —— `wen serve` / `wen config` / `wen status` / `wen update` 等子命令
 - [配置与模型](configuration.md) —— config.yaml 的各项、设置页里的提供商与模型管理
-- [插件总览](plugins/README.md) —— 三十二个内置插件的说明与配置项
+- [插件总览](plugins/README.md) —— 三十三个内置插件的说明与配置项
 - [部署与访问控制](deployment.md) —— 远程访问的认证模型、启停脚本与 systemd
 - [回放评测（wen eval）](evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本
 

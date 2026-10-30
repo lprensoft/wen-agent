@@ -2,11 +2,11 @@
 
 [← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/im.md)
 
-## 远程使用（qq_bot / wechat_bot / feishu_bot / lark_bot / telegram_bot 插件）
+## 远程使用（qq_bot / wechat_bot / feishu_bot / lark_bot / telegram_bot / discord_bot 插件）
 
-五条通道，都把一个远端用户映射成一个普通会话——远程会话就是普通会话，Web UI 刷新即可看到，两边聊的是同一份历史。默认都不启用。
+六条通道，都把一个远端用户映射成一个普通会话——远程会话就是普通会话，Web UI 刷新即可看到，两边聊的是同一份历史。默认都不启用。
 
-通道无关的部分（入站分发与去重、命令集、按用户串行、会话绑定、确认代理、推送）只有一份实现，各插件只负责自己的协议层，所以下面这些约定在五条通道上完全一致：
+通道无关的部分（入站分发与去重、命令集、按用户串行、会话绑定、确认代理、推送）只有一份实现，各插件只负责自己的协议层，所以下面这些约定在六条通道上完全一致：
 
 - **命令集**：`/new` 开新会话、`/status` 看模型与用量、`/compact` 手动压缩、`/help`，以及危险操作确认的 `/apply` / `/deny`。
 - **白名单之外一律拒绝**，只记日志。白名单为空时拒绝所有人；陌生用户的 id 会写进日志，方便你抄进白名单。
@@ -28,16 +28,18 @@
 | `feishu_bot` | 飞书（中国版），官方 SDK 长连接收事件，不需要公网地址 | App ID / App Secret | 需在开发者后台开通 `im:message.p2p_msg:readonly`（收单聊消息）与 `im:message:send_as_bot`（以应用身份发消息）权限、事件订阅选「长连接」并订阅收消息事件；仅单聊 |
 | `lark_bot` | Lark（国际版），同上 | 同上，但**与飞书不通用** | 与飞书是同一套实现的两次实例化。分成两个插件是因为国际版应用不能用于中国版，凭证与 open_id 都是两套，一个插件只能存一份凭证就只能连一边 |
 | `telegram_bot` | Bot API，HTTP 长轮询 | Bot Token | 大陆直连不通，配 `proxy`（http / socks5）；启动时若报 409 说明该 Bot 已设 webhook，需先自行 `deleteWebhook` |
+| `discord_bot` | Discord Bot API，Gateway WebSocket 收私信，REST 发送 | Bot Token | 机器人需与用户在同一服务器；只处理私信，服务器频道消息忽略；不需要 Message Content privileged intent（私信正文是官方例外）；白名单填 DM channel ID；单条 2000 字，超长分段；支持「正在输入」；大陆直连不通时配 `proxy` |
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `app_id` / `app_secret` | 空 | `qq_bot` 与飞书 / Lark。密钥存在插件状态文件里（0600），不入库 |
-| `bot_token` | 空 | 仅 `telegram_bot` |
-| `proxy` | 空 | 仅 `telegram_bot`，形如 `http://…` 或 `socks5://…`，留空直连 |
-| `whitelist` | 空 | 允许的用户 id，一行一个（QQ 用 openid，微信形如 `xxx@im.wechat`，飞书 / Lark 用 open_id，Telegram 用 chat_id） |
+| `bot_token` | 空 | `telegram_bot` / `discord_bot` |
+| `proxy` | 空 | `telegram_bot` / `discord_bot`，形如 `http://…` 或 `socks5://…`，留空直连 |
+| `whitelist` | 空 | 允许的用户 id，一行一个（QQ 用 openid，微信形如 `xxx@im.wechat`，飞书 / Lark 用 open_id，Telegram 用 chat_id，Discord 用 DM channel ID） |
 | `api_base` | 官方地址 | 一般不需要改 |
+| `gateway_url` | 官方地址 | 仅 `discord_bot`：Gateway WebSocket 地址，一般不需要改 |
 | `confirm_timeout_sec` | 300 | 等待 `/apply` / `/deny` 的上限，超时按拒绝 |
-| `format` | 见右 | QQ / 微信 / Telegram 是 `markdown`（平台拒绝时自动退回纯文本）与 `纯文本`；飞书 / Lark 是 `卡片`（卡片 JSON 2.0 的 markdown 组件，标题、列表、引用、代码块都能渲染）与 `纯文本` |
+| `format` | 见右 | QQ / 微信 / Telegram 是 `markdown`（平台拒绝时自动退回纯文本）与 `纯文本`；Discord 是 `markdown`（原生渲染）与 `纯文本`；飞书 / Lark 是 `卡片`（卡片 JSON 2.0 的 markdown 组件，标题、列表、引用、代码块都能渲染）与 `纯文本` |
 | `stream_preview` | 关 | 仅 Telegram：回复还在生成时显示正在写的内容（草稿预览，写完换成正式消息）。开着就不像真人打字了 |
 | `show_thinking` / `show_tools` | 关 / 关 | 是否把思考过程与工具名转发到远端 |
 | `push_notices` | 关 | 是否把后台工作的说明（如记忆提炼的记录）推送到远端 |
