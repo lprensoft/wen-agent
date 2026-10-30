@@ -49,14 +49,13 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	}
 }
 
-// push 主动推送：Discord 的 DM channel ID 就是发送地址，不需要回复凭据；
-// 发不出去由 send 记日志容忍，所以这里恒报「已交给平台」。
+// push 主动推送：Discord 的 DM channel ID 就是发送地址，不需要回复凭据。
+// 返回值要如实报告有没有全部交给平台——跨通道转投据此知道这段话是否送达。
 func (p *Plugin) push(ctx context.Context, channelID, text string) bool {
 	if channelID == "" {
 		return false
 	}
-	p.send(ctx, channelID, text, "")
-	return true
+	return p.send(ctx, channelID, text, "")
 }
 
 // OnNotice 旁听会话注记：开着「推送后台通知」时，把后台工作留下的说明（提炼的

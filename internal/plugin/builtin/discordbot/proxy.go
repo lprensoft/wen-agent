@@ -21,13 +21,13 @@ func buildProxy(lang, raw string) (*url.URL, http.RoundTripper, error) {
 			"代理地址无法解析: %w"), err)
 	}
 	switch u.Scheme {
-	case "http", "https", "socks5", "socks5h":
+	case "http", "socks5":
 	case "":
 		return nil, nil, fmt.Errorf("%s", i18n.T(lang, "plugin.discord_bot.err.proxy_scheme",
 			"代理地址要带协议前缀，如 socks5://127.0.0.1:1080"))
 	default:
 		return nil, nil, fmt.Errorf(i18n.T(lang, "plugin.discord_bot.err.proxy_unsupported",
-			"不支持的代理协议 %q，可用 http、https、socks5"), u.Scheme)
+			"不支持的代理协议 %q，Discord 的网关只支持 http、socks5"), u.Scheme)
 	}
 	if u.Host == "" {
 		return nil, nil, fmt.Errorf("%s", i18n.T(lang, "plugin.discord_bot.err.proxy_no_host",

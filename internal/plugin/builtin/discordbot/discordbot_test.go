@@ -29,22 +29,25 @@ type fakeDiscord struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	sends  chan sentMessage
-	typing chan string
-	ready  chan struct{}
+	sends      chan sentMessage
+	typing     chan string
+	ready      chan struct{}
+	heartbeats chan struct{}
 
 	mu            sync.Mutex
 	conn          *websocket.Conn
 	rateLimitOnce bool
 	rateLimitHits int
+	failNext      bool
 }
 
 func newFakeDiscord(t *testing.T) *fakeDiscord {
 	f := &fakeDiscord{
-		t:      t,
-		sends:  make(chan sentMessage, 32),
-		typing: make(chan string, 32),
-		ready:  make(chan struct{}, 4),
+		t:          t,
+		sends:      make(chan sentMessage, 32),
+		typing:     make(chan string, 32),
+		ready:      make(chan struct{}, 4),
+		heartbeats: make(chan struct{}, 8),
 	}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
@@ -74,8 +77,16 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		})
 		f.ready <- struct{}{}
 		for { // 消耗心跳直到断开
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
 				return
+			}
+			var frame gatewayFrame
+			if json.Unmarshal(raw, &frame) == nil && frame.Op == opHeartbeat {
+				select {
+				case f.heartbeats <- struct{}{}:
+				default:
+				}
 			}
 		}
 	})
@@ -94,12 +105,19 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 			f.rateLimitOnce = false
 			f.rateLimitHits++
 		}
+		fail := f.failNext
+		f.failNext = false
 		f.mu.Unlock()
 		if limited {
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"message": "rate limited", "retry_after": 0.01,
 			})
+			return
+		}
+		if fail {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "missing permissions", "code": 50013})
 			return
 		}
 		replyTo := ""
@@ -148,6 +166,18 @@ func (f *fakeDiscord) pushRaw(raw string) {
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(raw)); err != nil {
 		f.t.Fatalf("推送裸帧失败: %v", err)
+	}
+}
+
+func (f *fakeDiscord) requestHeartbeat() {
+	f.mu.Lock()
+	conn := f.conn
+	f.mu.Unlock()
+	if conn == nil {
+		f.t.Fatal("网关尚未握手")
+	}
+	if err := conn.WriteJSON(map[string]any{"op": opHeartbeat}); err != nil {
+		f.t.Fatalf("发送心跳请求失败: %v", err)
 	}
 }
 
@@ -289,6 +319,38 @@ func TestBackgroundTurnPush(t *testing.T) {
 	}
 }
 
+func TestPushReportsSendFailure(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "dm1", nil)
+	f.mu.Lock()
+	f.failNext = true
+	f.mu.Unlock()
+	if p.push(context.Background(), "dm1", "hi") {
+		t.Fatal("平台返回 403 时 Push 应报告未送达")
+	}
+	if !p.push(context.Background(), "dm1", "hi") {
+		t.Fatal("平台正常时 Push 应报告送达")
+	}
+	f.expectSend(t)
+}
+
+func TestServerHeartbeatRequestDoesNotReconnect(t *testing.T) {
+	runTurn := func(context.Context, string, string) (string, error) { return "好", nil }
+	_, f, _ := newInited(t, runTurn, "dm1", nil)
+	// 等插件发出第一拍（尚未 ACK），再模拟服务端主动请求心跳；旧实现会把它
+	// 当成「上一拍未 ACK」而断开连接。
+	select {
+	case <-f.heartbeats:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待首拍心跳超时")
+	}
+	f.requestHeartbeat()
+	f.pushMessage("m1", "dm1", "", "u1", "你好", false)
+	m := f.expectSend(t)
+	if m.content != "好" {
+		t.Fatalf("服务端心跳请求不应断连，消息应继续处理: %+v", m)
+	}
+}
+
 func TestRateLimitRetriesOnce(t *testing.T) {
 	runTurn := func(context.Context, string, string) (string, error) { return "好", nil }
 	_, f, _ := newInited(t, runTurn, "dm1", nil)
@@ -358,8 +420,22 @@ func TestEmojiHeavyMessageStaysWithinUTF16Limit(t *testing.T) {
 	}
 	f.expectNoSend(t, 200*time.Millisecond)
 	for _, m := range got {
-		if n := len(utf16.Encode([]rune(m.content))); n > 2000 {
+		if n := utf16Len(m.content); n > 2000 {
 			t.Fatalf("单段 UTF-16 长度 %d 超过 2000: %q", n, m.content)
+		}
+	}
+}
+
+func TestPlainConversionStaysWithinLimit(t *testing.T) {
+	// 链接在转纯文本时会展开成「文字（URL）」，整段会明显变长；必须先转换再分段。
+	md := strings.Repeat("[a](https://example.com/very/long/path) ", 100)
+	chunks := textChunks("", md, true)
+	if len(chunks) < 2 {
+		t.Fatalf("转换后的长文本应分成多段，得到 %d 段", len(chunks))
+	}
+	for _, c := range chunks {
+		if n := utf16Len(c); n > 1900 {
+			t.Fatalf("纯文本分段 UTF-16 长度 %d 超过 1900: %q", n, c)
 		}
 	}
 }
@@ -388,12 +464,14 @@ func TestBuildProxy(t *testing.T) {
 	if u, tr, err := buildProxy("", ""); err != nil || u != nil || tr != nil {
 		t.Errorf("留空应直连: %v %v %v", u, tr, err)
 	}
-	for _, ok := range []string{"http://127.0.0.1:7890", "https://127.0.0.1:7890", "socks5://127.0.0.1:1080"} {
+	for _, ok := range []string{"http://127.0.0.1:7890", "socks5://127.0.0.1:1080"} {
 		if u, tr, err := buildProxy("", ok); err != nil || u == nil || tr == nil {
 			t.Errorf("%s 应被接受: %v %v %v", ok, u, tr, err)
 		}
 	}
-	for _, bad := range []string{"127.0.0.1:1080", "ftp://x:1", "socks5://"} {
+	// Gateway 用的 gorilla/websocket 只支持 http 与 socks5；https / socks5h 必须在
+	// 配置阶段拒绝，否则会一直重连却收不到消息。
+	for _, bad := range []string{"https://127.0.0.1:7890", "socks5h://127.0.0.1:1080", "127.0.0.1:1080", "ftp://x:1", "socks5://"} {
 		if _, _, err := buildProxy("", bad); err == nil {
 			t.Errorf("%q 应被拒绝", bad)
 		}
@@ -401,3 +479,5 @@ func TestBuildProxy(t *testing.T) {
 }
 
 func noopTurn(context.Context, string, string) (string, error) { return "", nil }
+
+func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }

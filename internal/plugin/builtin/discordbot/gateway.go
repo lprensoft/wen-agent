@@ -157,18 +157,22 @@ func (p *Plugin) connectOnce(ctx context.Context, st *gatewayState) error {
 	}
 
 	var awaitingACK atomic.Bool
-	heartbeat := func() {
+	sendHeartbeat := func() {
+		var d any
+		if v := st.seq.Load(); v > 0 {
+			d = v
+		}
+		_ = writeJSON(map[string]any{"op": opHeartbeat, "d": d})
+		awaitingACK.Store(true)
+	}
+	tickHeartbeat := func() {
 		// 上一拍还没收到 ACK：TCP 可能已被 NAT 静默切断，主动关连接让读循环
 		// 走退避重连，避免「连接看起来还在、消息却再也收不到」。
 		if awaitingACK.Swap(true) {
 			_ = conn.Close()
 			return
 		}
-		var d any
-		if v := st.seq.Load(); v > 0 {
-			d = v
-		}
-		_ = writeJSON(map[string]any{"op": opHeartbeat, "d": d})
+		sendHeartbeat()
 	}
 
 	// 心跳按官方下发的间隔发送。Discord 要求首拍带抖动；立即发一拍再按间隔走，
@@ -177,7 +181,7 @@ func (p *Plugin) connectOnce(ctx context.Context, st *gatewayState) error {
 	defer hbStop()
 	go func() {
 		interval := time.Duration(hello.HeartbeatInterval) * time.Millisecond
-		heartbeat()
+		tickHeartbeat()
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -185,7 +189,7 @@ func (p *Plugin) connectOnce(ctx context.Context, st *gatewayState) error {
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				heartbeat()
+				tickHeartbeat()
 			}
 		}
 	}()
@@ -219,8 +223,8 @@ func (p *Plugin) connectOnce(ctx context.Context, st *gatewayState) error {
 				st.seq.Store(frame.S)
 			}
 			p.handleDispatch(ctx, frame, st)
-		case opHeartbeat: // 服务端要求立刻发一拍
-			heartbeat()
+		case opHeartbeat: // 服务端主动要求立刻回一拍，不参与定时心跳的 ACK 超时判定
+			sendHeartbeat()
 		case opHeartbeatACK:
 			awaitingACK.Store(false)
 		case opReconnect:

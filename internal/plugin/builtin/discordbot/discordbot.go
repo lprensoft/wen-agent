@@ -101,7 +101,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 				"陌生用户首次发消息时其频道 ID 会记录到运行日志，方便抄入"),
 		{
 			Key: "proxy", Label: "代理地址", Type: plugin.FieldString, Default: "",
-			Description: "Discord 在部分网络下直连不通。支持 http / https / socks5，形如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890；留空直连（仍会读取 HTTPS_PROXY 等环境变量）",
+			Description: "Discord 在部分网络下直连不通。支持 http / socks5，形如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890；留空直连（仍会读取 HTTPS_PROXY 等环境变量）。网关不支持 https / socks5h 代理，请用 http / socks5",
 		},
 		imbot.APIBaseField(defAPIBase,
 			"一般不需要改。Discord REST API 地址"),
