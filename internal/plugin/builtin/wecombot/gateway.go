@@ -37,6 +37,11 @@ var (
 	errAuthRejected = errors.New("长连接订阅被拒绝")
 	errServerKicked = errors.New("连接被新的订阅顶替")
 	errNoConn       = errors.New("企业微信长连接尚未建立")
+	// errReplyTimeout 表示回复已发出但没等到回执：可能已送达，不能重发。
+	errReplyTimeout = errors.New("等待回执超时")
+	// errReqIDStale 表示同一个 req_id 的上一条回复回执没确认：迟到的回执可能
+	// 被误认成这一条的回执，所以这个 req_id 不能再复用。
+	errReqIDStale = errors.New("该 req_id 的上一条回执未确认")
 )
 
 // wsFrame 是长连接上的通用信封。消息/事件回调带 cmd 与 body；订阅、心跳、回复
@@ -71,6 +76,10 @@ type wsResult struct {
 
 // wsConn 是一条已建立的连接。回执按 req_id 关联：我们在请求里预先登记一个
 // channel，读循环收到同 req_id 的回执后投进去。连接断开时唤醒所有等待者。
+//
+// stale 记下回执超时过的 req_id：协议的回执里只有 req_id，同一回调的回复又必须
+// 共用它，超时后再发下一段，上一段迟到的回执会把这新的一段「确认」掉。宁可不
+// 再用这个 req_id（后续段落改走主动推送），也不能把失败报成成功。
 type wsConn struct {
 	conn *websocket.Conn
 
@@ -78,16 +87,22 @@ type wsConn struct {
 
 	mu       sync.Mutex
 	pending  map[string]chan wsResult
+	stale    map[string]struct{}
 	closed   bool
 	closeErr error
 }
 
 func newWSConn(conn *websocket.Conn) *wsConn {
-	return &wsConn{conn: conn, pending: map[string]chan wsResult{}}
+	return &wsConn{
+		conn:    conn,
+		pending: map[string]chan wsResult{},
+		stale:   map[string]struct{}{},
+	}
 }
 
-// request 发一帧并等同一 req_id 的回执。超时后返回错误；迟到的回执会被丢弃，
-// 不会阻塞读循环。
+// request 发一帧并等同一 req_id 的回执。超时后返回 errReplyTimeout，并把该
+// req_id 标成不可复用；迟到的回执会被丢弃，不会阻塞读循环，也不会被后来的
+// 请求当成自己的回执。
 func (w *wsConn) request(ctx context.Context, reqID string, frame any, timeout time.Duration) (wsResponse, error) {
 	ch := make(chan wsResult, 1)
 	w.mu.Lock()
@@ -96,11 +111,22 @@ func (w *wsConn) request(ctx context.Context, reqID string, frame any, timeout t
 		w.mu.Unlock()
 		return wsResponse{}, err
 	}
+	if _, ok := w.stale[reqID]; ok {
+		w.mu.Unlock()
+		return wsResponse{}, fmt.Errorf("%w: %s", errReqIDStale, reqID)
+	}
+	if _, busy := w.pending[reqID]; busy {
+		w.mu.Unlock()
+		return wsResponse{}, fmt.Errorf("req_id %s 已有未完成的请求", reqID)
+	}
 	w.pending[reqID] = ch
 	w.mu.Unlock()
 	defer func() {
 		w.mu.Lock()
-		delete(w.pending, reqID)
+		// 只删自己这一格：回执到达时 respond 已经删过了
+		if cur, ok := w.pending[reqID]; ok && cur == ch {
+			delete(w.pending, reqID)
+		}
 		w.mu.Unlock()
 	}()
 
@@ -117,7 +143,19 @@ func (w *wsConn) request(ctx context.Context, reqID string, frame any, timeout t
 	case r := <-ch:
 		return r.resp, r.err
 	case <-timer.C:
-		return wsResponse{}, fmt.Errorf("等待 %s 回执超时", reqID)
+		// 到点时回执可能刚好到：先看等待槽是否还在。不在说明 respond 已经
+		// 取走并投递了，读结果；还在才判超时并封掉这个 req_id。
+		w.mu.Lock()
+		cur, ok := w.pending[reqID]
+		if ok && cur == ch {
+			delete(w.pending, reqID)
+			w.stale[reqID] = struct{}{}
+			w.mu.Unlock()
+			return wsResponse{}, fmt.Errorf("%w: %s", errReplyTimeout, reqID)
+		}
+		w.mu.Unlock()
+		r := <-ch
+		return r.resp, r.err
 	case <-ctx.Done():
 		return wsResponse{}, ctx.Err()
 	}
@@ -170,6 +208,92 @@ func (w *wsConn) close(err error) {
 		select {
 		case ch <- wsResult{err: err}:
 		default:
+		}
+	}
+}
+
+// callbackGate 决定一条连接收到的消息何时可以分发：认证成功并登记连接后才放开，
+// 认证失败则丢弃。读循环比认证先跑，消息可能紧跟着订阅回执到达，不能收到就处理
+// ——那时 p.conn 还没登记，回提示都会失败。
+type callbackGate struct {
+	ready   chan struct{}
+	dropped chan struct{}
+	once    sync.Once
+}
+
+func newCallbackGate() *callbackGate {
+	return &callbackGate{ready: make(chan struct{}), dropped: make(chan struct{})}
+}
+
+func (g *callbackGate) open() {
+	g.once.Do(func() { close(g.ready) })
+}
+
+func (g *callbackGate) fail() {
+	g.once.Do(func() { close(g.dropped) })
+}
+
+type callbackJob struct {
+	frame wsFrame
+	gate  *callbackGate
+}
+
+// callbackQueue 是插件级 FIFO：读循环只负责入队，独立的分发协程按到达顺序调用
+// handleCallback。每条消息起一个 goroutine 会打乱顺序；在读循环里直接处理又会被
+// 回复等待拖住，回执就没人读了。
+type callbackQueue struct {
+	mu     sync.Mutex
+	items  []callbackJob
+	notify chan struct{}
+}
+
+func newCallbackQueue() *callbackQueue {
+	return &callbackQueue{notify: make(chan struct{}, 1)}
+}
+
+func (q *callbackQueue) push(job callbackJob) {
+	q.mu.Lock()
+	q.items = append(q.items, job)
+	q.mu.Unlock()
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (q *callbackQueue) pop(ctx context.Context) (callbackJob, bool) {
+	for {
+		q.mu.Lock()
+		if len(q.items) > 0 {
+			job := q.items[0]
+			q.items[0] = callbackJob{} // 放掉已处理帧的引用，别让底层数组一直攥着
+			q.items = q.items[1:]
+			q.mu.Unlock()
+			return job, true
+		}
+		q.mu.Unlock()
+		select {
+		case <-q.notify:
+		case <-ctx.Done():
+			return callbackJob{}, false
+		}
+	}
+}
+
+// dispatchLoop 串行消化入站消息，保持读循环收到的先后顺序。
+func (p *Plugin) dispatchLoop(ctx context.Context, q *callbackQueue) {
+	for {
+		job, ok := q.pop(ctx)
+		if !ok {
+			return
+		}
+		select {
+		case <-job.gate.ready:
+			p.handleCallback(ctx, job.frame)
+		case <-job.gate.dropped:
+			// 连接没认证成功，这些消息从没进入过会话
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -227,6 +351,7 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 	p.mu.Lock()
 	botID, secret, gwURL := p.botID, p.secret, p.gatewayURL
 	every, wait := p.heartbeatEvery, p.heartbeatWait
+	queue := p.callbacks
 	p.mu.Unlock()
 
 	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
@@ -235,8 +360,10 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	w := newWSConn(conn)
+	gate := newCallbackGate()
 	authed := false
 	defer func() {
+		gate.fail() // 认证成功时 once 已用掉，这里是空操作
 		p.clearConn(w)
 		w.close(errors.New("连接结束"))
 	}()
@@ -264,7 +391,7 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 	// 读循环必须先跑起来：订阅回执和后续消息都从这条连接读，等认证完再读会互等。
 	// 缓冲一下，认证失败提前返回时协程也能退出。
 	readErr := make(chan error, 1)
-	go func() { readErr <- p.readLoop(ctx, w) }()
+	go func() { readErr <- p.readLoop(w, gate, queue) }()
 
 	resp, err := w.request(ctx, subID, sub, authTimeout)
 	if err != nil {
@@ -276,6 +403,7 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 
 	authed = true
 	p.setConn(w)
+	gate.open() // 连接登记之后才放行入站消息
 	i18n.Logf(p.langOf(), "log.wecom.authenticated", "wecom_bot: 长连接已认证，开始接收消息")
 
 	hbCtx, hbCancel := context.WithCancel(ctx)
@@ -285,9 +413,9 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 	return authed, <-readErr
 }
 
-// readLoop 持续读帧：消息交给分发层，事件里只关心「被新连接顶替」，其余按
-// req_id 投给等待回执的请求方。
-func (p *Plugin) readLoop(ctx context.Context, w *wsConn) error {
+// readLoop 持续读帧：消息入队交给分发协程，事件里只关心「被新连接顶替」，其余
+// 按 req_id 投给等待回执的请求方。这里不碰分发与发送，回执才不会排队。
+func (p *Plugin) readLoop(w *wsConn, gate *callbackGate, queue *callbackQueue) error {
 	for {
 		_, data, err := w.conn.ReadMessage()
 		if err != nil {
@@ -302,7 +430,9 @@ func (p *Plugin) readLoop(ctx context.Context, w *wsConn) error {
 
 		switch f.Cmd {
 		case cmdCallback:
-			go p.handleCallback(ctx, f)
+			if queue != nil {
+				queue.push(callbackJob{frame: f, gate: gate})
+			}
 		case cmdEvent:
 			if isDisconnectedEvent(f.Body) {
 				return errServerKicked

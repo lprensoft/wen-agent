@@ -9,6 +9,10 @@
 // 会话绑定、命令集（/new /status /compact /help /apply /deny）、串行处理与确认
 // 代理都在公共骨架 wen/internal/imbot 里，这个包只负责企业微信的协议层。
 //
+// 入站消息先进入插件级 FIFO，由独立的分发协程按到达顺序处理；读循环只收帧与回执，
+// 不会被回复等待拖住。某段回复的回执超时后，该 req_id 不再复用（后续段落改走主动
+// 推送），否则迟到的回执会被当成下一段的回执。
+//
 // 仅响应白名单内的 userid；白名单为空时拒绝所有人（陌生 userid 记录到日志，
 // 方便抄进白名单）。仅处理单聊：群聊里 @ 机器人的消息忽略。
 package wecombot
@@ -52,13 +56,16 @@ type Plugin struct {
 	core *imbot.Core // 通道无关的分发、命令、会话绑定与确认代理
 	conn *wsConn     // 当前长连接；未连上时为 nil
 
+	callbacks *callbackQueue // 入站消息的 FIFO，保持读循环收到的顺序
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// 测试可缩短心跳间隔与等待回执的时长，生产环境用默认值。
+	// 测试可缩短心跳间隔、回执等待时长，生产环境用默认值。
 	heartbeatEvery time.Duration
 	heartbeatWait  time.Duration
+	ackWait        time.Duration
 
 	// startGateway 可被测试替换，避免单测真的去连企业微信。
 	startGateway func(context.Context)
@@ -69,6 +76,7 @@ func New() *Plugin {
 	p := &Plugin{
 		heartbeatEvery: heartbeatInterval,
 		heartbeatWait:  heartbeatTimeout,
+		ackWait:        defaultAckTimeout,
 	}
 	p.startGateway = p.gatewayLoop
 	return p
@@ -184,13 +192,19 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	p.core = core
+	p.callbacks = newCallbackQueue()
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	ctx := p.ctx
+	queue := p.callbacks
 	start := p.startGateway
-	p.wg.Add(1)
+	p.wg.Add(2)
 	p.mu.Unlock()
 
 	core.Start(ctx)
+	go func() {
+		defer p.wg.Done()
+		p.dispatchLoop(ctx, queue)
+	}()
 	go func() {
 		defer p.wg.Done()
 		start(ctx)

@@ -3,6 +3,7 @@ package wecombot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +43,8 @@ type fakeWeCom struct {
 	conn       *websocket.Conn
 	failSends  bool
 	ignorePing bool
+	holdAck    int // 接下来几条 respond 不回执（模拟回执丢失）
+	onAuth     func()
 	subscribes int
 }
 
@@ -90,7 +93,11 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 		f.ack(sub.Headers.ReqID, 0)
 		f.mu.Lock()
 		f.subscribes++
+		onAuth := f.onAuth
 		f.mu.Unlock()
+		if onAuth != nil {
+			onAuth()
+		}
 		f.ready <- struct{}{}
 
 		for {
@@ -139,10 +146,16 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 				}
 				f.mu.Lock()
 				fail := f.failSends
+				hold := false
+				if frame.Cmd == cmdRespond && f.holdAck > 0 {
+					hold = true
+					f.holdAck--
+				}
 				f.mu.Unlock()
-				if fail {
+				switch {
+				case fail:
 					f.ack(frame.Headers.ReqID, 40001)
-				} else {
+				case !hold:
 					f.ack(frame.Headers.ReqID, 0)
 				}
 			}
@@ -230,7 +243,15 @@ func (f *fakeWeCom) expectNoSend(t *testing.T, d time.Duration) {
 // newInited 起一个连着假企业微信的插件。默认关掉合并窗口，测试不必等 3 秒。
 func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, tweaks ...func(*Plugin)) (*Plugin, *fakeWeCom, *session.Store) {
 	t.Helper()
+	return newInitedWith(t, runTurn, whitelist, extra, nil, tweaks...)
+}
+
+func newInitedWith(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, fakeSetup func(*fakeWeCom), tweaks ...func(*Plugin)) (*Plugin, *fakeWeCom, *session.Store) {
+	t.Helper()
 	f := newFakeWeCom(t)
+	if fakeSetup != nil {
+		fakeSetup(f)
+	}
 	store, err := session.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -523,6 +544,61 @@ func TestServerKickStopsConnection(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("被新连接顶替后应停止使用旧连接")
+}
+
+func TestCallbacksKeepArrivalOrder(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) { return input, nil }
+	_, f, _ := newInited(t, runTurn, "user1", nil)
+	for i := 1; i <= 6; i++ {
+		n := fmt.Sprint(i)
+		f.pushCallback("msg-"+n, "cb-"+n, "single", "user1", "text", map[string]any{"content": n})
+	}
+	for i := 1; i <= 6; i++ {
+		want := fmt.Sprint(i)
+		if m := f.expectSend(t); m.content != want {
+			t.Fatalf("第 %d 条回复顺序不对，得到 %q", i, m.content)
+		}
+	}
+}
+
+func TestCallbackRightAfterSubscribeIsDispatched(t *testing.T) {
+	_, f, _ := newInitedWith(t, noopTurn, "user1", nil, func(f *fakeWeCom) {
+		f.mu.Lock()
+		f.onAuth = func() {
+			// 紧跟着订阅成功回执到达：此时客户端可能还没把连接登记好
+			f.pushCallback("msg-early", "cb-early", "single", "user1", "image",
+				map[string]any{"url": "https://example.com/a.png"})
+		}
+		f.mu.Unlock()
+	})
+	m := f.expectSend(t)
+	if m.kind != "reply" || m.reqID != "cb-early" || !strings.Contains(m.content, "暂不支持") {
+		t.Fatalf("认证后立即到达的消息应正常回提示: %+v", m)
+	}
+}
+
+func TestLateAckDoesNotCompleteNextSegment(t *testing.T) {
+	runTurn := func(context.Context, string, string) (string, error) { return "第一段。\n\n第二段。", nil }
+	_, f, _ := newInited(t, runTurn, "user1", map[string]any{"human_pace": true}, func(p *Plugin) {
+		p.ackWait = 50 * time.Millisecond
+	})
+	f.mu.Lock()
+	f.holdAck = 1
+	f.mu.Unlock()
+
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "text", map[string]any{"content": "你说"})
+	if m := f.expectSend(t); m.kind != "reply" || m.content != "第一段。" {
+		t.Fatalf("第一段应走回复: %+v", m)
+	}
+	// 等到回执超时，再补发第一段的迟到回执；此时第二段还没开始发
+	time.Sleep(150 * time.Millisecond)
+	f.ack("cb-1", 0)
+
+	second := f.expectSend(t)
+	if second.kind != "push" || second.content != "第二段。" {
+		t.Fatalf("回执未确认的 req_id 不能复用，第二段应改走主动推送: %+v", second)
+	}
+	f.expectNoSend(t, 200*time.Millisecond)
 }
 
 func TestInitRequiresCredentials(t *testing.T) {
