@@ -6,7 +6,7 @@ The core (agent / session / server / llm) contains no concrete tools; every capa
 
 Everything a plugin sends to the model — the prompts it injects, the block names, the tool descriptions and their parameters — **follows `lang:`** (see [Configuration and models](../configuration.md#language)). That includes the editable prompts among the settings (the heartbeat prompt, the fallback line and so on): under English the textarea is pre-filled with the English version, and "restore defaults" returns to it.
 
-**Out of the box you get a character, not an assistant.** Everything except the twelve marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
+**Out of the box you get a character, not an assistant.** Everything except the thirteen marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
 
 | Group | Plugin | In one line | Default |
 |---|---|---|---|
@@ -40,6 +40,7 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | | `feishu_bot` | Feishu (China) | off |
 | | `lark_bot` | Lark (international) | off |
 | | `telegram_bot` | The Telegram Bot API | off |
+| | `discord_bot` | The Discord Bot API | off |
 | [Maintenance](self-update.md) | `self_update` | Checks for a new release, then downloads, verifies, replaces and restarts in one click | on |
 | [External plugins](external.md) | `bundles` | Install Agent Plugins bundles | on |
 | | `ext_*` | One card per installed bundle | on |

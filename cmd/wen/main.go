@@ -28,6 +28,7 @@ import (
 	"wen/internal/plugin/builtin/bodysense"
 	"wen/internal/plugin/builtin/bookshelf"
 	"wen/internal/plugin/builtin/bundles"
+	"wen/internal/plugin/builtin/discordbot"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/growth"
@@ -290,6 +291,7 @@ var defaultOffPlugins = map[string]bool{
 	"feishu_bot":   true, // 不填 App ID/Secret 没法工作
 	"lark_bot":     true, // 同上
 	"telegram_bot": true, // 不填 Bot Token 没法工作
+	"discord_bot":  true, // 不填 Bot Token 没法工作
 }
 
 // buildPlugins 注册全部内置系统插件，注册顺序即提示词拼接顺序。
@@ -382,7 +384,7 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// 飞书与 Lark 是同一套实现的两次实例化（见 larkbot 包注释）：同一套 API 的两个
 		// 租户域，凭证互不通用，分成两个插件才能同时连两边
 		qqbot.New(), wechatbot.New(),
-		larkbot.NewFeishu(), larkbot.NewLark(), telegrambot.New(),
+		larkbot.NewFeishu(), larkbot.NewLark(), telegrambot.New(), discordbot.New(),
 		// self_update 排在最后：它不注入任何提示词，注册顺序对它只剩展示含义，
 		// 而「程序维护」这一节摆在设置页最下面也是对的——它与角色、记忆、通道都无关
 		selfupdate.New(selfupdate.Options{Restart: restart}),

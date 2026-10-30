@@ -13,7 +13,7 @@
 
 一个有自己生活的 AI 虚拟人格。用 Go 编写，单二进制部署，理念源自刘哲宏的 [project-sue-](https://github.com/lzh830913-wq/project-sue-)。它追求的不是「回答得好」，而是两件事：**活人感**——角色有自己的一天、自己的社交圈，会生小病、有没说出口的心里话，隔久了会主动找你说话，在聊天软件里像人一样发消息；**性格稳定可控**——对你的态度不忽远忽近，历史被压缩、换了会话也还是同一个人，而且每一分性格与状态都落在看得见、能开关、可配置的插件里，不靠模型即兴。
 
-想做成的是**一个处得下去的人**，而不是一个开着才存在的窗口。核心只保留通用机制，具体能力一律由插件提供：内嵌 Web UI、跨会话长期记忆、本地会话存储，QQ、微信、飞书、Lark、Telegram 五条通道都能接进来。把角色演绎那几个插件关掉，它就退回成一个普通的干活 Agent。
+想做成的是**一个处得下去的人**，而不是一个开着才存在的窗口。核心只保留通用机制，具体能力一律由插件提供：内嵌 Web UI、跨会话长期记忆、本地会话存储，QQ、微信、飞书、Lark、Telegram、Discord 六条通道都能接进来。把角色演绎那几个插件关掉，它就退回成一个普通的干活 Agent。
 
 ## 名字的由来
 
@@ -26,8 +26,8 @@
 - **[表里两套人格](docs/plugins/roleplay.md)**：由触发词切换，里人格的对话与记忆对表人格完全不可见——不仅内容读不到，条数与标题也不会露出来；两面还可以各占一条聊天通道，在 QQ 上说出暗号，接手的那一面在微信上回话
 - **[会记事也会忘事的长期记忆](docs/plugins/memory.md)**：跨会话的事实库，索引随每轮对话注入，聊到相关的事会自然想起来；对话进行中定期自动提炼，历史被压缩前再提炼一次；新结论与旧记忆矛盾时就地修订；每天的对话在次日收束成一行时间线；可选开启逐步淡忘。原始对话另有[历史检索](docs/plugins/memory.md)按关键词与日期回查，范围含压缩前的完整归档
 - **[会主动开口，也知道什么时候该闭嘴](docs/plugins/background.md)**：心跳按间隔唤醒模型在最近活跃的会话上说话，下次开口的时机由角色自己在对话里定——聊到兴头上挪近，你说要去睡就暂停到早上；外面刚下起雨这类事会成为开口的理由。定时任务可以在对话中创建，到点后台执行并把结果写回会话
-- **[远程使用](docs/plugins/im.md)**：QQ、微信、飞书、Lark、Telegram 五条通道，各自映射一套私聊会话，支持 `/new` `/status` `/compact` `/help` 与危险操作的远程确认；后台轮次产生的回复会主动推送到远端
-- **[插件化架构](docs/architecture.md)**：精简核心（agent 循环 / session / server / llm）+ 插件扩展，三十二个内置插件按功能分组呈现，可在设置页随时开关与配置，改动即时生效。核心只认识通用机制，不知道「记忆」「人格」「心情」这些具体功能的存在
+- **[远程使用](docs/plugins/im.md)**：QQ、微信、飞书、Lark、Telegram、Discord 六条通道，各自映射一套私聊会话，支持 `/new` `/status` `/compact` `/help` 与危险操作的远程确认；后台轮次产生的回复会主动推送到远端
+- **[插件化架构](docs/architecture.md)**：精简核心（agent 循环 / session / server / llm）+ 插件扩展，三十三个内置插件按功能分组呈现，可在设置页随时开关与配置，改动即时生效。核心只认识通用机制，不知道「记忆」「人格」「心情」这些具体功能的存在
 - **[模型可配置](docs/configuration.md)**：提供商与模型在设置页增删改并热切换，下一次请求即生效；新增提供商时可从一张预置列表里挑（DeepSeek、智谱、Kimi、通义千问、豆包、MiniMax、硅基流动、OpenAI、Anthropic、Gemini、xAI、OpenRouter、Ollama，国内与国际站各一条），地址与常用模型都已填好，只需补一个 API Key；支持 OpenAI 兼容协议与 Anthropic Messages API
 - **[命令执行有人把关](docs/plugins/tools.md)**：`exec_command` 采取执行前拦截并交人确认，极高危命令直接拒绝，不做那种能被轻易绕过的路径沙箱
 - **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，思考过程与工具调用可视化，后台任务的动静也会实时出现在会话里
@@ -52,7 +52,7 @@ go run ./cmd/wen
 
 向导里的提供商来自一张预置列表，地址、思考参数方言与常用模型都已填好，你只需要补一个 API Key。之后想换模型或加提供商，去设置页或用 `wen config models`；想重走一遍向导就运行 `wen onboard`。
 
-打开之后不需要配置任何东西：三十二个插件里默认开着二十个，角色、记忆、日程、心情、心跳都在里面，对面是一个有性格、有生活、会主动开口的人。默认关着的十二个要么得先填点什么（触发词、城市、机器人凭据、书架上的书、订阅源），要么权限过大——`read_file` 能读任意文件、`exec_command` 能执行任意命令，那是「拿它当干活的 Agent」时才要的东西，去设置页打开。
+打开之后不需要配置任何东西：三十三个插件里默认开着二十个，角色、记忆、日程、心情、心跳都在里面，对面是一个有性格、有生活、会主动开口的人。默认关着的十三个要么得先填点什么（触发词、城市、机器人凭据、书架上的书、订阅源），要么权限过大——`read_file` 能读任意文件、`exec_command` 能执行任意命令，那是「拿它当干活的 Agent」时才要的东西，去设置页打开。
 
 界面语言在设置页右上角选；**发给模型的提示词、日志与命令行输出跟着 config.yaml 的 `lang:` 走**，没写则跟随系统区域；向导里选了与系统区域不同的语言时，会替你把它写进 `config.yaml`（见[配置与模型](docs/configuration.md#语言)）。
 
@@ -83,7 +83,7 @@ wen update [--check] [-y]  检查并安装新版本
 
 ## 插件
 
-三十二个内置插件，按功能分组，都能在设置页里开关与配置。逐个的说明与配置项见[插件总览](docs/plugins/README.md)。
+三十三个内置插件，按功能分组，都能在设置页里开关与配置。逐个的说明与配置项见[插件总览](docs/plugins/README.md)。
 
 | 分组 | 插件 |
 |---|---|
@@ -92,7 +92,7 @@ wen update [--check] [-y]  检查并安装新版本
 | [角色演绎](docs/plugins/roleplay.md) | `roleplay` `dual_persona` |
 | [角色的生活](docs/plugins/life.md) | `scene` `weather` `belongings` `people` `agenda` `relationship` `unspoken` `bookshelf` `phone` `body_sense` `mood` `health` `presence` `style_watch` |
 | [后台任务](docs/plugins/background.md) | `heartbeat` `scheduler` |
-| [消息通道](docs/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` |
+| [消息通道](docs/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` `discord_bot` |
 | [程序维护](docs/plugins/self-update.md) | `self_update` |
 | [外源插件](docs/plugins/external.md) | `bundles` |
 
@@ -100,7 +100,7 @@ wen update [--check] [-y]  检查并安装新版本
 
 - [命令行](docs/cli.md) —— 各子命令，以及远程机器上怎么改插件配置
 - [配置与模型](docs/configuration.md) —— 首次运行向导、config.yaml 的各项、提供商与模型管理
-- [插件总览](docs/plugins/README.md) —— 三十二个插件的说明与配置项，以及开箱默认开着哪些
+- [插件总览](docs/plugins/README.md) —— 三十三个插件的说明与配置项，以及开箱默认开着哪些
 - [部署与访问控制](docs/deployment.md) —— 认证模型、启停脚本与 systemd
 - [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本
 - [上下文的组织](docs/context.md) —— 一轮请求怎么拼、当前时间为什么不放在 system 里

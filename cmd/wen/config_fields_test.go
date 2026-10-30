@@ -104,6 +104,18 @@ func TestIMChannelConfigFieldsGolden(t *testing.T) {
 				"format":    {"消息格式", "markdown"},
 			}),
 		},
+		{
+			name:  "discord_bot",
+			order: []string{"bot_token", "whitelist", "proxy", "api_base", "gateway_url", "confirm_timeout_sec", "format", "show_thinking", "show_tools", "push_notices", "merge_window_sec", "human_pace", "busy_hold", "wake_after_minutes"},
+			want: withCommon(map[string]fieldExpect{
+				"bot_token":   {"Bot Token", ""},
+				"whitelist":   {"DM channel 白名单", ""},
+				"proxy":       {"代理地址", ""},
+				"api_base":    {"API 地址", "https://discord.com/api/v10"},
+				"gateway_url": {"Gateway 地址", "wss://gateway.discord.gg/?v=10&encoding=json"},
+				"format":      {"消息格式", "markdown"},
+			}),
+		},
 	}
 
 	for _, c := range cases {
