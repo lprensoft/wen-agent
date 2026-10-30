@@ -8,7 +8,7 @@ import (
 	"wen/internal/plugin"
 )
 
-// 这条测试钉住四条 IM 通道的配置项序列、标签与默认值。
+// 这条测试钉住各条 IM 通道的配置项序列、标签与默认值。
 //
 // 阶段 0 把重复的字段声明收进了 imbot，并承诺设置页行为不变；字段顺序、文案
 // 与默认值正是这种重构最容易漂的地方，而编译器不会替我们盯着。
@@ -113,6 +113,17 @@ func TestIMChannelConfigFieldsGolden(t *testing.T) {
 				"proxy":       {"代理地址", ""},
 				"api_base":    {"API 地址", "https://discord.com/api/v10"},
 				"gateway_url": {"Gateway 地址", "wss://gateway.discord.gg/?v=10&encoding=json"},
+				"format":      {"消息格式", "markdown"},
+			}),
+		},
+		{
+			name:  "wecom_bot",
+			order: []string{"bot_id", "secret", "whitelist", "gateway_url", "confirm_timeout_sec", "format", "show_thinking", "show_tools", "push_notices", "merge_window_sec", "human_pace", "busy_hold", "wake_after_minutes"},
+			want: withCommon(map[string]fieldExpect{
+				"bot_id":      {"BotID", ""},
+				"secret":      {"Secret", ""},
+				"whitelist":   {"userid 白名单", ""},
+				"gateway_url": {"长连接地址", "wss://openws.work.weixin.qq.com"},
 				"format":      {"消息格式", "markdown"},
 			}),
 		},

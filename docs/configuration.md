@@ -65,11 +65,11 @@ providers:
     api_key: ${DEEPSEEK_API_KEY}
 ```
 
-插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下十三个除外：
+插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下十四个除外：
 
 - `read_file`、`exec_command`——能读任意文件、执行任意命令。这两样是「拿它当干活的 Agent」时才要的东西，要用就去设置页打开，那是个看得见的选择。
 - `dual_persona`（不填触发词就切不过去）、`weather`（要填城市，且要联网）、`phone`（要填订阅源，且要联网）、`skills`（技能目录是空的，开着只多两个用不上的工具）、`bookshelf`（书架是空的，不放书就没有可读的）。
-- `qq_bot`、`wechat_bot`、`feishu_bot`、`lark_bot`、`telegram_bot`、`discord_bot`——不填凭证或不扫码绑定就没法工作。
+- `qq_bot`、`wechat_bot`、`wecom_bot`、`feishu_bot`、`lark_bot`、`telegram_bot`、`discord_bot`——不填凭证或不扫码绑定就没法工作。
 
 其余全部默认启用，**包括整个角色演绎组与 `heartbeat`**——开箱就该是这个项目本来的样子，见[开箱形态](plugins/README.md)。心跳默认开着意味着装上即按固定节奏消耗额度，不需要就在设置页关掉它。插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
 

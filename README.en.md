@@ -11,7 +11,7 @@
 
 An AI persona with a life of its own. Written in Go, deployed as a single binary; the idea comes from [project-sue-](https://github.com/lzh830913-wq/project-sue-) by Liu Zhehong (刘哲宏). It is not aiming at "good answers" but at two other things. **Aliveness** — the character has its own day and its own social circle, catches a cold now and then, keeps things it never said out loud, starts a conversation when you have been quiet for a while, and texts like a person in your chat apps. **A personality that stays put** — it is not warm one turn and distant the next; after the history is compacted, or in a brand-new session, it is still the same person. Every trait and every piece of state lives in a plugin you can see, toggle and configure, instead of being improvised by the model each turn.
 
-The goal is **someone you can keep company with**, not a window that only exists while it is open. The core keeps only general mechanisms; every concrete capability is a plugin: an embedded web UI, long-term memory across sessions, local session storage, and six chat channels — QQ, WeChat, Feishu, Lark, Telegram and Discord. Turn the roleplay plugins off and it falls back to an ordinary get-things-done agent.
+The goal is **someone you can keep company with**, not a window that only exists while it is open. The core keeps only general mechanisms; every concrete capability is a plugin: an embedded web UI, long-term memory across sessions, local session storage, and seven chat channels — QQ, WeChat, WeCom, Feishu, Lark, Telegram and Discord. Turn the roleplay plugins off and it falls back to an ordinary get-things-done agent.
 
 ## Where the name comes from
 
@@ -24,8 +24,8 @@ The goal is **someone you can keep company with**, not a window that only exists
 - **[Two personas, outer and inner](docs/en/plugins/roleplay.md)** — switched by trigger phrases. The inner persona's conversations and memories are completely invisible to the outer one: not just the contents, but the counts and titles too. The two sides can each own a chat channel — say the phrase on QQ and the side that takes over answers you on WeChat
 - **[Memory that remembers, and forgets](docs/en/plugins/memory.md)** — a cross-session store of facts whose index is injected every turn, with relevant entries surfacing on their own when you touch on them; distilled periodically during a conversation and once more before the history is compacted; a new conclusion that contradicts an old memory revises it in place; each day's conversation is folded into a one-line timeline the next day; gradual forgetting is available. The raw conversations stay searchable by keyword and date through [history search](docs/en/plugins/memory.md), archives of pre-compaction transcripts included
 - **[It speaks first — and knows when not to](docs/en/plugins/background.md)** — a heartbeat wakes the model up on the most recently active session, and the character sets the timing of its next opening itself: closer when the conversation is lively, paused until morning when you say you are going to bed. Things like rain that has just started become a reason to speak. Scheduled tasks can be created mid-conversation and run in the background, writing their results back into the session
-- **[Remote channels](docs/en/plugins/im.md)** — QQ, WeChat, Feishu, Lark, Telegram and Discord, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
-- **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; thirty-three built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
+- **[Remote channels](docs/en/plugins/im.md)** — QQ, WeChat, WeCom, Feishu, Lark, Telegram and Discord, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
+- **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; thirty-four built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
 - **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; adding a provider starts from a list of presets (DeepSeek, Zhipu, Kimi, Qwen, Doubao, MiniMax, SiliconFlow, OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, with separate China and international entries) that fills in the endpoint and the common models, leaving only an API key to add; OpenAI-compatible and Anthropic Messages API are both supported
 - **[A human in the loop for commands](docs/en/plugins/tools.md)** — `exec_command` intercepts before execution and asks you; the most destructive commands are refused outright. No path sandbox that could be trivially bypassed
 - **Web UI** — a single-page chat interface embedded with `go:embed`, SSE streaming, visible thinking and tool calls; background activity shows up in the session in real time
@@ -50,7 +50,7 @@ go run ./cmd/wen
 
 The wizard's providers come from a preset list with the endpoint, thinking-parameter dialect and common models already filled in, so all you add is an API key. To switch models or add providers later, use the settings page or `wen config models`. To go through the wizard again, run `wen onboard`.
 
-There is nothing to configure first: twenty of the thirty-three plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The thirteen that are off either need something filled in (trigger phrases, a city, bot credentials, books on the shelf, feeds) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
+There is nothing to configure first: twenty of the thirty-four plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The fourteen that are off either need something filled in (trigger phrases, a city, bot credentials, books on the shelf, feeds) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
 
 The browser interface's language is chosen at the top right of the settings page. **The prompts sent to the model, the log and the command-line output follow `lang:` in config.yaml**, which falls back to the system locale when unset. If you pick a language in the wizard that differs from the system locale, the wizard writes it into `config.yaml` for you (see [Configuration and models](docs/en/configuration.md#language)).
 
@@ -90,7 +90,7 @@ Thirty-three built-in plugins, grouped by function, all toggleable and configura
 | [Roleplay](docs/en/plugins/roleplay.md) | `roleplay` `dual_persona` |
 | [The character's life](docs/en/plugins/life.md) | `scene` `weather` `belongings` `people` `agenda` `relationship` `unspoken` `bookshelf` `phone` `body_sense` `mood` `health` `presence` `style_watch` |
 | [Background work](docs/en/plugins/background.md) | `heartbeat` `scheduler` |
-| [Chat channels](docs/en/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` `discord_bot` |
+| [Chat channels](docs/en/plugins/im.md) | `qq_bot` `wechat_bot` `wecom_bot` `feishu_bot` `lark_bot` `telegram_bot` `discord_bot` |
 | [Maintenance](docs/en/plugins/self-update.md) | `self_update` |
 | [External bundles](docs/en/plugins/external.md) | `bundles` |
 
@@ -98,7 +98,7 @@ Thirty-three built-in plugins, grouped by function, all toggleable and configura
 
 - [CLI](docs/en/cli.md) — the subcommands, and how to change plugin settings on a headless machine
 - [Configuration and models](docs/en/configuration.md) — the setup wizard, every option in config.yaml, and provider/model management
-- [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-three plugins does, with its settings, and which are on out of the box
+- [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-four plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
 - [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message

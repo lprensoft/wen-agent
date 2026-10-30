@@ -6,7 +6,7 @@
 
 - [CLI](cli.md) — the `wen serve` / `wen config` / `wen status` / `wen update` subcommands
 - [Configuration and models](configuration.md) — every option in config.yaml, and provider/model management on the settings page
-- [Plugin overview](plugins/README.md) — what each of the thirty-three built-in plugins does, with its settings
+- [Plugin overview](plugins/README.md) — what each of the thirty-four built-in plugins does, with its settings
 - [Deployment and access control](deployment.md) — the authentication model for remote access, a start/stop script, and systemd
 - [Replay evaluation (wen eval)](evaluation.md) — turning "does the character feel better after that prompt change?" into a script you can run again
 
