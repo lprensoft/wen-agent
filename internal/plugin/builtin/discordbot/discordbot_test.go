@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -348,6 +349,19 @@ func TestServerHeartbeatRequestDoesNotReconnect(t *testing.T) {
 	m := f.expectSend(t)
 	if m.content != "好" {
 		t.Fatalf("服务端心跳请求不应断连，消息应继续处理: %+v", m)
+	}
+}
+
+// ACK 可能在心跳写返回后、标记写入前到达。标记必须先写，否则读协程清掉之后
+// 又会被写协程盖回 true，下一拍误判断线。
+func TestHeartbeatMarksPendingBeforeSend(t *testing.T) {
+	var pending atomic.Bool
+	writeHeartbeat(&pending, func() error {
+		pending.Store(false) // 模拟 ACK 在写的同时到达
+		return nil
+	})
+	if pending.Load() {
+		t.Fatal("ACK 被发送后的标记覆盖了")
 	}
 }
 

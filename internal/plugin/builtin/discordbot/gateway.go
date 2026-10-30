@@ -162,8 +162,9 @@ func (p *Plugin) connectOnce(ctx context.Context, st *gatewayState) error {
 		if v := st.seq.Load(); v > 0 {
 			d = v
 		}
-		_ = writeJSON(map[string]any{"op": opHeartbeat, "d": d})
-		awaitingACK.Store(true)
+		writeHeartbeat(&awaitingACK, func() error {
+			return writeJSON(map[string]any{"op": opHeartbeat, "d": d})
+		})
 	}
 	tickHeartbeat := func() {
 		// 上一拍还没收到 ACK：TCP 可能已被 NAT 静默切断，主动关连接让读循环
@@ -282,6 +283,13 @@ func readFrame(conn *websocket.Conn) (gatewayFrame, error) {
 		return f, fmt.Errorf("%w: %v", errBadFrame, err)
 	}
 	return f, nil
+}
+
+// writeHeartbeat 先标记「等待本拍 ACK」，再写心跳帧。顺序不能反：写完之后才标，
+// 读协程可能已经收到并清掉 ACK，写协程随后又把标记盖回 true，下一拍就会误判断线。
+func writeHeartbeat(pending *atomic.Bool, write func() error) {
+	pending.Store(true)
+	_ = write()
 }
 
 func (p *Plugin) handleDispatch(ctx context.Context, frame gatewayFrame, st *gatewayState) {
