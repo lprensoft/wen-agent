@@ -26,10 +26,7 @@ import (
 )
 
 const (
-	defAPIBase        = "https://api.telegram.org"
-	defConfirmTimeout = 300 // 秒
-
-	turnTimeout = 10 * time.Minute
+	defAPIBase = "https://api.telegram.org"
 
 	// chunkLimit 是单条消息的 rune 上限。官方上限 4096，留出分段序号与转义的余量。
 	chunkLimit = 3800
@@ -100,49 +97,30 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key: "bot_token", Label: "Bot Token", Type: plugin.FieldString, Default: "",
 			Description: "找 @BotFather 用 /newbot 建一个机器人拿到的令牌，形如 123456:ABC-DEF…。只保存在本机，不会上传到任何地方",
 		},
-		{
-			Key: "whitelist", Label: "chat_id 白名单", Type: plugin.FieldText, Default: "",
-			Description: "每行一个 chat_id（私聊时等于你的用户 ID，数字）。只响应名单内用户；留空拒绝所有人。给机器人发一条消息后，其 chat_id 会记录到运行日志",
-		},
+		imbot.WhitelistField("chat_id 白名单",
+			"每行一个 chat_id（私聊时等于你的用户 ID，数字）。只响应名单内用户；留空拒绝所有人。给机器人发一条消息后，其 chat_id 会记录到运行日志"),
 		{
 			Key: "proxy", Label: "代理地址", Type: plugin.FieldString, Default: "",
 			Description: "api.telegram.org 在部分网络下直连不通。支持 http / https / socks5，形如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890；留空直连",
 		},
-		{
-			Key: "api_base", Label: "API 地址", Type: plugin.FieldString, Default: defAPIBase,
-			Description: "一般不需要改。自建 Bot API 服务端或反向代理时填这里",
-		},
-		{
-			Key: "confirm_timeout_sec", Label: "确认等待超时（秒）", Type: plugin.FieldInt,
-			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
-			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
-		},
-		{
-			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
-			Options: []plugin.ConfigOption{
-				{Value: formatMarkdown, Label: "markdown（推荐）"},
-				{Value: formatPlain, Label: "纯文本"},
-			},
-			Description: "markdown：转成 Telegram 的 MarkdownV2 发送，加粗、代码块等照常渲染，解析失败时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
-		},
-		{
-			Key: "stream_preview", Label: "边写边显示", Type: plugin.FieldBool, Default: false,
-			Description: "回复还在生成时，在对话里显示正在写的内容（Telegram 的草稿预览，写完后换成正式消息）。" +
-				"开着就不像真人打字了：真人不会让你看着一个字一个字往外冒",
-		},
-		{
-			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮的思考过程也推送过来（可能很长）",
-		},
-		{
-			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
-		},
-		{
-			Key: "push_notices", Label: "推送后台通知", Type: plugin.FieldBool, Default: false,
-			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
-		},
+		imbot.APIBaseField(defAPIBase,
+			"一般不需要改。自建 Bot API 服务端或反向代理时填这里"),
+		imbot.ConfirmTimeoutField(imbot.DefaultConfirmTimeoutSec),
 	}
+	fields = append(fields, plugin.ConfigField{
+		Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
+		Options: []plugin.ConfigOption{
+			{Value: formatMarkdown, Label: "markdown（推荐）"},
+			{Value: formatPlain, Label: "纯文本"},
+		},
+		Description: "markdown：转成 Telegram 的 MarkdownV2 发送，加粗、代码块等照常渲染，解析失败时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
+	})
+	fields = append(fields, plugin.ConfigField{
+		Key: "stream_preview", Label: "边写边显示", Type: plugin.FieldBool, Default: false,
+		Description: "回复还在生成时，在对话里显示正在写的内容（Telegram 的草稿预览，写完后换成正式消息）。" +
+			"开着就不像真人打字了：真人不会让你看着一个字一个字往外冒",
+	})
+	fields = append(fields, imbot.OutputFields()...)
 	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
@@ -177,15 +155,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		return err
 	}
 
-	whitelist := map[string]bool{}
-	for _, line := range strings.Split(plugin.CfgString(cfg, "whitelist", ""), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			whitelist[s] = true
-		}
-	}
-
-	mergeWindow, humanPace := imbot.PaceConfig(cfg)
-	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
+	whitelist := imbot.ParseWhitelist(cfg)
 
 	p.Stop()
 
@@ -206,30 +176,15 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if plugin.CfgBool(cfg, "stream_preview", false) {
 		preview = p.onPreview
 	}
-	core, err := imbot.New(imbot.Config{
-		PluginName:     p.Name(),
-		Sender:         sender{p: p},
-		Lang:           ictx.Lang,
-		StateDir:       ictx.StateDir,
-		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
-		TurnTimeout:    turnTimeout,
-		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
-		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
-		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
-		MergeWindow:    mergeWindow,
-		HumanPace:      humanPace,
-		HoldWhenBusy:   holdWhenBusy,
-		WakeAfter:      wakeAfter,
-		Allow:          p.allowed,
-		Push:           p.push,
-		Notice:         ictx.Notice,
-		Typing:         p.onTyping,
-		Preview:        preview,
-		RunTurn:        ictx.RunTurn,
-		NewSession:     ictx.NewSession,
-		Compact:        ictx.Compact,
-		Status:         ictx.Status,
-		Sessions:       ictx.Sessions,
+	core, err := imbot.NewCore(imbot.CoreOptions{
+		PluginName: p.Name(),
+		Sender:     sender{p: p},
+		Ctx:        ictx,
+		Cfg:        cfg,
+		Allow:      p.allowed,
+		Push:       p.push,
+		Typing:     p.onTyping,
+		Preview:    preview,
 	})
 	if err != nil {
 		return err
@@ -300,13 +255,7 @@ func (p *Plugin) Stop() {
 	cancel, core := p.cancel, p.core
 	p.cancel = nil
 	p.mu.Unlock()
-	if core != nil {
-		core.Stop()
-	}
-	if cancel != nil {
-		cancel()
-		p.wg.Wait()
-	}
+	imbot.StopChannel(cancel, core, &p.wg)
 }
 
 // sender 把骨架的发送请求接到 Telegram 的协议层。

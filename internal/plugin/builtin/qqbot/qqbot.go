@@ -27,11 +27,8 @@ import (
 const (
 	// 2026-08-10 起官方把域名统一为 api.bot.qq.com，token 也改从这里取。旧的
 	// api.sgroup.qq.com / bots.qq.com 仍能用、没有下线日期，存过旧值的配置不迁移
-	defAPIBase        = "https://api.bot.qq.com"
-	defTokenURL       = "https://api.bot.qq.com/app/getAppAccessToken"
-	defConfirmTimeout = 300 // 秒
-
-	turnTimeout = 10 * time.Minute
+	defAPIBase  = "https://api.bot.qq.com"
+	defTokenURL = "https://api.bot.qq.com/app/getAppAccessToken"
 
 	formatMarkdown = "markdown"
 	formatPlain    = "plain"
@@ -111,40 +108,21 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key: "app_secret", Label: "AppSecret", Type: plugin.FieldString, Default: "",
 			Description: "机器人密钥，只保存在本机，不会上传到任何地方",
 		},
-		{
-			Key: "whitelist", Label: "openid 白名单", Type: plugin.FieldText, Default: "",
-			Description: "每行一个 user_openid，只响应名单内用户；留空拒绝所有人。陌生用户首次发消息时其 openid 会记录到运行日志",
-		},
-		{
-			Key: "api_base", Label: "API 地址", Type: plugin.FieldString, Default: defAPIBase,
-			Description: "一般不需要改。注意官方沙箱环境不支持单聊，私聊需正式发布后可用",
-		},
-		{
-			Key: "confirm_timeout_sec", Label: "确认等待超时（秒）", Type: plugin.FieldInt,
-			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
-			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
-		},
-		{
-			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮的思考过程也推送过来（可能很长）",
-		},
-		{
-			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
-		},
-		{
-			Key: "push_notices", Label: "推送后台通知", Type: plugin.FieldBool, Default: false,
-			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
-		},
-		{
-			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
-			Options: []plugin.ConfigOption{
-				{Value: formatMarkdown, Label: "markdown（推荐）"},
-				{Value: formatPlain, Label: "纯文本"},
-			},
-			Description: "markdown：按原生 markdown 消息发送（表格与图片会转成文字），平台拒绝时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
-		},
+		imbot.WhitelistField("openid 白名单",
+			"每行一个 user_openid，只响应名单内用户；留空拒绝所有人。陌生用户首次发消息时其 openid 会记录到运行日志"),
+		imbot.APIBaseField(defAPIBase,
+			"一般不需要改。注意官方沙箱环境不支持单聊，私聊需正式发布后可用"),
+		imbot.ConfirmTimeoutField(imbot.DefaultConfirmTimeoutSec),
 	}
+	fields = append(fields, imbot.OutputFields()...)
+	fields = append(fields, plugin.ConfigField{
+		Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
+		Options: []plugin.ConfigOption{
+			{Value: formatMarkdown, Label: "markdown（推荐）"},
+			{Value: formatPlain, Label: "纯文本"},
+		},
+		Description: "markdown：按原生 markdown 消息发送（表格与图片会转成文字），平台拒绝时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
+	})
 	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
@@ -169,15 +147,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 			"没有可用的持久化目录"))
 	}
 
-	whitelist := map[string]bool{}
-	for _, line := range strings.Split(plugin.CfgString(cfg, "whitelist", ""), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			whitelist[s] = true
-		}
-	}
-
-	mergeWindow, humanPace := imbot.PaceConfig(cfg)
-	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
+	whitelist := imbot.ParseWhitelist(cfg)
 
 	p.Stop()
 
@@ -195,32 +165,17 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.limiter = newReplyLimiter()
 	p.mu.Unlock()
 
-	core, err := imbot.New(imbot.Config{
-		PluginName:     p.Name(),
-		Sender:         sender{p: p},
-		Lang:           ictx.Lang,
-		StateDir:       ictx.StateDir,
-		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
-		TurnTimeout:    turnTimeout,
-		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
-		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
-		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
-		MergeWindow:    mergeWindow,
-		HumanPace:      humanPace,
-		HoldWhenBusy:   holdWhenBusy,
-		WakeAfter:      wakeAfter,
-		Allow:          p.allowed,
-		Typing:         p.typing,
-		Push:           p.push,
-		Notice:         ictx.Notice,
-		RunTurn:        ictx.RunTurn,
-		NewSession:     ictx.NewSession,
-		Compact:        ictx.Compact,
-		Status:         ictx.Status,
-		Sessions:       ictx.Sessions,
+	core, err := imbot.NewCore(imbot.CoreOptions{
+		PluginName: p.Name(),
+		Sender:     sender{p: p},
+		Ctx:        ictx,
+		Cfg:        cfg,
+		Allow:      p.allowed,
+		Typing:     p.typing,
+		Push:       p.push,
 		// 扣留要给被动回复留出余地：同一条消息 60 分钟内才能被动回复，放行后那一轮
-		// 还可能跑上 turnTimeout，再留五分钟余量。超了就只能走额度有限的主动消息。
-		ReplyWindow: replyWindow - turnTimeout - 5*time.Minute,
+		// 还可能跑上一轮的上限，再留五分钟余量。超了就只能走额度有限的主动消息。
+		ReplyWindow: replyWindow - imbot.DefaultTurnTimeout - 5*time.Minute,
 	})
 	if err != nil {
 		return err
@@ -258,13 +213,7 @@ func (p *Plugin) Stop() {
 	cancel, core := p.cancel, p.core
 	p.cancel = nil
 	p.mu.Unlock()
-	if core != nil {
-		core.Stop()
-	}
-	if cancel != nil {
-		cancel()
-		p.wg.Wait()
-	}
+	imbot.StopChannel(cancel, core, &p.wg)
 }
 
 // handleInbound 把一条 QQ 消息交给公共骨架。

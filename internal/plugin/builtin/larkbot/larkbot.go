@@ -22,7 +22,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 
@@ -32,10 +31,6 @@ import (
 )
 
 const (
-	defConfirmTimeout = 300 // 秒
-
-	turnTimeout = 10 * time.Minute
-
 	// chunkLimit 是单条消息的 rune 上限。官方文本上限 150KB、卡片 30KB，
 	// 真正的约束是可读性——聊天窗口里几千字已经要滚很久了。
 	chunkLimit = 3000
@@ -187,42 +182,23 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: joinCN("应用凭证，只保存在本机，不会上传到任何地方。注意",
 				label, "与另一版的应用凭证互不通用"),
 		},
-		{
-			Key: "whitelist", Label: "open_id 白名单", Type: plugin.FieldText, Default: "",
-			Description: "每行一个 open_id（形如 ou_xxx），只响应名单内用户；留空拒绝所有人。" +
-				"陌生用户首次发消息时其 open_id 会记录到运行日志，方便抄入",
-		},
-		{
-			Key: "api_base", Label: "API 地址", Type: plugin.FieldString, Default: p.v.defaultBase,
-			Description: "一般不需要改，私有化部署时填这里，长连接也会连到该地址",
-		},
-		{
-			Key: "confirm_timeout_sec", Label: "确认等待超时（秒）", Type: plugin.FieldInt,
-			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
-			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
-		},
-		{
-			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatCard,
-			Options: []plugin.ConfigOption{
-				{Value: formatCard, Label: "卡片（推荐，渲染格式）"},
-				{Value: formatPlain, Label: "纯文本"},
-			},
-			Description: joinCN(label, "的普通文本消息不渲染 markdown，直发会满屏星号。"+
-				"卡片：用富文本卡片发送，加粗、链接、代码等照常渲染；纯文本：发送前转成可读纯文本"),
-		},
-		{
-			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮的思考过程也推送过来（可能很长）",
-		},
-		{
-			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
-		},
-		{
-			Key: "push_notices", Label: "推送后台通知", Type: plugin.FieldBool, Default: false,
-			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
-		},
+		imbot.WhitelistField("open_id 白名单",
+			"每行一个 open_id（形如 ou_xxx），只响应名单内用户；留空拒绝所有人。"+
+				"陌生用户首次发消息时其 open_id 会记录到运行日志，方便抄入"),
+		imbot.APIBaseField(p.v.defaultBase,
+			"一般不需要改，私有化部署时填这里，长连接也会连到该地址"),
+		imbot.ConfirmTimeoutField(imbot.DefaultConfirmTimeoutSec),
 	}
+	fields = append(fields, plugin.ConfigField{
+		Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatCard,
+		Options: []plugin.ConfigOption{
+			{Value: formatCard, Label: "卡片（推荐，渲染格式）"},
+			{Value: formatPlain, Label: "纯文本"},
+		},
+		Description: joinCN(label, "的普通文本消息不渲染 markdown，直发会满屏星号。"+
+			"卡片：用富文本卡片发送，加粗、链接、代码等照常渲染；纯文本：发送前转成可读纯文本"),
+	})
+	fields = append(fields, imbot.OutputFields()...)
 	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
@@ -253,16 +229,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 			"创建状态目录失败: %w"), err)
 	}
 
-	whitelist := map[string]bool{}
-	for _, line := range strings.Split(plugin.CfgString(cfg, "whitelist", ""), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			whitelist[s] = true
-		}
-	}
+	whitelist := imbot.ParseWhitelist(cfg)
 	base := strings.TrimRight(plugin.CfgString(cfg, "api_base", p.v.defaultBase), "/")
-
-	mergeWindow, humanPace := imbot.PaceConfig(cfg)
-	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
 
 	p.Stop()
 
@@ -276,28 +244,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.tokens = newTokenSource(appID, appSecret, base, p.client)
 	p.mu.Unlock()
 
-	core, err := imbot.New(imbot.Config{
-		PluginName:     p.Name(),
-		Sender:         sender{p: p},
-		Lang:           ictx.Lang,
-		StateDir:       ictx.StateDir,
-		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
-		TurnTimeout:    turnTimeout,
-		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
-		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
-		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
-		MergeWindow:    mergeWindow,
-		HumanPace:      humanPace,
-		HoldWhenBusy:   holdWhenBusy,
-		WakeAfter:      wakeAfter,
-		Allow:          p.allowed,
-		Push:           p.push,
-		Notice:         ictx.Notice,
-		RunTurn:        ictx.RunTurn,
-		NewSession:     ictx.NewSession,
-		Compact:        ictx.Compact,
-		Status:         ictx.Status,
-		Sessions:       ictx.Sessions,
+	core, err := imbot.NewCore(imbot.CoreOptions{
+		PluginName: p.Name(),
+		Sender:     sender{p: p},
+		Ctx:        ictx,
+		Cfg:        cfg,
+		Allow:      p.allowed,
+		Push:       p.push,
 	})
 	if err != nil {
 		return err
@@ -328,13 +281,7 @@ func (p *Plugin) Stop() {
 	cancel, core := p.cancel, p.core
 	p.cancel = nil
 	p.mu.Unlock()
-	if core != nil {
-		core.Stop()
-	}
-	if cancel != nil {
-		cancel()
-		p.wg.Wait()
-	}
+	imbot.StopChannel(cancel, core, &p.wg)
 }
 
 // sender 把骨架的发送请求接到飞书 / Lark 的协议层。
