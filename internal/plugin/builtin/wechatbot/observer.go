@@ -2,11 +2,7 @@ package wechatbot
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 
 	"wen/internal/i18n"
 
@@ -15,60 +11,8 @@ import (
 )
 
 // iLink 发消息必须回带 context_token，主动推送没有「本轮入站消息」可回带——
-// 只能用该用户最近一次入站消息的 token。tokenStore 按用户记住它并持久化
-// （StateDir/tokens.json，0600：token 等同于向该用户发消息的通行证），
-// 重启后心跳结果仍能推送出去。token 由微信侧签发，有效期未知，失效按发送失败容忍。
-type tokenStore struct {
-	mu   sync.Mutex
-	path string
-	m    map[string]string // 用户 ID → 最近一次入站消息的 context_token
-}
-
-func loadTokens(stateDir string) (*tokenStore, error) {
-	s := &tokenStore{path: filepath.Join(stateDir, "tokens.json"), m: map[string]string{}}
-	raw, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return nil, err
-	}
-	if err := json.Unmarshal(raw, &s.m); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *tokenStore) remember(lang, userID, token string) {
-	if userID == "" || token == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.m[userID] == token {
-		return
-	}
-	s.m[userID] = token
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
-		return
-	}
-	raw, _ := json.MarshalIndent(s.m, "", "  ")
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		i18n.Logf(lang, "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
-	}
-}
-
-func (s *tokenStore) get(userID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.m[userID]
-}
+// 只能用该用户最近一次入站消息的 token。token 由微信侧签发，有效期未知，
+// 失效按发送失败容忍；持久化交给 imbot.PushTargetStore（StateDir/tokens.json）。
 
 // OnTurnEnd 观察每轮对话的结束：后台轮次（心跳、定时任务等其他插件发起）落在
 // 绑定到微信用户的会话上时，把助手的最终文本推送过去——否则结果只写进会话文件，
@@ -138,11 +82,11 @@ func (p *Plugin) push(ctx context.Context, userID, text string) bool {
 	return pushWith(ctx, p, tokens, userID, text)
 }
 
-func pushWith(ctx context.Context, p *Plugin, tokens *tokenStore, userID, text string) bool {
+func pushWith(ctx context.Context, p *Plugin, tokens *imbot.PushTargetStore, userID, text string) bool {
 	if tokens == nil {
 		return false
 	}
-	token := tokens.get(userID)
+	token := tokens.Get(userID)
 	if token == "" {
 		// 该用户还没发过消息（或票据文件丢失），没有可用的 context_token
 		i18n.Logf(p.langOf(), "log.wechat.no_context_token", "wechat_bot: 无法把消息推给 %s：缺少 context_token（对方先发一条消息后即可）", userID)

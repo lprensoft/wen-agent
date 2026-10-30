@@ -29,10 +29,7 @@ import (
 )
 
 const (
-	defAPIBase        = "https://ilinkai.weixin.qq.com"
-	defConfirmTimeout = 300 // 秒
-
-	turnTimeout = 10 * time.Minute
+	defAPIBase = "https://ilinkai.weixin.qq.com"
 
 	// chunkLimit 是单条消息的 rune 上限。官方未公开限制，保守取值，实测后可调。
 	chunkLimit = 2000
@@ -64,9 +61,9 @@ type Plugin struct {
 	stateDir string
 
 	// 运行组件
-	core   *imbot.Core       // 通道无关的分发、命令、会话绑定与确认代理
-	tokens *tokenStore       // 微信用户 ID → 最近入站的 context_token（后台推送用）
-	typing map[string]string // 微信用户 ID → typing_ticket 缓存
+	core   *imbot.Core            // 通道无关的分发、命令、会话绑定与确认代理
+	tokens *imbot.PushTargetStore // 微信用户 ID → 最近入站的 context_token（后台推送用）
+	typing map[string]string      // 微信用户 ID → typing_ticket 缓存
 
 	// 长轮询循环有独立的子取消：绑定成功后可只重启轮询而不动整个插件
 	ctx        context.Context
@@ -123,41 +120,22 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	fields := []plugin.ConfigField{
-		{
-			Key: "whitelist", Label: "用户白名单", Type: plugin.FieldText, Default: "",
-			Description: "每行一个微信用户 ID（形如 xxx@im.wechat）。扫码绑定人始终放行；名单外用户一律拒绝，其 ID 会记录到运行日志方便抄入",
-		},
-		{
-			Key: "api_base", Label: "API 地址", Type: plugin.FieldString, Default: defAPIBase,
-			Description: "扫码绑定的入口地址，一般不需要改；绑定后的请求走服务端下发的专属地址",
-		},
-		{
-			Key: "confirm_timeout_sec", Label: "确认等待超时（秒）", Type: plugin.FieldInt,
-			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
-			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
-		},
-		{
-			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
-			Options: []plugin.ConfigOption{
-				{Value: formatMarkdown, Label: "markdown（推荐）"},
-				{Value: formatPlain, Label: "纯文本"},
-			},
-			Description: "markdown：原样发送，由微信的 ClawBot 界面渲染加粗、引用等格式；" +
-				"纯文本：发送前去掉格式标记，适合不显示格式的客户端",
-		},
-		{
-			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮的思考过程也推送过来（可能很长）",
-		},
-		{
-			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
-		},
-		{
-			Key: "push_notices", Label: "推送后台通知", Type: plugin.FieldBool, Default: false,
-			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
-		},
+		imbot.WhitelistField("用户白名单",
+			"每行一个微信用户 ID（形如 xxx@im.wechat）。扫码绑定人始终放行；名单外用户一律拒绝，其 ID 会记录到运行日志方便抄入"),
+		imbot.APIBaseField(defAPIBase,
+			"扫码绑定的入口地址，一般不需要改；绑定后的请求走服务端下发的专属地址"),
+		imbot.ConfirmTimeoutField(imbot.DefaultConfirmTimeoutSec),
 	}
+	fields = append(fields, plugin.ConfigField{
+		Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
+		Options: []plugin.ConfigOption{
+			{Value: formatMarkdown, Label: "markdown（推荐）"},
+			{Value: formatPlain, Label: "纯文本"},
+		},
+		Description: "markdown：原样发送，由微信的 ClawBot 界面渲染加粗、引用等格式；" +
+			"纯文本：发送前去掉格式标记，适合不显示格式的客户端",
+	})
+	fields = append(fields, imbot.OutputFields()...)
 	// 收发节奏的几项与别的通道共用一份声明，见 imbot.PaceFields
 	return append(fields, imbot.PaceFields()...)
 }
@@ -180,7 +158,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if err := os.MkdirAll(ictx.StateDir, 0o755); err != nil {
 		return fmt.Errorf("创建状态目录失败: %w", err)
 	}
-	tokens, err := loadTokens(ictx.StateDir)
+	tokens, err := imbot.LoadPushTargets(ictx.StateDir, "tokens.json")
 	if err != nil {
 		return fmt.Errorf("加载推送票据失败: %w", err)
 	}
@@ -189,15 +167,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		return fmt.Errorf("加载绑定凭证失败: %w", err)
 	}
 
-	whitelist := map[string]bool{}
-	for _, line := range strings.Split(plugin.CfgString(cfg, "whitelist", ""), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			whitelist[s] = true
-		}
-	}
-
-	mergeWindow, humanPace := imbot.PaceConfig(cfg)
-	holdWhenBusy, wakeAfter := imbot.HoldConfig(cfg)
+	whitelist := imbot.ParseWhitelist(cfg)
 
 	p.Stop()
 
@@ -213,34 +183,19 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if p.pauseOnExpired == 0 {
 		p.pauseOnExpired = expiredPause
 	}
-	coreCfg := imbot.Config{
-		PluginName:     p.Name(),
-		Sender:         sender{p: p},
-		Lang:           ictx.Lang,
-		StateDir:       ictx.StateDir,
-		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
-		TurnTimeout:    turnTimeout,
-		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
-		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
-		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
-		MergeWindow:    mergeWindow,
-		HumanPace:      humanPace,
-		HoldWhenBusy:   holdWhenBusy,
-		WakeAfter:      wakeAfter,
-		Allow:          p.allowed,
-		Push:           p.push,
-		Notice:         ictx.Notice,
-		OnAccepted:     p.rememberToken,
-		Typing:         p.onTyping,
-		RunTurn:        ictx.RunTurn,
-		NewSession:     ictx.NewSession,
-		Compact:        ictx.Compact,
-		Status:         ictx.Status,
-		Sessions:       ictx.Sessions,
+	coreCfg := imbot.CoreOptions{
+		PluginName: p.Name(),
+		Sender:     sender{p: p},
+		Ctx:        ictx,
+		Cfg:        cfg,
+		Allow:      p.allowed,
+		Push:       p.push,
+		OnAccepted: p.rememberToken,
+		Typing:     p.onTyping,
 	}
 	p.mu.Unlock()
 
-	core, err := imbot.New(coreCfg)
+	core, err := imbot.NewCore(coreCfg)
 	if err != nil {
 		return err
 	}
@@ -273,7 +228,12 @@ func (p *Plugin) rememberToken(msg imbot.Message) {
 	p.mu.Lock()
 	tokens := p.tokens
 	p.mu.Unlock()
-	tokens.remember(p.langOf(), msg.UserID, msg.ReplyTo)
+	if tokens == nil {
+		return
+	}
+	if err := tokens.Set(msg.UserID, msg.ReplyTo); err != nil {
+		i18n.Logf(p.langOf(), "log.wechat.save_token_failed", "wechat_bot: 保存推送票据失败: %v", err)
+	}
 }
 
 // onTyping 把骨架的「正在输入」回调接到微信协议层。
@@ -287,7 +247,7 @@ func (p *Plugin) onTyping(ctx context.Context, msg imbot.Message, active bool) {
 		tokens := p.tokens
 		p.mu.Unlock()
 		if tokens != nil {
-			token = tokens.get(msg.UserID)
+			token = tokens.Get(msg.UserID)
 		}
 	}
 	p.setTyping(ctx, msg.UserID, token, active)
@@ -318,13 +278,7 @@ func (p *Plugin) Stop() {
 	p.cancel = nil
 	p.pollCancel = nil
 	p.mu.Unlock()
-	if core != nil {
-		core.Stop()
-	}
-	if cancel != nil {
-		cancel()
-		p.wg.Wait()
-	}
+	imbot.StopChannel(cancel, core, &p.wg)
 }
 
 // handleInbound 把一条微信消息交给公共骨架。unsupported 表示消息里有暂不支持的媒体类型。
