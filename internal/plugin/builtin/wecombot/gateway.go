@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"wen/internal/i18n"
+	"wen/internal/imbot"
 )
 
 // 长连接上的命令名（官方文档 path/101463）。
@@ -251,52 +252,10 @@ type callbackJob struct {
 	gate  *callbackGate
 }
 
-// callbackQueue 是插件级 FIFO：读循环只负责入队，独立的分发协程按到达顺序调用
-// handleCallback。每条消息起一个 goroutine 会打乱顺序；在读循环里直接处理又会被
-// 回复等待拖住，回执就没人读了。
-type callbackQueue struct {
-	mu     sync.Mutex
-	items  []callbackJob
-	notify chan struct{}
-}
-
-func newCallbackQueue() *callbackQueue {
-	return &callbackQueue{notify: make(chan struct{}, 1)}
-}
-
-func (q *callbackQueue) push(job callbackJob) {
-	q.mu.Lock()
-	q.items = append(q.items, job)
-	q.mu.Unlock()
-	select {
-	case q.notify <- struct{}{}:
-	default:
-	}
-}
-
-func (q *callbackQueue) pop(ctx context.Context) (callbackJob, bool) {
-	for {
-		q.mu.Lock()
-		if len(q.items) > 0 {
-			job := q.items[0]
-			q.items[0] = callbackJob{} // 放掉已处理帧的引用，别让底层数组一直攥着
-			q.items = q.items[1:]
-			q.mu.Unlock()
-			return job, true
-		}
-		q.mu.Unlock()
-		select {
-		case <-q.notify:
-		case <-ctx.Done():
-			return callbackJob{}, false
-		}
-	}
-}
-
 // dispatchLoop 串行消化入站消息，保持读循环收到的先后顺序。
-func (p *Plugin) dispatchLoop(ctx context.Context, q *callbackQueue) {
+func (p *Plugin) dispatchLoop(ctx context.Context, q *imbot.OrderedQueue[callbackJob]) {
 	for {
-		job, ok := q.pop(ctx)
+		job, ok := q.Pop(ctx)
 		if !ok {
 			return
 		}
@@ -428,7 +387,7 @@ func (p *Plugin) connectOnce(ctx context.Context) (bool, error) {
 
 // readLoop 持续读帧：消息入队交给分发协程，事件里只关心「被新连接顶替」，其余
 // 按 req_id 投给等待回执的请求方。这里不碰分发与发送，回执才不会排队。
-func (p *Plugin) readLoop(w *wsConn, gate *callbackGate, queue *callbackQueue) error {
+func (p *Plugin) readLoop(w *wsConn, gate *callbackGate, queue *imbot.OrderedQueue[callbackJob]) error {
 	for {
 		_, data, err := w.conn.ReadMessage()
 		if err != nil {
@@ -444,7 +403,7 @@ func (p *Plugin) readLoop(w *wsConn, gate *callbackGate, queue *callbackQueue) e
 		switch f.Cmd {
 		case cmdCallback:
 			if queue != nil {
-				queue.push(callbackJob{frame: f, gate: gate})
+				queue.Push(callbackJob{frame: f, gate: gate})
 			}
 		case cmdEvent:
 			if isDisconnectedEvent(f.Body) {

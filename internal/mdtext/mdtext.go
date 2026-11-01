@@ -80,7 +80,7 @@ func ChunkMarkdown(s string, limit int) []string {
 }
 
 // ChunkMarkdownBytes 与 ChunkMarkdown 相同，只是按 UTF-8 字节数而不是 rune 数
-// 限长。企业微信这类按字节计上限的平台用它：20480 字节能装六千多个汉字，换成
+// 限长。企业微信、钉钉这类按字节计上限的平台用它：20480 字节能装六千多个汉字，换成
 // 四字节的 emoji 只剩五千个；按 rune 数限长会以为两者一样长，实际字节早已超限。
 func ChunkMarkdownBytes(s string, limit int) []string {
 	return chunkMarkdown(s, limit, byteUnit)
