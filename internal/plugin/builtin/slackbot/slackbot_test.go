@@ -481,11 +481,31 @@ func TestDisconnectReconnects(t *testing.T) {
 
 func TestSlashCommandRouted(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "D1", nil)
-	f.pushSlash("env-1", "/help", "", "D1")
+	f.pushSlash("env-1", "/wen", "help", "D1")
 	f.expectAck(t, "env-1")
 	m := f.expectSend(t)
 	if m.channel != "D1" || !strings.Contains(m.text, "/new") {
 		t.Fatalf("斜杠命令应交给公共骨架并回复: %+v", m)
+	}
+}
+
+func TestSlashAliasRouted(t *testing.T) {
+	_, f, _ := newInited(t, noopTurn, "D1", nil)
+	f.pushSlash("env-1", "/wen-status", "", "D1")
+	f.expectAck(t, "env-1")
+	m := f.expectSend(t)
+	if m.channel != "D1" || !strings.Contains(m.text, "testprov") {
+		t.Fatalf("/wen-status 应映射到 /status: %+v", m)
+	}
+}
+
+func TestSlashUsage(t *testing.T) {
+	_, f, _ := newInited(t, noopTurn, "D1", nil)
+	f.pushSlash("env-1", "/wen", "unknown", "D1")
+	f.expectAck(t, "env-1")
+	m := f.expectSend(t)
+	if !strings.Contains(m.text, "/wen") {
+		t.Fatalf("未知子命令应回用法: %+v", m)
 	}
 }
 

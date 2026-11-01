@@ -1445,6 +1445,7 @@
   "plugin.slack_bot.field.whitelist.desc": "One Slack DM channel ID (starting with D) per line. Only channels on the list are answered; an empty list refuses everyone. When a stranger first messages, their channel ID is written to the log so you can copy it in",
   "plugin.slack_bot.field.whitelist.label": "DM channel allowlist",
   "plugin.slack_bot.msg.unsupported": "This message type is not supported yet; please send text.",
+  "plugin.slack_bot.msg.usage": "Usage: /wen new|status|compact|help|apply|deny",
   "plugin.style_watch.action.clear.desc": "Delete every day's numbers. Use it after changing the character or the prompt. Cannot be undone.",
   "plugin.style_watch.action.clear.label": "Clear the statistics",
   "plugin.style_watch.action.report.desc": "One line per day: turns, assistant-speak hits, average length, and the share of replies carrying a 【】 scene block.",

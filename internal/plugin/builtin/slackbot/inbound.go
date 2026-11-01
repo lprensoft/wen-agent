@@ -48,10 +48,11 @@ type slashPayload struct {
 	TriggerID string `json:"trigger_id"`
 }
 
-// 公共骨架认识的命令。Slack 的命令必须在应用里逐个注册，Socket Mode 下会送到
-// slash_commands 信封；不认识的命令不交给模型。
-var slackCommands = map[string]bool{
-	"/new": true, "/status": true, "/compact": true, "/help": true, "/apply": true, "/deny": true,
+// Slack 内置了一批 /status、/new 之类的命令名，直接占用会冲突。只注册一个
+// /wen，用子命令映射到公共骨架；/wen-status 这类别名也一并支持。
+var slackSubcommands = map[string]string{
+	"new": "/new", "status": "/status", "compact": "/compact",
+	"help": "/help", "apply": "/apply", "deny": "/deny",
 }
 
 func (p *Plugin) handleSlashCommand(ctx context.Context, job callbackJob) {
@@ -60,24 +61,48 @@ func (p *Plugin) handleSlashCommand(ctx context.Context, job callbackJob) {
 		i18n.Logf(p.langOf(), "log.slack.event_parse_failed", "slack_bot: 无法解析事件（已跳过）: %v", err)
 		return
 	}
-	command := strings.TrimSpace(payload.Command)
+	command := strings.ToLower(strings.TrimSpace(payload.Command))
 	channelID := strings.TrimSpace(payload.ChannelID)
 	if command == "" || channelID == "" {
 		return
 	}
-	if !slackCommands[command] {
+
+	var text string
+	switch {
+	case command == "/wen":
+		fields := strings.Fields(payload.Text)
+		if len(fields) == 0 {
+			p.slashUsage(ctx, channelID, job)
+			return
+		}
+		coreCommand, ok := slackSubcommands[strings.ToLower(fields[0])]
+		if !ok {
+			p.slashUsage(ctx, channelID, job)
+			return
+		}
+		text = coreCommand
+		if len(fields) > 1 {
+			text += " " + strings.Join(fields[1:], " ")
+		}
+	case strings.HasPrefix(command, "/wen-"):
+		coreCommand, ok := slackSubcommands[strings.TrimPrefix(command, "/wen-")]
+		if !ok {
+			i18n.Logf(p.langOf(), "log.slack.slash_ignored", "slack_bot: 忽略未接入的斜杠命令 %s", command)
+			return
+		}
+		text = coreCommand
+		if arg := strings.TrimSpace(payload.Text); arg != "" {
+			text += " " + arg
+		}
+	default:
 		i18n.Logf(p.langOf(), "log.slack.slash_ignored", "slack_bot: 忽略未接入的斜杠命令 %s", command)
 		return
 	}
-	text := command
-	if arg := strings.TrimSpace(payload.Text); arg != "" {
-		text += " " + arg
-	}
+
 	dedup := "slash:" + job.dedupID
 	if job.dedupID == "" {
 		dedup = "slash:" + payload.TriggerID
 	}
-
 	p.mu.Lock()
 	core := p.core
 	p.mu.Unlock()
@@ -88,6 +113,22 @@ func (p *Plugin) handleSlashCommand(ctx context.Context, job callbackJob) {
 		UserID:  channelID,
 		DedupID: dedup,
 		Text:    text,
+	})
+}
+
+// slashUsage 用骨架的 Note 通道回一句用法；Text 为空时骨架只发 Note，不进模型。
+func (p *Plugin) slashUsage(ctx context.Context, channelID string, job callbackJob) {
+	dedup := "slash:" + job.dedupID
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return
+	}
+	core.Handle(ctx, imbot.Message{
+		UserID:  channelID,
+		DedupID: dedup,
+		Note:    i18n.T(p.langOf(), "plugin.slack_bot.msg.usage", "用法：/wen new|status|compact|help|apply|deny"),
 	})
 }
 
