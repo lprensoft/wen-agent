@@ -2,11 +2,11 @@
 
 [← Plugin overview](README.md)　·　[← Back to README](../../../README.en.md)　·　[中文](../../plugins/im.md)　·　English
 
-## Using it remotely (qq_bot / wechat_bot / wecom_bot / dingtalk_bot / feishu_bot / lark_bot / telegram_bot / discord_bot plugins)
+## Using it remotely (qq_bot / wechat_bot / wecom_bot / dingtalk_bot / feishu_bot / lark_bot / telegram_bot / discord_bot / slack_bot plugins)
 
-Eight channels, each mapping a remote user to an ordinary session — a remote session *is* an ordinary session, visible in the web UI on a refresh, with both sides talking to the same history. All off by default.
+Nine channels, each mapping a remote user to an ordinary session — a remote session *is* an ordinary session, visible in the web UI on a refresh, with both sides talking to the same history. All off by default.
 
-Everything channel-independent (inbound dispatch and deduplication, the command set, per-user serialization, session binding, the confirmation proxy, pushing) has a single implementation, and each plugin is responsible only for its own protocol layer, so the conventions below are identical across all eight channels:
+Everything channel-independent (inbound dispatch and deduplication, the command set, per-user serialization, session binding, the confirmation proxy, pushing) has a single implementation, and each plugin is responsible only for its own protocol layer, so the conventions below are identical across all nine channels:
 
 - **Commands**: `/new` starts a new session, `/status` shows the model and usage, `/compact` compacts by hand, `/help`, plus `/apply` and `/deny` for confirming dangerous operations.
 - **Anyone outside the allowlist is refused**, with only a log line. An empty allowlist refuses everyone; a stranger's id is written to the log so you can copy it into the list.
@@ -29,6 +29,7 @@ Their protocol layers:
 | `lark_bot` | Lark (international), same as above | Same as above, but **not interchangeable with Feishu** | The same implementation instantiated twice. They are two plugins because an international app cannot be used with the China edition, the credentials and open_ids are separate, and one plugin can hold only one set of credentials and so could only connect to one side |
 | `telegram_bot` | The Bot API, HTTP long polling | Bot Token | Not reachable directly from mainland China, so configure `proxy` (http / socks5). A 409 at start-up means the bot has a webhook set, which you need to `deleteWebhook` yourself first |
 | `discord_bot` | The Discord Bot API, direct messages received over the Gateway WebSocket and sent over REST | Bot Token | The bot must share a server with the user; direct messages only, guild channel messages are ignored; the Message Content privileged intent is not needed (direct messages to the bot are an official exception); the allowlist takes DM channel IDs; messages are capped at 2000 characters and split when longer; typing indicators are supported; configure `proxy` if Discord is not reachable directly |
+| `slack_bot` | Slack Socket Mode: direct messages over a WebSocket, sent with `chat.postMessage` | App-Level Token / Bot Token | Enable Socket Mode (the app token needs `connections:write`), give the Bot Token `chat:write` and `im:history`, subscribe to `message.im`, and enable the Messages tab under App Home; direct messages only (`channel_type=im`), other channels are ignored; the allowlist takes DM channel IDs; messages are split at 3500 characters and standard markdown is converted to Slack mrkdwn; register `/wen` under Slash Commands (subcommands new / status / compact / help / apply / deny map to the core commands; optional `/wen-status`-style aliases avoid colliding with Slack built-ins such as `/status`; delivered over Socket Mode) |
 | `wecom_bot` | The WeCom intelligent robot over its long connection: direct messages received and proactive messages sent over WebSocket | BotID / Secret | Enable API mode and choose Long connection in the admin console; direct messages only, group @-mentions are ignored; the allowlist takes userids (encrypted unless the creator is a super administrator); replies are allowed for 24 hours after the callback, and proactive pushes require the user to have messaged the robot first; a message is capped at 20480 bytes and split when longer; one long connection per robot |
 | `dingtalk_bot` | DingTalk Stream mode: direct messages over a WebSocket long connection, messages sent through the OpenAPI | Client ID / Secret / RobotCode | Create an enterprise internal app with a robot in the developer console and choose Stream as the message-receiving mode; grant the robot send/receive permissions; direct messages only, group @-mentions are ignored; the allowlist takes senderStaffId (returned only after the robot is published); replies and pushes both use batchSend (not the sessionWebhook, which expires in about 30 seconds), and proactive pushes require the user to have messaged the robot first; messages are split at 3600 bytes / 1800 characters |
 
@@ -38,12 +39,13 @@ Their protocol layers:
 | `bot_token` | empty | `telegram_bot` / `discord_bot` |
 | `bot_id` / `secret` | empty | `wecom_bot`: long-connection credentials, different from the Token / EncodingAESKey used by callback mode |
 | `app_key` / `app_secret` / `robot_code` | empty | `dingtalk_bot`: the app Client ID / Client Secret and the RobotCode from the Robot & message push page |
-| `proxy` | empty | `telegram_bot` / `discord_bot`, shaped like `http://…` or `socks5://…`; empty connects directly |
-| `whitelist` | empty | Allowed user ids, one per line (openid for QQ, `xxx@im.wechat` for WeChat, open_id for Feishu / Lark, chat_id for Telegram, DM channel ID for Discord, userid for WeCom, senderStaffId for DingTalk) |
+| `app_token` / `bot_token` | empty | `slack_bot`: the Socket Mode App-Level Token (xapp-, `connections:write`) and Bot Token (xoxb-, `chat:write` / `im:history`) |
+| `proxy` | empty | `telegram_bot` / `discord_bot` / `slack_bot`, shaped like `http://…` or `socks5://…`; empty connects directly |
+| `whitelist` | empty | Allowed user ids, one per line (openid for QQ, `xxx@im.wechat` for WeChat, open_id for Feishu / Lark, chat_id for Telegram, DM channel ID for Discord, userid for WeCom, senderStaffId for DingTalk, DM channel ID for Slack) |
 | `api_base` | the official address | Rarely needs changing |
 | `gateway_url` | the official address | `discord_bot` and `wecom_bot`: the event gateway / long-connection address; rarely needs changing |
 | `confirm_timeout_sec` | 300 | The longest to wait for `/apply` / `/deny`; a timeout counts as a refusal |
-| `format` | see right | QQ / WeChat / Telegram offer `markdown` (falling back to plain text when the platform refuses) and plain text; Discord, WeCom and DingTalk offer `markdown` (rendered natively) and plain text; Feishu / Lark offer cards (the markdown component of card JSON 2.0, which renders headings, lists, quotes and code blocks) and plain text |
+| `format` | see right | QQ / WeChat / Telegram offer `markdown` (falling back to plain text when the platform refuses) and plain text; Discord, WeCom and DingTalk offer `markdown` (rendered natively) and plain text; Slack offers `markdown` (converted to Slack mrkdwn) and plain text; Feishu / Lark offer cards (the markdown component of card JSON 2.0, which renders headings, lists, quotes and code blocks) and plain text |
 | `stream_preview` | off | Telegram only: while a reply is being generated, show what has been written so far (a draft preview, replaced by the real message when done). With it on, replies no longer arrive the way a person types them |
 | `show_thinking` / `show_tools` | off / off | Whether to forward the reasoning and the tool names to the remote side |
 | `push_notices` | off | Whether to push what background work recorded (a memory distillation's note, say) to the remote side |

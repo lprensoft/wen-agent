@@ -71,9 +71,9 @@ func (c *Core) confirmerFor(msg Message) plugin.ConfirmFunc {
 		if req.Reason != "" {
 			b.WriteString(i18n.Tf(lang, "imbot.confirm.reason", "原因：%s\n", req.Reason))
 		}
-		// /apply 与 /deny 是要照着打进去的字面量，不翻译
-		b.WriteString(i18n.Tf(lang, "imbot.confirm.how",
-			"回复 /apply 允许，/deny 拒绝（%s 内未回复按拒绝处理）", timeout))
+		// /apply 与 /deny 是要照着打进去的字面量，不翻译；按通道入口改写
+		b.WriteString(displayCommands(i18n.Tf(lang, "imbot.confirm.how",
+			"回复 /apply 允许，/deny 拒绝（%s 内未回复按拒绝处理）", timeout), c.cfg.CommandDisplay))
 
 		ch := c.broker.register(msg.UserID)
 		defer c.broker.release(msg.UserID)

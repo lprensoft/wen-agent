@@ -87,12 +87,13 @@ type CoreOptions struct {
 	Ctx        plugin.InitContext
 	Cfg        map[string]any
 
-	Allow       func(userID string) bool
-	Push        func(ctx context.Context, userID, text string) bool
-	OnAccepted  func(msg Message)
-	Typing      func(ctx context.Context, msg Message, active bool)
-	Preview     func(ctx context.Context, msg Message, text string)
-	ReplyWindow time.Duration
+	Allow          func(userID string) bool
+	Push           func(ctx context.Context, userID, text string) bool
+	CommandDisplay func(string) string
+	OnAccepted     func(msg Message)
+	Typing         func(ctx context.Context, msg Message, active bool)
+	Preview        func(ctx context.Context, msg Message, text string)
+	ReplyWindow    time.Duration
 }
 
 // NewCore 组装通道无关的公共骨架。通道只实现 Sender 与自己的协议钩子；
@@ -104,6 +105,7 @@ func NewCore(opts CoreOptions) (*Core, error) {
 		PluginName:     opts.PluginName,
 		Sender:         opts.Sender,
 		Lang:           opts.Ctx.Lang,
+		CommandDisplay: opts.CommandDisplay,
 		StateDir:       opts.Ctx.StateDir,
 		ConfirmTimeout: ConfirmTimeout(opts.Cfg),
 		ShowThinking:   plugin.CfgBool(opts.Cfg, keyShowThinking, false),
