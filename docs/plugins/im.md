@@ -29,7 +29,7 @@
 | `lark_bot` | Lark（国际版），同上 | 同上，但**与飞书不通用** | 与飞书是同一套实现的两次实例化。分成两个插件是因为国际版应用不能用于中国版，凭证与 open_id 都是两套，一个插件只能存一份凭证就只能连一边 |
 | `telegram_bot` | Bot API，HTTP 长轮询 | Bot Token | 大陆直连不通，配 `proxy`（http / socks5）；启动时若报 409 说明该 Bot 已设 webhook，需先自行 `deleteWebhook` |
 | `discord_bot` | Discord Bot API，Gateway WebSocket 收私信，REST 发送 | Bot Token | 机器人需与用户在同一服务器；只处理私信，服务器频道消息忽略；不需要 Message Content privileged intent（私信正文是官方例外）；白名单填 DM channel ID；单条 2000 字，超长分段；支持「正在输入」；大陆直连不通时配 `proxy` |
-| `slack_bot` | Slack Socket Mode，WebSocket 收私聊消息，`chat.postMessage` 发送 | App-Level Token / Bot Token | 应用开启 Socket Mode（app token 需 `connections:write`），Bot Token 需 `chat:write` 与 `im:history`；事件订阅 `message.im`；App Home 的 Messages 页必须打开；只处理私聊（`channel_type=im`），其他频道忽略；白名单填 DM channel ID；单条 3500 字，标准 markdown 会转成 Slack mrkdwn |
+| `slack_bot` | Slack Socket Mode，WebSocket 收私聊消息，`chat.postMessage` 发送 | App-Level Token / Bot Token | 应用开启 Socket Mode（app token 需 `connections:write`），Bot Token 需 `chat:write` 与 `im:history`；事件订阅 `message.im`；App Home 的 Messages 页必须打开；只处理私聊（`channel_type=im`），其他频道忽略；白名单填 DM channel ID；单条 3500 字，标准 markdown 会转成 Slack mrkdwn；需在 Slash Commands 里注册 /new /status /compact /help /apply /deny（Socket Mode 下由长连接接收） |
 | `wecom_bot` | 企业微信智能机器人（长连接），WebSocket 收单聊消息、推主动消息 | BotID / Secret | 管理后台开启「API 模式」并选择「长连接」；只处理单聊，群聊 @ 消息忽略；白名单填 userid（创建者不是超级管理员时是加密 userid）；回调后 24 小时内可回复，主动推送前用户需先给机器人发过消息；单条消息内容 20480 字节，超长分段；同一机器人同时只能有一条长连接 |
 | `dingtalk_bot` | 钉钉 Stream 模式，WebSocket 长连接收单聊消息，OpenAPI 发消息 | Client ID / Secret / RobotCode | 开发者后台创建企业内部应用并添加机器人，消息接收模式选 Stream；需开通机器人收发消息权限；只处理单聊，群聊 @ 消息忽略；白名单填 senderStaffId（机器人发布上线后才有）；回复与推送统一走 batchSend（不用约 30 秒过期的 sessionWebhook），主动推送要求用户先发过消息；单条按 3600 字节 / 1800 字分段 |
 

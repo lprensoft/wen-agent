@@ -2,7 +2,8 @@
 //
 // 收消息走 Socket Mode：用 App-Level Token 调 apps.connections.open 换取 WebSocket
 // 地址，连上后逐条 ack 带 envelope_id 的事件；Slack 每隔几小时会发 disconnect
-// （warning / refresh_requested），按正常断线重连。发消息走 Web API chat.postMessage
+// （warning / refresh_requested），按正常断线重连。斜杠命令走 slash_commands
+// 信封；入站文本先还原 Slack 的 HTML 实体与 <url|label>、<@…> 格式。发消息走 Web API chat.postMessage
 // （Bot Token）。私聊靠 message.im 事件，需 im:history；App Home 的 Messages 页必须
 // 打开，否则用户私聊不到机器人。
 //
@@ -64,11 +65,18 @@ type Plugin struct {
 
 	// startSocket 可被测试替换。
 	startSocket func(context.Context)
+
+	// 测试可缩短心跳与失活超时。
+	heartbeatEvery time.Duration
+	idleTimeout    time.Duration
 }
 
 func New() *Plugin {
 	imbot.Declare("slack_bot", "Slack")
-	p := &Plugin{}
+	p := &Plugin{
+		heartbeatEvery: socketHeartbeatInterval,
+		idleTimeout:    socketIdleTimeout,
+	}
 	p.startSocket = p.socketLoop
 	return p
 }

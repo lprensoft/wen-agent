@@ -540,6 +540,7 @@
   "log.slack.frame_parse_failed": "slack_bot: could not parse a Socket frame (skipped): %v",
   "log.slack.non_im_ignored": "slack_bot: ignoring a non-direct message (channel_type=%s; direct messages only)",
   "log.slack.send_failed": "slack_bot: send failed: %v",
+  "log.slack.slash_ignored": "slack_bot: ignoring an unsupported slash command %s",
   "log.slack.socket_retry": "slack_bot: Socket Mode disconnected (%v), reconnecting in %v",
   "log.stylewatch.notice_failed": "style watch: could not write the session note: %v",
   "log.stylewatch.stats_write_failed": "style watch: could not write the statistics: %v",

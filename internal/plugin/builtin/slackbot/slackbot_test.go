@@ -39,6 +39,7 @@ type fakeSlack struct {
 	connections   int
 	failNext      bool
 	rateLimitOnce bool
+	ignorePings   bool
 }
 
 func newFakeSlack(t *testing.T) *fakeSlack {
@@ -105,7 +106,11 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 		f.mu.Lock()
 		f.conn = conn
 		f.connections++
+		ignorePings := f.ignorePings
 		f.mu.Unlock()
+		if ignorePings {
+			conn.SetPingHandler(func(string) error { return nil })
+		}
 		defer func() {
 			f.mu.Lock()
 			if f.conn == conn {
@@ -153,6 +158,15 @@ func (f *fakeSlack) pushFrame(frame any) {
 func (f *fakeSlack) pushEnvelope(id string, payload map[string]any) {
 	f.pushFrame(map[string]any{
 		"envelope_id": id, "type": "events_api", "payload": payload, "accepts_response_payload": false,
+	})
+}
+
+func (f *fakeSlack) pushSlash(id, command, text, channel string) {
+	f.pushFrame(map[string]any{
+		"envelope_id": id, "type": "slash_commands", "accepts_response_payload": true,
+		"payload": map[string]any{
+			"command": command, "text": text, "channel_id": channel, "user_id": "U1",
+		},
 	})
 }
 
@@ -208,7 +222,15 @@ func messagePayload(eventID, channel, user, text, channelType, subtype, botID st
 // newInited 起一个连着假 Slack 的插件。默认关掉合并窗口，测试不必等 3 秒。
 func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, tweaks ...func(*Plugin)) (*Plugin, *fakeSlack, *session.Store) {
 	t.Helper()
+	return newInitedWith(t, runTurn, whitelist, extra, nil, tweaks...)
+}
+
+func newInitedWith(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, fakeSetup func(*fakeSlack), tweaks ...func(*Plugin)) (*Plugin, *fakeSlack, *session.Store) {
+	t.Helper()
 	f := newFakeSlack(t)
+	if fakeSetup != nil {
+		fakeSetup(f)
+	}
 	store, err := session.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -454,6 +476,67 @@ func TestDisconnectReconnects(t *testing.T) {
 	f.mu.Unlock()
 	if n != 2 {
 		t.Fatalf("应重连一次，连接数 = %d", n)
+	}
+}
+
+func TestSlashCommandRouted(t *testing.T) {
+	_, f, _ := newInited(t, noopTurn, "D1", nil)
+	f.pushSlash("env-1", "/help", "", "D1")
+	f.expectAck(t, "env-1")
+	m := f.expectSend(t)
+	if m.channel != "D1" || !strings.Contains(m.text, "/new") {
+		t.Fatalf("斜杠命令应交给公共骨架并回复: %+v", m)
+	}
+}
+
+func TestUnknownSlashCommandIgnored(t *testing.T) {
+	_, f, _ := newInited(t, noopTurn, "D1", nil)
+	f.pushSlash("env-1", "/unknown", "", "D1")
+	f.expectAck(t, "env-1")
+	f.expectNoSend(t, 300*time.Millisecond)
+}
+
+func TestDecodeSlackText(t *testing.T) {
+	in := "a &lt; b &amp;&amp; c &gt; d <https://example.com|example> <@U1> <#C1|general> <!here>"
+	want := "a < b && c > d example (https://example.com) @U1 #general @here"
+	if got := decodeSlackText(in); got != want {
+		t.Fatalf("decodeSlackText = %q，想要 %q", got, want)
+	}
+}
+
+func TestInboundTextDecodedBeforeModel(t *testing.T) {
+	var got string
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		got = input
+		return "ok", nil
+	}
+	_, f, _ := newInited(t, runTurn, "D1", nil)
+	f.pushEnvelope("env-1", messagePayload("Ev1", "D1", "U1", "a &lt; b &amp;&amp; c &gt; d", "im", "", "", false))
+	f.expectSend(t)
+	if got != "a < b && c > d" {
+		t.Fatalf("模型收到的文本 = %q", got)
+	}
+}
+
+func TestIdleSocketReconnects(t *testing.T) {
+	_, f, _ := newInitedWith(t, noopTurn, "D1", nil, func(f *fakeSlack) {
+		f.mu.Lock()
+		f.ignorePings = true
+		f.mu.Unlock()
+	}, func(p *Plugin) {
+		p.heartbeatEvery = 50 * time.Millisecond
+		p.idleTimeout = 150 * time.Millisecond
+	})
+	select {
+	case <-f.ready:
+	case <-time.After(6 * time.Second):
+		t.Fatal("失活连接没有触发重连")
+	}
+	f.mu.Lock()
+	n := f.connections
+	f.mu.Unlock()
+	if n < 2 {
+		t.Fatalf("应至少重连一次，连接数 = %d", n)
 	}
 }
 

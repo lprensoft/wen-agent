@@ -24,12 +24,15 @@ const (
 	// 每个 envelope 都要回 ack，Slack 才会停止重推。我们收到就入队并立刻回，
 	// 不把耗时留给模型。
 	envelopeTypeEventsAPI = "events_api"
+	envelopeTypeSlash     = "slash_commands"
 	frameTypeHello        = "hello"
 	frameTypeDisconnect   = "disconnect"
 
-	socketDialTimeout    = 15 * time.Second
-	socketWriteTimeout   = 5 * time.Second
-	maxSocketAuthFailure = 5
+	socketDialTimeout       = 15 * time.Second
+	socketWriteTimeout      = 5 * time.Second
+	socketHeartbeatInterval = 30 * time.Second
+	socketIdleTimeout       = 90 * time.Second
+	maxSocketAuthFailure    = 5
 )
 
 var errSocketDisconnect = errors.New("Slack 要求刷新 Socket Mode 连接")
@@ -57,7 +60,9 @@ type envelope struct {
 }
 
 type callbackJob struct {
-	raw json.RawMessage
+	typ     string
+	raw     json.RawMessage
+	dedupID string // 信封 ID；事件用 event_id，斜杠命令用它去重
 }
 
 // socketLoop 维护 Socket Mode 长连接：断线与 Slack 的定期刷新都按
@@ -109,7 +114,14 @@ func (p *Plugin) socketLoop(ctx context.Context) {
 func (p *Plugin) socketOnce(ctx context.Context) error {
 	p.mu.Lock()
 	appToken, base, proxy, client, queue := p.appToken, p.apiBase, p.proxy, p.client, p.queue
+	every, idle := p.heartbeatEvery, p.idleTimeout
 	p.mu.Unlock()
+	if every <= 0 {
+		every = socketHeartbeatInterval
+	}
+	if idle <= every {
+		idle = 3 * every
+	}
 
 	reqCtx, cancelReq := context.WithTimeout(ctx, socketDialTimeout)
 	defer cancelReq()
@@ -166,6 +178,41 @@ func (p *Plugin) socketOnce(ctx context.Context) error {
 		_ = conn.Close()
 	}()
 
+	// 读超时 + 主动 ping：代理可能维持着本地 TCP 连接而上游已断，ReadMessage
+	// 会一直阻塞。任何入站帧、服务端 ping/pong 都续期；超过 idle 没有任何活动
+	// 就让 ReadMessage 超时，socketLoop 进入重连。
+	touch := func() {
+		_ = conn.SetReadDeadline(time.Now().Add(idle))
+	}
+	touch()
+	conn.SetPingHandler(func(appData string) error {
+		touch()
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(socketWriteTimeout))
+	})
+	conn.SetPongHandler(func(string) error {
+		touch()
+		return nil
+	})
+	keepDone := make(chan struct{})
+	defer close(keepDone)
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-keepDone:
+				return
+			case <-connCtx.Done():
+				return
+			case <-t.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(socketWriteTimeout)); err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+
 	var writeMu sync.Mutex
 	writeAck := func(envelopeID string) error {
 		writeMu.Lock()
@@ -179,6 +226,7 @@ func (p *Plugin) socketOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		touch()
 		var env envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			i18n.Logf(p.langOf(), "log.slack.frame_parse_failed", "slack_bot: 无法解析的 Socket 帧（已跳过）: %v", err)
@@ -197,8 +245,8 @@ func (p *Plugin) socketOnce(ctx context.Context) error {
 		}
 
 		// 先入队再 ack：ack 成功代表消息已落到本地队列，Slack 不会重推。
-		if env.Type == envelopeTypeEventsAPI && queue != nil {
-			queue.Push(callbackJob{raw: env.Payload})
+		if queue != nil && (env.Type == envelopeTypeEventsAPI || env.Type == envelopeTypeSlash) {
+			queue.Push(callbackJob{typ: env.Type, raw: env.Payload, dedupID: env.EnvelopeID})
 		}
 		if err := writeAck(env.EnvelopeID); err != nil {
 			return err
@@ -213,7 +261,7 @@ func (p *Plugin) dispatchLoop(ctx context.Context, q *imbot.OrderedQueue[callbac
 		if !ok {
 			return
 		}
-		p.handleEvent(ctx, job.raw)
+		p.handleEnvelope(ctx, job)
 	}
 }
 

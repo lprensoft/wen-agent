@@ -3,6 +3,8 @@ package slackbot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"wen/internal/i18n"
@@ -26,9 +28,72 @@ type eventPayload struct {
 	} `json:"event"`
 }
 
+// handleEnvelope 按 Socket Mode 的信封类型分发：Events API 消息与斜杠命令
+// 都归一化成 imbot.Message；其他类型（按钮、模态框）已在读循环里 ack 后忽略。
+func (p *Plugin) handleEnvelope(ctx context.Context, job callbackJob) {
+	switch job.typ {
+	case envelopeTypeEventsAPI:
+		p.handleEvent(ctx, job.raw, job.dedupID)
+	case envelopeTypeSlash:
+		p.handleSlashCommand(ctx, job)
+	}
+}
+
+// slashPayload 是 Socket Mode 下斜杠命令的 payload。
+type slashPayload struct {
+	Command   string `json:"command"`
+	Text      string `json:"text"`
+	ChannelID string `json:"channel_id"`
+	UserID    string `json:"user_id"`
+	TriggerID string `json:"trigger_id"`
+}
+
+// 公共骨架认识的命令。Slack 的命令必须在应用里逐个注册，Socket Mode 下会送到
+// slash_commands 信封；不认识的命令不交给模型。
+var slackCommands = map[string]bool{
+	"/new": true, "/status": true, "/compact": true, "/help": true, "/apply": true, "/deny": true,
+}
+
+func (p *Plugin) handleSlashCommand(ctx context.Context, job callbackJob) {
+	var payload slashPayload
+	if err := json.Unmarshal(job.raw, &payload); err != nil {
+		i18n.Logf(p.langOf(), "log.slack.event_parse_failed", "slack_bot: 无法解析事件（已跳过）: %v", err)
+		return
+	}
+	command := strings.TrimSpace(payload.Command)
+	channelID := strings.TrimSpace(payload.ChannelID)
+	if command == "" || channelID == "" {
+		return
+	}
+	if !slackCommands[command] {
+		i18n.Logf(p.langOf(), "log.slack.slash_ignored", "slack_bot: 忽略未接入的斜杠命令 %s", command)
+		return
+	}
+	text := command
+	if arg := strings.TrimSpace(payload.Text); arg != "" {
+		text += " " + arg
+	}
+	dedup := "slash:" + job.dedupID
+	if job.dedupID == "" {
+		dedup = "slash:" + payload.TriggerID
+	}
+
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return
+	}
+	core.Handle(ctx, imbot.Message{
+		UserID:  channelID,
+		DedupID: dedup,
+		Text:    text,
+	})
+}
+
 // handleEvent 把一条 message.im 事件归一化成 imbot.Message。用户标识用 DM
 // channel ID（后续回复与推送都发给它），去重用 event_id。
-func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage) {
+func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage, envelopeID string) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		i18n.Logf(p.langOf(), "log.slack.event_parse_failed", "slack_bot: 无法解析事件（已跳过）: %v", err)
@@ -59,7 +124,7 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage) {
 	default:
 		return
 	}
-	text := strings.TrimSpace(payload.Event.Text)
+	text := strings.TrimSpace(decodeSlackText(payload.Event.Text))
 	if len(payload.Event.Files) > 0 && text == "" {
 		unsupported = true
 	}
@@ -72,6 +137,9 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage) {
 	dedup := payload.EventID
 	if dedup == "" {
 		dedup = channelID + ":" + payload.Event.TS
+	}
+	if dedup == ":" || dedup == "" {
+		dedup = envelopeID
 	}
 
 	p.mu.Lock()
@@ -86,4 +154,68 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage) {
 		Text:    text,
 		Note:    note,
 	})
+}
+
+var slackTokenRe = regexp.MustCompile(`<([^>]+)>`)
+
+// decodeSlackText 还原 Slack 在 message 文本里的协议编码：&amp; / &lt; / &gt;
+// 以及 <url|label>、<@U…>、<#C…|name>、<!here> 这类控制序列。不还原的话，
+// 用户写的代码、命令和比较符会带着实体进模型，回显时还会被再转义一次。
+func decodeSlackText(s string) string {
+	var tokens []string
+	s = slackTokenRe.ReplaceAllStringFunc(s, func(m string) string {
+		tokens = append(tokens, decodeSlackToken(m[1:len(m)-1]))
+		return fmt.Sprintf("\x00%d\x00", len(tokens)-1)
+	})
+	s = decodeSlackEntities(s)
+	for i, t := range tokens {
+		s = strings.ReplaceAll(s, fmt.Sprintf("\x00%d\x00", i), t)
+	}
+	return s
+}
+
+func decodeSlackToken(inner string) string {
+	inner = decodeSlackEntities(inner)
+	switch {
+	case strings.HasPrefix(inner, "@"):
+		parts := strings.SplitN(inner[1:], "|", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			return "@" + parts[1]
+		}
+		return "@" + parts[0]
+	case strings.HasPrefix(inner, "#"):
+		parts := strings.SplitN(inner[1:], "|", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			return "#" + parts[1]
+		}
+		return "#" + parts[0]
+	case strings.HasPrefix(inner, "!"):
+		body := inner[1:]
+		if strings.HasPrefix(body, "date^") {
+			if i := strings.Index(body, "|"); i >= 0 {
+				return body[i+1:]
+			}
+			return ""
+		}
+		if i := strings.Index(body, "|"); i >= 0 {
+			return body[i+1:]
+		}
+		return "@" + body
+	default:
+		if i := strings.Index(inner, "|"); i >= 0 {
+			url, label := inner[:i], inner[i+1:]
+			if label == "" {
+				return url
+			}
+			return label + " (" + url + ")"
+		}
+		return inner
+	}
+}
+
+func decodeSlackEntities(s string) string {
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	s = strings.ReplaceAll(s, "&amp;", "&") // 最后解码 &，避免 &amp;lt; 被二次解成 <
+	return s
 }
