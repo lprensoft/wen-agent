@@ -396,7 +396,7 @@
   "log.dingtalk.group_ignored": "dingtalk_bot: ignoring a non-direct message (conversationType=%s; direct messages only)",
   "log.dingtalk.no_staff_id": "dingtalk_bot: the callback has no senderStaffId (the robot may not be published yet); ignored",
   "log.dingtalk.send_failed": "dingtalk_bot: send failed: %v",
-  "log.dingtalk.stream_disconnected": "dingtalk_bot: the server asked to disconnect the Stream; not reconnecting. Check whether another process uses the same app",
+  "log.dingtalk.stream_disconnected": "dingtalk_bot: the server asked to disconnect (connection expiry or load balancing); reconnecting shortly",
   "log.dingtalk.stream_retry": "dingtalk_bot: Stream disconnected (%v), reconnecting in %v",
   "log.discord.event_parse_failed": "discord_bot: could not parse the message event: %v",
   "log.discord.gateway_disconnected": "discord_bot: the gateway connection dropped (%v); reconnecting in %v",

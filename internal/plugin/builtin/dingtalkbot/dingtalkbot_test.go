@@ -117,17 +117,22 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		var param struct {
-			Title string `json:"title"`
-			Text  string `json:"text"`
+			Title   string `json:"title"`
+			Text    string `json:"text"`
+			Content string `json:"content"`
 		}
 		_ = json.Unmarshal([]byte(body.MsgParam), &param)
+		content := param.Text
+		if body.MsgKey == "sampleText" {
+			content = param.Content
+		}
 		userID := ""
 		if len(body.UserIDs) > 0 {
 			userID = body.UserIDs[0]
 		}
 		f.sends <- sentMsg{
 			userID: userID, robotCode: body.RobotCode, msgKey: body.MsgKey,
-			title: param.Title, text: param.Text,
+			title: param.Title, text: content,
 		}
 
 		resp := map[string]any{"processQueryKey": "q1"}
@@ -521,11 +526,14 @@ func chunkTotal(s string) int {
 	return n
 }
 
-func TestPlainFormatStripsMarkdown(t *testing.T) {
+func TestPlainFormatUsesTextMessage(t *testing.T) {
 	runTurn := func(context.Context, string, string) (string, error) { return "**加粗** 与 `代码`", nil }
 	_, f, _ := newInited(t, runTurn, "user1", map[string]any{"format": formatPlain})
 	f.pushCallback("stream-1", textData("user1", "hi"))
 	m := f.expectSend(t)
+	if m.msgKey != "sampleText" {
+		t.Fatalf("纯文本应使用 sampleText，实际 %q", m.msgKey)
+	}
 	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "加粗") || !strings.Contains(m.text, "「代码」") {
 		t.Fatalf("纯文本格式应剥掉 markdown: %q", m.text)
 	}
@@ -549,16 +557,26 @@ func TestSystemPingAcked(t *testing.T) {
 	}
 }
 
-func TestServerDisconnectStopsReconnecting(t *testing.T) {
-	_, f, _ := newInited(t, noopTurn, "user1", nil)
+func TestServerDisconnectReconnects(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) { return "收到：" + input, nil }
+	_, f, _ := newInited(t, runTurn, "user1", nil)
 	f.pushSystem(topicDisconnect, "disc-1", "")
-	f.expectAck(t, "disc-1")
-	time.Sleep(2500 * time.Millisecond) // 退避最短 2 秒，若会重连这里就会出现第二条连接
+
+	// 服务端的 disconnect 是正常连接管理，应重新获取接入点并重连
+	select {
+	case <-f.ready:
+	case <-time.After(6 * time.Second):
+		t.Fatal("收到 disconnect 后没有重连")
+	}
+	f.pushCallback("stream-2", textData("user1", "还在吗"))
+	if m := f.expectSend(t); m.text != "收到：还在吗" {
+		t.Fatalf("重连后应继续收消息: %+v", m)
+	}
 	f.mu.Lock()
 	n := f.connections
 	f.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("服务端要求断开后不应重连，连接数 = %d", n)
+	if n != 2 {
+		t.Fatalf("应重连一次，连接数 = %d", n)
 	}
 }
 

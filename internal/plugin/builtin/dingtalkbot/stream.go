@@ -32,7 +32,7 @@ const (
 	maxStreamAuthFails = 5
 )
 
-var errStreamDisconnected = errors.New("服务端要求断开 Stream 连接")
+var errServerDisconnect = errors.New("服务端要求断开 Stream 连接")
 
 type streamSubscription struct {
 	Type  string `json:"type"`
@@ -83,8 +83,8 @@ type callbackJob struct {
 }
 
 // streamLoop 维护 Stream 长连接：断线按 [2,5,10,30,60] 秒退避重连。接入点
-// 连续 4xx 说明凭证或订阅有问题，试满 maxStreamAuthFails 次后放弃；服务端主动
-// 发 disconnect 则不再重连（与企微被顶替的处理一致）。
+// 连续 4xx 说明凭证或订阅有问题，试满 maxStreamAuthFails 次后放弃。服务端主动
+// 发 disconnect 是正常的连接管理（连接到期、负载均衡等），照常重连。
 func (p *Plugin) streamLoop(ctx context.Context) {
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 	attempt, authFails := 0, 0
@@ -95,10 +95,9 @@ func (p *Plugin) streamLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errStreamDisconnected) {
+		if errors.Is(err, errServerDisconnect) {
 			i18n.Logf(p.langOf(), "log.dingtalk.stream_disconnected",
-				"dingtalk_bot: 服务端要求断开 Stream 连接，不再重连。请检查是否有另一个进程使用了同一应用")
-			return
+				"dingtalk_bot: 服务端要求断开连接（连接到期或负载均衡），稍后重连")
 		}
 
 		var ee *endpointError
@@ -282,7 +281,7 @@ func (p *Plugin) streamOnce(ctx context.Context) error {
 			return err
 		}
 		if topic == topicDisconnect {
-			return errStreamDisconnected
+			return errServerDisconnect
 		}
 	}
 }

@@ -17,7 +17,8 @@ const (
 )
 
 // send 把文本发到钉钉。回调回复与后台推送都走同一个 OpenAPI：用户标识是
-// senderStaffId，主动推送要求用户先给机器人发过消息。
+// senderStaffId，主动推送要求用户先给机器人发过消息。markdown 用 sampleMarkdown，
+// 纯文本用 sampleText，避免转换后的正文又被客户端当成 Markdown。
 func (p *Plugin) send(ctx context.Context, userID, text string) bool {
 	if strings.TrimSpace(text) == "" {
 		return true
@@ -30,7 +31,8 @@ func (p *Plugin) send(ctx context.Context, userID, text string) bool {
 	p.mu.Unlock()
 
 	// 纯文本转换要在分段之前做：链接展开等操作会改变长度
-	if format == formatPlain {
+	plain := format == formatPlain
+	if plain {
 		text = mdtext.ToPlainText(lang, text)
 	}
 	chunks := chunkText(text)
@@ -41,7 +43,7 @@ func (p *Plugin) send(ctx context.Context, userID, text string) bool {
 		if total > 1 {
 			chunk = fmt.Sprintf("(%d/%d) %s", i+1, total, chunk)
 		}
-		if err := p.sendMarkdown(ctx, userID, title, chunk); err != nil {
+		if err := p.sendMessage(ctx, userID, title, chunk, plain); err != nil {
 			ok = false
 			if ctx.Err() != nil {
 				return false

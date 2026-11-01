@@ -74,21 +74,29 @@ func (t *tokenSource) invalidate() {
 	t.mu.Unlock()
 }
 
-// sendMarkdown 给单个用户发一条 sampleMarkdown 消息。token 失效时刷新一次再重试。
-func (p *Plugin) sendMarkdown(ctx context.Context, userID, title, text string) error {
+// sendMessage 给单个用户发一条消息。markdown 用 sampleMarkdown，纯文本用
+// sampleText——纯文本模式不能让客户端再按 Markdown 渲染内容。token 失效时
+// 刷新一次再重试。
+func (p *Plugin) sendMessage(ctx context.Context, userID, title, text string, plain bool) error {
 	p.mu.Lock()
 	tokens, client, base, robotCode := p.tokens, p.client, p.apiBase, p.robotCode
 	p.mu.Unlock()
 
-	param, err := json.Marshal(map[string]string{"title": title, "text": text})
+	msgKey := "sampleMarkdown"
+	param := map[string]string{"title": title, "text": text}
+	if plain {
+		msgKey = "sampleText"
+		param = map[string]string{"content": text}
+	}
+	paramRaw, err := json.Marshal(param)
 	if err != nil {
 		return err
 	}
 	body := map[string]any{
 		"robotCode": robotCode,
 		"userIds":   []string{userID},
-		"msgKey":    "sampleMarkdown",
-		"msgParam":  string(param),
+		"msgKey":    msgKey,
+		"msgParam":  string(paramRaw),
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
