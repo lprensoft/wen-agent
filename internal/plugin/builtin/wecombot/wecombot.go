@@ -56,7 +56,7 @@ type Plugin struct {
 	core *imbot.Core // 通道无关的分发、命令、会话绑定与确认代理
 	conn *wsConn     // 当前长连接；未连上时为 nil
 
-	callbacks *callbackQueue // 入站消息的 FIFO，保持读循环收到的顺序
+	callbacks *imbot.OrderedQueue[callbackJob] // 入站消息的 FIFO，保持读循环收到的顺序
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -192,7 +192,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	p.core = core
-	p.callbacks = newCallbackQueue()
+	p.callbacks = imbot.NewOrderedQueue[callbackJob]()
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	ctx := p.ctx
 	queue := p.callbacks

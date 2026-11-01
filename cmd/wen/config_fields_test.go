@@ -117,6 +117,18 @@ func TestIMChannelConfigFieldsGolden(t *testing.T) {
 			}),
 		},
 		{
+			name:  "dingtalk_bot",
+			order: []string{"app_key", "app_secret", "robot_code", "whitelist", "api_base", "confirm_timeout_sec", "format", "show_thinking", "show_tools", "push_notices", "merge_window_sec", "human_pace", "busy_hold", "wake_after_minutes"},
+			want: withCommon(map[string]fieldExpect{
+				"app_key":    {"Client ID（AppKey）", ""},
+				"app_secret": {"Client Secret（AppSecret）", ""},
+				"robot_code": {"RobotCode", ""},
+				"whitelist":  {"userid 白名单", ""},
+				"api_base":   {"API 地址", "https://api.dingtalk.com"},
+				"format":     {"消息格式", "markdown"},
+			}),
+		},
+		{
 			name:  "wecom_bot",
 			order: []string{"bot_id", "secret", "whitelist", "gateway_url", "confirm_timeout_sec", "format", "show_thinking", "show_tools", "push_notices", "merge_window_sec", "human_pace", "busy_hold", "wake_after_minutes"},
 			want: withCommon(map[string]fieldExpect{
