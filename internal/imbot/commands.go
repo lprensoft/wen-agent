@@ -26,6 +26,23 @@ func HelpText(lang string) string {
 	return i18n.T(lang, "imbot.help", helpTextZH)
 }
 
+// helpText 是本通道实际显示的帮助：命令名按通道入口改写。
+func (c *Core) helpText() string {
+	return displayCommands(HelpText(c.cfg.Lang), c.cfg.CommandDisplay)
+}
+
+// displayCommands 把骨架命令名替换成通道入口。只用于骨架自己生成的帮助与确认
+// 文案，不碰模型输出或用户原文。
+func displayCommands(s string, f func(string) string) string {
+	if f == nil {
+		return s
+	}
+	for _, cmd := range []string{"/new", "/status", "/compact", "/help", "/apply", "/deny"} {
+		s = strings.ReplaceAll(s, cmd, f(cmd))
+	}
+	return s
+}
+
 // process 处理一条已排到队首的消息：命令直接答复，其余作为一轮对话执行。
 func (c *Core) process(ctx context.Context, msg Message) {
 	defer func() {
@@ -37,7 +54,7 @@ func (c *Core) process(ctx context.Context, msg Message) {
 	text := strings.TrimSpace(msg.Text)
 	switch {
 	case text == "/help":
-		c.send(ctx, msg, HelpText(c.cfg.Lang))
+		c.send(ctx, msg, c.helpText())
 	case text == "/new":
 		c.cmdNew(ctx, msg)
 	case text == "/status":
@@ -46,7 +63,7 @@ func (c *Core) process(ctx context.Context, msg Message) {
 		c.cmdCompact(ctx, msg)
 	case strings.HasPrefix(text, "/"):
 		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.unknown_command", "未知命令：%s\n%s",
-			text, HelpText(c.cfg.Lang)))
+			text, c.helpText()))
 	default:
 		c.chat(ctx, msg)
 	}

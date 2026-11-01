@@ -3,6 +3,7 @@ package slackbot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -484,8 +485,42 @@ func TestSlashCommandRouted(t *testing.T) {
 	f.pushSlash("env-1", "/wen", "help", "D1")
 	f.expectAck(t, "env-1")
 	m := f.expectSend(t)
-	if m.channel != "D1" || !strings.Contains(m.text, "/new") {
-		t.Fatalf("斜杠命令应交给公共骨架并回复: %+v", m)
+	if m.channel != "D1" || !strings.Contains(m.text, "/wen new") || !strings.Contains(m.text, "/wen apply") {
+		t.Fatalf("帮助应显示 /wen 入口: %+v", m)
+	}
+}
+
+func TestConfirmPromptUsesWenCommands(t *testing.T) {
+	runTurn := func(ctx context.Context, _, _ string) (string, error) {
+		fn, ok := plugin.ConfirmerFrom(ctx)
+		if !ok {
+			return "", errors.New("没有确认通道")
+		}
+		approved, err := fn(ctx, plugin.ConfirmRequest{Title: "执行命令", Detail: "rm -rf /"})
+		if err != nil {
+			return "", err
+		}
+		if approved {
+			return "已允许", nil
+		}
+		return "已拒绝", nil
+	}
+	_, f, _ := newInited(t, runTurn, "D1", nil)
+	f.pushEnvelope("env-1", messagePayload("Ev1", "D1", "U1", "跑一下", "im", "", "", false))
+	prompt := f.expectSend(t)
+	if !strings.Contains(prompt.text, "/wen apply") || !strings.Contains(prompt.text, "/wen deny") {
+		t.Fatalf("确认提示应显示 /wen 入口: %q", prompt.text)
+	}
+	if strings.Contains(prompt.text, "回复 /apply") {
+		t.Fatalf("确认提示不应出现裸 /apply: %q", prompt.text)
+	}
+
+	f.pushSlash("env-2", "/wen", "apply", "D1")
+	if ack := f.expectSend(t); !strings.Contains(ack.text, "已允许") {
+		t.Fatalf("确认回执不符: %+v", ack)
+	}
+	if final := f.expectSend(t); final.text != "已允许" {
+		t.Fatalf("确认后应继续本轮: %+v", final)
 	}
 }
 

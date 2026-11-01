@@ -68,6 +68,11 @@ type Config struct {
 	// 的其它出口（Web UI 的状态行、日志）说的应该是同一门语言。
 	Lang string
 
+	// CommandDisplay 把骨架里的命令名（/new、/apply 等）换成该通道实际入口的
+	// 写法，供帮助与确认提示使用。为 nil 时原样显示；Slack 用它把 /new 显示成
+	// /wen new。入站解析仍走骨架的原始命令名。
+	CommandDisplay func(string) string
+
 	ConfirmTimeout time.Duration
 	TurnTimeout    time.Duration // 0 表示用 DefaultTurnTimeout
 	QueueSize      int           // 0 表示用 DefaultQueueSize

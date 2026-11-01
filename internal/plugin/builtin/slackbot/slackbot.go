@@ -183,12 +183,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Unlock()
 
 	core, err := imbot.NewCore(imbot.CoreOptions{
-		PluginName: p.Name(),
-		Sender:     sender{p: p},
-		Ctx:        ictx,
-		Cfg:        cfg,
-		Allow:      p.allowed,
-		Push:       p.push,
+		PluginName:     p.Name(),
+		Sender:         sender{p: p},
+		Ctx:            ictx,
+		Cfg:            cfg,
+		Allow:          p.allowed,
+		Push:           p.push,
+		CommandDisplay: slackCommandDisplay,
 	})
 	if err != nil {
 		return err
@@ -230,6 +231,12 @@ func (p *Plugin) Stop() {
 	p.cancel = nil
 	p.mu.Unlock()
 	imbot.StopChannel(cancel, core, &p.wg)
+}
+
+// slackCommandDisplay 把骨架命令显示成 Slack 的实际入口；入站再映射回
+// /new、/apply 等。
+func slackCommandDisplay(cmd string) string {
+	return "/wen " + strings.TrimPrefix(cmd, "/")
 }
 
 // sender 把骨架的发送请求接到 Slack Web API。
