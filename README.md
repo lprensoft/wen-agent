@@ -62,6 +62,8 @@ go run ./cmd/wen
 wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 ```
 
+已经用 Docker 管理服务的机器，见[容器部署](docs/docker.md)。
+
 主要的几条命令（完整说明见[命令行](docs/cli.md)）：
 
 ```
@@ -102,6 +104,7 @@ wen update [--check] [-y]  检查并安装新版本
 - [配置与模型](docs/configuration.md) —— 首次运行向导、config.yaml 的各项、提供商与模型管理
 - [插件总览](docs/plugins/README.md) —— 三十六个插件的说明与配置项，以及开箱默认开着哪些
 - [部署与访问控制](docs/deployment.md) —— 认证模型、启停脚本与 systemd
+- [容器部署（Docker）](docs/docker.md) —— 构建镜像、compose 变量、数据卷与升级
 - [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本
 - [上下文的组织](docs/context.md) —— 一轮请求怎么拼、当前时间为什么不放在 system 里
 - [HTTP API](docs/http-api.md) —— Web UI 与外部程序共用的接口

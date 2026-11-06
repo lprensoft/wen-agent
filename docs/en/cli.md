@@ -6,7 +6,7 @@
 
 ```
 wen                          start the server (same as wen serve)
-wen serve [-c config] [-p port]  start the server; runs the setup wizard first if no model is usable
+wen serve [-c config] [-p port] [-host address]  start the server; runs the setup wizard first if no model is usable
 wen onboard [-c config]          run the setup wizard again: add a provider and switch to it
 wen config [section] [-c config] guided configuration (sections: plugins / models / server)
 wen plugins [subcommand] [-c config]  manage external plugin bundles (list / install / uninstall / info)
@@ -16,6 +16,8 @@ wen update [--check] [-y]    check for and install a new version
 wen version                  print the version
 wen help [command]           show help
 ```
+
+`-host` overrides the configuration file just like `-p`. It is mainly for containers: inside Docker the server must listen on `0.0.0.0`, or the published port cannot reach it. See [Docker deployment](docker.md).
 
 ## wen onboard: the setup wizard
 

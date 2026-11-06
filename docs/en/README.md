@@ -8,6 +8,7 @@
 - [Configuration and models](configuration.md) — every option in config.yaml, and provider/model management on the settings page
 - [Plugin overview](plugins/README.md) — what each of the thirty-six built-in plugins does, with its settings
 - [Deployment and access control](deployment.md) — the authentication model for remote access, a start/stop script, and systemd
+- [Docker deployment](docker.md) — the image, compose, data volumes and upgrades
 - [Replay evaluation (wen eval)](evaluation.md) — turning "does the character feel better after that prompt change?" into a script you can run again
 
 ## Design and development

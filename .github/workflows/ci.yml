@@ -93,3 +93,18 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -trimpath -o "$RUNNER_TEMP/wen-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/wen
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 构建镜像
+        run: docker build -t wen-agent:ci .
+
+      - name: 冒烟测试
+        run: |
+          test "$(docker run --rm wen-agent:ci version)" = "$(sed -n -E 's/^(const|var) Version = "(.*)"$/\2/p' internal/version/version.go)"
+          docker run --rm --entrypoint sh wen-agent:ci -c 'test "$(id -u)" = "10001" && test -f /usr/share/zoneinfo/Asia/Shanghai && test -f /etc/ssl/certs/ca-certificates.crt'
+          docker run --rm wen-agent:ci help serve | grep -q -- '-host'

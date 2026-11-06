@@ -1,0 +1,23 @@
+services:
+  wen:
+    image: ${WEN_IMAGE:-wen-agent:local}
+    build:
+      context: .
+      args:
+        VERSION: ${WEN_VERSION:-}
+    ports:
+      - "${WEN_PORT:-8080}:8080"
+    environment:
+      WEN_AUTH_PASSWORD: ${WEN_AUTH_PASSWORD:?set WEN_AUTH_PASSWORD first}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 先在宿主机执行：mkdir -p wen-data && sudo chown 10001:10001 wen-data
+      - ./wen-data:/data
+    restart: unless-stopped
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/auth/status"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

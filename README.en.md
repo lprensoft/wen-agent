@@ -60,6 +60,8 @@ The config directory is `~/.wen/` by default. It holds the model configuration, 
 wen -c /path/to/config.yaml -p 9000   # explicit config and port
 ```
 
+If the machine is already managed by Docker, see [Docker deployment](docs/en/docker.md).
+
 The main commands (see [CLI](docs/en/cli.md) for the full list):
 
 ```
@@ -100,6 +102,7 @@ Thirty-three built-in plugins, grouped by function, all toggleable and configura
 - [Configuration and models](docs/en/configuration.md) — the setup wizard, every option in config.yaml, and provider/model management
 - [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-six plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
+- [Docker deployment](docs/en/docker.md) — building the image, compose variables, data volumes and upgrades
 - [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
 - [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message
 - [HTTP API](docs/en/http-api.md) — the endpoints shared by the web UI and any external program
