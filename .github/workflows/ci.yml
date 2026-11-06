@@ -1,0 +1,94 @@
+name: CI
+
+# 每次推送 main 与 PR 都跑：vet、全量测试、语言包覆盖、gofmt 与生成物一致性。
+# 正式发版仍由 release.yml 负责，这里只做质量门禁。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l cmd internal tools)
+          if [ -n "$out" ]; then
+            echo "::error::以下文件未格式化，请在本机跑 gofmt 后提交："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: 测试
+        run: go test -count=1 ./...
+
+      - name: 语言包覆盖
+        run: go test ./cmd/wen -run 'TestLocaleCoverage|TestPromptCoverage' -count=1
+
+      # 生成物随库提交，这里验证它们与当前版本号一致。Go 版本必须与 go.mod
+      # 一致：PNG 编码器的输出随版本变化，换了版本会误报。
+      - name: 生成物一致
+        run: |
+          go generate ./cmd/wen
+          git diff --exit-code
+
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # 临时构建放进项目目录，避免 execcmd 的测试被杀软误杀（见 AGENTS.md）。
+      GOTMPDIR: ${{ github.workspace }}\.gotmp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 准备临时构建目录
+        run: New-Item -ItemType Directory -Force -Path "$env:GOTMPDIR" | Out-Null
+
+      - name: 测试
+        run: go test -count=1 ./...
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [windows, linux, darwin]
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 交叉编译
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -o "$RUNNER_TEMP/wen-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/wen
