@@ -54,9 +54,6 @@ jobs:
   test-windows:
     runs-on: windows-latest
     timeout-minutes: 30
-    env:
-      # 临时构建放进项目目录，避免 execcmd 的测试被杀软误杀（见 AGENTS.md）。
-      GOTMPDIR: ${{ github.workspace }}\.gotmp
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -64,11 +61,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: 准备临时构建目录
-        run: New-Item -ItemType Directory -Force -Path "$env:GOTMPDIR" | Out-Null
-
+      # GOTMPDIR 只给测试这一步：setup-go 会先跑 go env，目录还不存在时设置它
+      # 会让那一步直接失败（Go 要求 GOTMPDIR 指向已存在的目录）。
       - name: 测试
-        run: go test -count=1 ./...
+        env:
+          # 临时构建放进项目目录，避免 execcmd 的测试被杀软误杀（见 AGENTS.md）。
+          GOTMPDIR: ${{ github.workspace }}\.gotmp
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:GOTMPDIR" | Out-Null
+          go test -count=1 ./...
 
   build:
     runs-on: ubuntu-latest
