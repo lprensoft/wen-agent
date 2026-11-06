@@ -69,6 +69,7 @@ func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
 	port := fs.Int("p", 0, tr("cli.serve.flag.port", "监听端口（覆盖配置文件）"))
+	host := fs.String("host", "", tr("cli.serve.flag.host", "监听地址（覆盖配置文件）"))
 	_ = fs.Parse(args)
 
 	path := config.ResolvePath(*configPath)
@@ -78,6 +79,9 @@ func runServe(args []string) {
 	}
 	if *port != 0 {
 		cfg.Server.Port = *port
+	}
+	if *host != "" {
+		cfg.Server.Host = *host
 	}
 	// 语言要在第一行日志之前定下——启动日志本身就是要跟着它走的东西之一
 	adoptLang(cfg)

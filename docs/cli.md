@@ -6,7 +6,7 @@
 
 ```
 wen                        启动服务（等价于 wen serve）
-wen serve [-c 配置] [-p 端口]  启动服务；还没有能用的模型时先进首次运行向导
+wen serve [-c 配置] [-p 端口] [-host 地址]  启动服务；还没有能用的模型时先进首次运行向导
 wen onboard [-c 配置]          重走首次运行向导：新增一家提供商并切换过去
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
 wen plugins [子命令] [-c 配置]  管理外源插件包（list / install / uninstall / info）
@@ -16,6 +16,8 @@ wen update [--check] [-y]  检查并安装新版本
 wen version                打印版本号
 wen help [命令]            显示帮助
 ```
+
+`-host` 与 `-p` 一样覆盖配置文件，主要给容器使用：Docker 里需要监听 `0.0.0.0`，否则端口映射进不来。见[容器部署](docker.md)。
 
 ## wen onboard：首次运行向导
 

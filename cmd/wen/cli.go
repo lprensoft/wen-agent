@@ -26,7 +26,7 @@ func commands() []command {
 	return []command{
 		{
 			name:    "serve",
-			usage:   tr("cli.cmd.serve.usage", "wen serve [-c 配置文件] [-p 端口]"),
+			usage:   tr("cli.cmd.serve.usage", "wen serve [-c 配置文件] [-p 端口] [-host 地址]"),
 			summary: tr("cli.cmd.serve.summary", "启动服务（不带子命令时的默认动作）"),
 			detail: tr("cli.cmd.serve.detail", "读取配置文件、加载插件并监听 HTTP。\n"+
 				"未设置访问口令时只监听本机，即便配置里写的是对外地址——\n"+
