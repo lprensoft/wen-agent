@@ -29,3 +29,6 @@ wen.lock
 # 已安装的外源插件包（Agent Plugins 格式，锚定根目录）
 /bundles/
 /wen-test.exe
+
+# wen export 的默认输出（锚定根目录）
+/wen-backup-*.tar.gz

@@ -51,6 +51,10 @@ An instance that used to be configured with `host: 0.0.0.0` will, after upgradin
 
 If the machine is already managed by Docker, deploy the image directly — see [Docker deployment](docker.md).
 
+## Backups
+
+The configuration directory is the entire state: pack it with `wen export` and restore it with `wen import`, as described in [Backup and restore](backup.md).
+
 ## Server deployment (Linux)
 
 Two ways: a start/stop script for temporary or simple cases, systemd for anything long-running (start on boot, restart on crash, logs in journald). What they have in common: **pin the config directory with `-c`**. The `config.yaml` that `-c` points at does not have to exist (everything then takes its default). Its directory is the config directory, where the model configuration, sessions and plugin state are stored. Without `-c`, a missing `config.yaml` in the current directory sends everything to the running user's `~/.wen/`. Start it as another user or from another directory and it looks exactly like a fresh install with no configuration at all.

@@ -9,6 +9,8 @@ wen                          start the server (same as wen serve)
 wen serve [-c config] [-p port] [-host address]  start the server; runs the setup wizard first if no model is usable
 wen onboard [-c config]          run the setup wizard again: add a provider and switch to it
 wen config [section] [-c config] guided configuration (sections: plugins / models / server)
+wen export [-o backup file] [-c config]  back up the configuration directory
+wen import <backup file> [-c config]  restore a backup into an empty directory
 wen plugins [subcommand] [-c config]  manage external plugin bundles (list / install / uninstall / info)
 wen status [-c config]           print the current configuration and runtime state
 wen eval <script.json> [-o file] replay a scripted conversation and report on style and consistency
@@ -43,6 +45,15 @@ In offline mode plugins are **registered but not initialized**: reading their co
 The first item on the top-level menu is `Language`. It changes **this run only** and is forgotten on exit — `wen config` is something you open once every few months, with a person sitting right there at the terminal, so two extra keypresses beat one more state file. To change the language for good, edit `lang:` in config.yaml, creating the file with just that line if it does not exist (see [Configuration and models](configuration.md#language)). The word "Language" and the language names themselves are never translated: once the interface is in a language you cannot read, that is the one line you can still recognise.
 
 The form is generated from the config fields the plugins declare themselves, the same source the settings page uses, so a new plugin gets both interfaces at once. Plugin actions are here too: select the WeChat channel and a "bind by QR code" action appears, with the code drawn as text right in the terminal (black and white regardless of your color scheme, so it scans under a dark theme too), the raw link printed underneath as a fallback, and an automatic refresh and redraw when it expires — no need to open the web UI on a remote server just to scan a code.
+
+## wen export / wen import: backup and restore
+
+```bash
+wen export -o ~/wen-backup.tar.gz
+wen import ~/wen-backup.tar.gz -c ~/.wen/config.yaml
+```
+
+Export packs models, plugin state, sessions, the access password and external bundles into a tar.gz; import only accepts an empty directory. Both require the service to be stopped. See [Backup and restore](backup.md).
 
 ## wen plugins: installing external plugin bundles
 

@@ -9,6 +9,7 @@
 - [Plugin overview](plugins/README.md) — what each of the thirty-six built-in plugins does, with its settings
 - [Deployment and access control](deployment.md) — the authentication model for remote access, a start/stop script, and systemd
 - [Docker deployment](docker.md) — the image, compose, data volumes and upgrades
+- [Backup and restore](backup.md) — packing and restoring the configuration directory, and its safety boundaries
 - [Replay evaluation (wen eval)](evaluation.md) — turning "does the character feel better after that prompt change?" into a script you can run again
 
 ## Design and development

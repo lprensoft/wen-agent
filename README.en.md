@@ -68,6 +68,8 @@ The main commands (see [CLI](docs/en/cli.md) for the full list):
 wen                        start the server (same as wen serve); runs the wizard first if no model is set up
 wen onboard                run the setup wizard again
 wen config [section]       guided configuration (sections: plugins / models / server)
+wen export [-o file]       back up the configuration directory
+wen import <backup file>   restore a backup into an empty directory
 wen status                 print the current configuration and runtime state
 wen eval <script.json>     replay a scripted conversation, report style and consistency
 wen update [--check] [-y]  check for and install a new version
@@ -103,6 +105,7 @@ Thirty-three built-in plugins, grouped by function, all toggleable and configura
 - [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-six plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Docker deployment](docs/en/docker.md) — building the image, compose variables, data volumes and upgrades
+- [Backup and restore](docs/en/backup.md) — what `wen export` / `wen import` include, and their safety boundaries
 - [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
 - [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message
 - [HTTP API](docs/en/http-api.md) — the endpoints shared by the web UI and any external program

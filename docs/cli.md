@@ -9,6 +9,8 @@ wen                        启动服务（等价于 wen serve）
 wen serve [-c 配置] [-p 端口] [-host 地址]  启动服务；还没有能用的模型时先进首次运行向导
 wen onboard [-c 配置]          重走首次运行向导：新增一家提供商并切换过去
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
+wen export [-o 备份文件] [-c 配置]  把配置目录备份成归档
+wen import <备份文件> [-c 配置]    从备份恢复到一个空目录
 wen plugins [子命令] [-c 配置]  管理外源插件包（list / install / uninstall / info）
 wen status [-c 配置]           打印当前配置与运行状态
 wen eval <脚本.json> [-o 文件]  回放一段脚本对话，生成文风与角色一致性报告
@@ -44,6 +46,15 @@ wen help [命令]            显示帮助
 
 表单由插件自己声明的配置项生成，与设置页同源，因此新增插件时两边同时就有了配置界面。插件声明的操作也在这里：选中微信通道会出现「扫码绑定」，二维码直接以字符画在终端里（黑白不随终端配色，深色主题也能扫），码下附链接原文兜底，过期自动刷新重绘——远程服务器上不必再为扫码打开 Web UI。
 
+
+## wen export / wen import：备份与恢复
+
+```bash
+wen export -o ~/wen-backup.tar.gz
+wen import ~/wen-backup.tar.gz -c ~/.wen/config.yaml
+```
+
+导出把模型、插件状态、会话、访问口令与外源插件包打成 tar.gz；导入只接受空目录。两者都要求服务已停止，详见[备份与恢复](backup.md)。
 
 ## wen plugins：装外源插件包
 
