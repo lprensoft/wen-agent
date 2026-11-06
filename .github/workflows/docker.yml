@@ -64,6 +64,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # type=ref,event=tag 默认会自动生成 latest；关掉它，latest 只由下一行控制，
+          # 否则 v1.0.0-rc1 这类预发布 tag 也会覆盖稳定版的 latest。
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
