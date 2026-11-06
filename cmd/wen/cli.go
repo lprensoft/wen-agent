@@ -53,6 +53,25 @@ func commands() []command {
 			run: runConfig,
 		},
 		{
+			name:    "export",
+			usage:   tr("cli.cmd.export.usage", "wen export [-o 备份文件] [-c 配置文件] [--force]"),
+			summary: tr("cli.cmd.export.summary", "把配置目录备份成归档"),
+			detail: tr("cli.cmd.export.detail", "备份模型配置、插件状态与数据、会话、访问口令与外源插件包。\n"+
+				"服务运行时默认拒绝，加 --force 才继续（可能拿到不一致的快照）。\n"+
+				"备份包含明文密钥与全部会话内容，请妥善保管。\n"+
+				"会话目录或项目记忆在配置目录之外时，会在输出里提示且不会被包含。"),
+			run: runExport,
+		},
+		{
+			name:    "import",
+			usage:   tr("cli.cmd.import.usage", "wen import <备份文件> [-c 配置文件]"),
+			summary: tr("cli.cmd.import.summary", "从备份恢复到一个空目录"),
+			detail: tr("cli.cmd.import.detail", "目标目录必须是空的或还不存在；不合并、不覆盖现有数据。\n"+
+				"目标是 -c 指向的配置文件所在目录，例如 -c ~/.wen/config.yaml。\n"+
+				"恢复后按提示用 wen status 检查，再用同一个 -c 启动服务。"),
+			run: runImport,
+		},
+		{
 			name:    "eval",
 			usage:   tr("cli.cmd.eval.usage", "wen eval <脚本.json> [-c 配置文件] [-o 报告文件]"),
 			summary: tr("cli.cmd.eval.summary", "回放一段脚本对话，生成文风与角色一致性报告"),

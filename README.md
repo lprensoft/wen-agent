@@ -70,6 +70,8 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 wen                        启动服务（等价于 wen serve），还没配模型时先进向导
 wen onboard                重走首次配置向导
 wen config [栏目]          引导式修改配置（栏目：plugins / models / server）
+wen export [-o 文件]       把配置目录备份成归档
+wen import <备份文件>      从备份恢复到一个空目录
 wen status                 打印当前配置与运行状态
 wen eval <脚本.json>       回放一段脚本对话，生成文风与角色一致性报告
 wen update [--check] [-y]  检查并安装新版本
@@ -105,6 +107,7 @@ wen update [--check] [-y]  检查并安装新版本
 - [插件总览](docs/plugins/README.md) —— 三十六个插件的说明与配置项，以及开箱默认开着哪些
 - [部署与访问控制](docs/deployment.md) —— 认证模型、启停脚本与 systemd
 - [容器部署（Docker）](docs/docker.md) —— 构建镜像、compose 变量、数据卷与升级
+- [备份与恢复](docs/backup.md) —— `wen export` / `wen import` 的备份范围与安全边界
 - [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本
 - [上下文的组织](docs/context.md) —— 一轮请求怎么拼、当前时间为什么不放在 system 里
 - [HTTP API](docs/http-api.md) —— Web UI 与外部程序共用的接口
