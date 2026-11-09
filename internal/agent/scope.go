@@ -64,7 +64,8 @@ func sanitizeSequence(msgs []session.StoredMessage) []session.StoredMessage {
 		switch m.Role {
 		case llm.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
-				kept := make([]llm.ToolCall, 0, len(m.ToolCalls))
+				original := len(m.ToolCalls)
+				kept := make([]llm.ToolCall, 0, original)
 				for _, tc := range m.ToolCalls {
 					if haveResult[tc.ID] {
 						kept = append(kept, tc)
@@ -75,6 +76,12 @@ func sanitizeSequence(msgs []session.StoredMessage) []session.StoredMessage {
 					continue // 只有悬挂的调用、又没有正文，整条无意义
 				}
 				m.ToolCalls = kept
+				// 原始 Item 里也带着被丢掉的 function_call；历史被修正后不能
+				// 再原样回放，否则悬挂调用会绕过这里重新回到请求里。
+				if len(kept) != original {
+					m.ResponsesItems = nil
+					m.ResponsesOrigin = ""
+				}
 			}
 		case llm.RoleTool:
 			if !keptCall[m.ToolCallID] {

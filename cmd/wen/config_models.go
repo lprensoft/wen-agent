@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"wen/internal/llm"
 	"wen/internal/modelcfg"
 )
 
@@ -177,6 +178,10 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 	typ := p.Type
 	baseURL := p.BaseURL
 	dialect := p.Dialect
+	protocol := p.Protocol
+	if protocol == "" {
+		protocol = llm.ProtocolChat
+	}
 	newKey := ""
 	modelsText := modelsToText(p.Models)
 	cache := cacheToString(p.PromptCache)
@@ -198,6 +203,10 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 	for _, d := range modelcfg.DialectOptions(uiLang) {
 		dialectOpts = append(dialectOpts, huh.NewOption(d["label"], d["value"]))
 	}
+	protocolOpts := make([]huh.Option[string], 0)
+	for _, p := range modelcfg.ProtocolOptions(uiLang) {
+		protocolOpts = append(protocolOpts, huh.NewOption(p["label"], p["value"]))
+	}
 
 	fields := []huh.Field{
 		huh.NewInput().Title(tr("cli.models.name", "名称")).Description(tr("cli.models.nameDesc", "唯一标识，也是界面上的显示名")).Value(&name).
@@ -208,6 +217,8 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 				return nil
 			}),
 		huh.NewSelect[string]().Title(tr("cli.models.apiType", "接口类型")).Options(typeOpts...).Value(&typ),
+		huh.NewSelect[string]().Title(tr("cli.models.protocol", "线上协议")).
+			Description(tr("cli.models.protocolDesc", "仅 openai_compat 生效；对方没有实现 /v1/responses 时保持 Chat Completions")).Options(protocolOpts...).Value(&protocol),
 		huh.NewInput().Title("Base URL").Value(&baseURL),
 		huh.NewInput().Title("API Key").Description(keyDesc).
 			EchoMode(huh.EchoModePassword).Value(&newKey),
@@ -248,10 +259,13 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 		return nil
 	}
 
+	if typ != llm.TypeOpenAICompat {
+		protocol = ""
+	}
 	edited := modelcfg.Provider{
 		Name: strings.TrimSpace(name), Type: typ, BaseURL: strings.TrimSpace(baseURL),
 		APIKey:  newKey, // 留空 = 沿用旧值，由服务端的 carryOverKeys 补上
-		Dialect: dialect, PromptCache: stringToCache(cache),
+		Dialect: dialect, Protocol: protocol, PromptCache: stringToCache(cache),
 		Models: textToModels(modelsText, p.Models),
 	}
 	if isNew {

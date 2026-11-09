@@ -390,6 +390,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			Content:         r.content,
 			Reasoning:       r.reasoning,
 			ReasoningBlocks: r.blocks,
+			ResponsesItems:  r.rawItems,
+			ResponsesOrigin: r.rawOrigin,
 			ToolCalls:       r.toolCalls,
 		}
 		if err := a.append(sessionID, assistant, scope.Write, origin); err != nil {
@@ -463,6 +465,10 @@ type turnResult struct {
 	content   string
 	reasoning string
 	blocks    []llm.ReasoningBlock
+	// rawItems/rawOrigin 是 Responses API 本次输出的原始 Item 与来源；只由该协议
+	// 填充，随助手消息落盘，下一轮在来源一致时原样回放。
+	rawItems  json.RawMessage
+	rawOrigin string
 	toolCalls []llm.ToolCall
 	usage     *llm.Usage
 	// emitted 表示界面上已经看到过正文或思考增量。此时失败不能再换模型，
@@ -559,6 +565,11 @@ func (a *Agent) streamOne(ctx context.Context, provider llm.Provider, opts Optio
 			r.blocks = ev.Reasoning
 		case llm.EventUsage:
 			r.usage = ev.Usage
+		case llm.EventDone:
+			if len(ev.RawItems) > 0 {
+				r.rawItems = ev.RawItems
+				r.rawOrigin = ev.RawOrigin
+			}
 		case llm.EventError:
 			// 半截产出随错误一起交回：内容不作数（调用方不落盘），
 			// 但界面上增量已经流出去了，失败善后需要知道这一点。
@@ -646,7 +657,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, targets []ModelTarget, opt
 // estimateTokens 粗略估算消息 token 数：UTF-8 字节数 / 3
 // （中文约 1 字 1 token，对英文略偏高，作为安全裕量）。
 func estimateTokens(m llm.Message) int {
-	n := len(m.Content) + len(m.Reasoning)
+	n := len(m.Content) + len(m.Reasoning) + len(m.ResponsesItems)
 	for _, tc := range m.ToolCalls {
 		n += len(tc.Name) + len(tc.Arguments)
 	}

@@ -67,6 +67,8 @@ type ProviderConfig struct {
 	// ThinkingDialect 是思考参数方言（openai_compat 模式专用）：
 	// deepseek（默认）/ minimax / qwen / effort / none。
 	ThinkingDialect string `yaml:"thinking_dialect"`
+	// Protocol 是 openai_compat 的线上协议：chat（默认）/ responses。
+	Protocol string `yaml:"protocol"`
 	// PromptCache 是否使用提示词缓存（anthropic 模式专用，默认开启）。
 	// 指针是为了与「未配置」区分：不写这一项按开启算。
 	PromptCache *bool `yaml:"prompt_cache"`

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -110,6 +111,44 @@ func TestSanitizeSequenceRepairsDanglingToolUse(t *testing.T) {
 	}
 	if len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].ID != "c1" {
 		t.Errorf("没有结果的 tool_call 应被丢弃: %+v", got[1].ToolCalls)
+	}
+}
+
+func TestSanitizeSequenceDropsRawItemsWhenCallRemoved(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"reasoning","id":"rs_1"},{"type":"function_call","call_id":"c2","name":"f","arguments":"{}"}]`)
+	got := sanitizeSequence([]session.StoredMessage{
+		msg(llm.RoleUser, "问"),
+		{Message: llm.Message{
+			Role: llm.RoleAssistant, Content: "我查一下",
+			ToolCalls:       []llm.ToolCall{{ID: "c1"}, {ID: "c2"}},
+			ResponsesItems:  raw,
+			ResponsesOrigin: "https://api.test|model",
+		}},
+		{Message: llm.Message{Role: llm.RoleTool, Content: "c1 的结果", ToolCallID: "c1"}},
+	})
+	if len(got) != 3 {
+		t.Fatalf("期望 3 条，得到 %d: %+v", len(got), got)
+	}
+	if len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].ID != "c1" {
+		t.Fatalf("悬挂调用应被丢弃: %+v", got[1].ToolCalls)
+	}
+	if len(got[1].ResponsesItems) != 0 || got[1].ResponsesOrigin != "" {
+		t.Fatalf("历史被修正后不应再原样回放原始项: items=%s origin=%q", got[1].ResponsesItems, got[1].ResponsesOrigin)
+	}
+}
+
+func TestSanitizeSequenceKeepsRawItemsWhenAllCallsKept(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"function_call","call_id":"c1","name":"f","arguments":"{}"}]`)
+	got := sanitizeSequence([]session.StoredMessage{
+		msg(llm.RoleUser, "问"),
+		{Message: llm.Message{
+			Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1"}},
+			ResponsesItems: raw, ResponsesOrigin: "o",
+		}},
+		{Message: llm.Message{Role: llm.RoleTool, Content: "ok", ToolCallID: "c1"}},
+	})
+	if len(got) != 3 || string(got[1].ResponsesItems) != string(raw) {
+		t.Fatalf("未修正的历史不应丢原始项: %+v", got)
 	}
 }
 

@@ -44,7 +44,7 @@ You only need it to change the start-up settings below. Put it in the config dir
 | `model.max_tokens` | The output cap for one reply, `4096` by default |
 | `model.thinking` | Thinking effort: `off` / `low` / `medium` / `high` / `xhigh` / `max`, `high` by default (the reasoning is shown as a collapsible block in the web UI) |
 | `model.context_length` | The model's context window in tokens, 1000000 by default. Over budget, whole turns are trimmed starting from the oldest; once measured usage reaches 90% of it, the session is compacted into a summary |
-| `providers.<name>` | The provider registry: `type` (`openai_compat` / `anthropic`), `base_url`, `api_key`, and optionally `thinking_dialect` and `prompt_cache` (see below) |
+| `providers.<name>` | The provider registry: `type` (`openai_compat` / `anthropic`), `base_url`, `api_key`, and optionally `thinking_dialect`, `protocol` and `prompt_cache` (see below) |
 | `agent.system_prompt` | The system prompt, empty by default (at runtime a `[system environment]` block — OS, shell, working directory, locale — is injected in front of it) |
 | `agent.max_turns` | The cap on tool-loop iterations within one request, `20` by default |
 | `agent.workdir` | The working directory shared by the plugins and the environment block; empty means the process's current directory |
@@ -93,6 +93,7 @@ Providers and models can be added, edited and removed on the settings page, and 
 - The `providers:` and `model:` sections of config.yaml, if you wrote them, are initial values: an entry of the same name is fully overridden by models.json, while a provider **newly added** to config.yaml still shows up in the list (marked "from the config file"). Deleting it in the UI records a tombstone, so it does not come back after a restart; an entry you have never touched in the UI is not written to models.json at all and keeps following the config file.
 - Each model entry can override `context_length` / `max_tokens` / `thinking` / `temperature` on its own; left empty, the global values from the `model:` section apply.
 - **Note**: once a key that came from `${VAR}` has been written into models.json it is fixed there, and changing the environment variable afterwards has no effect.
+- `protocol` only applies to `openai_compat`: `chat` (`/v1/chat/completions`) by default, or `responses` (`/v1/responses`). **Switch it only after confirming the service really implements the Responses API** — "OpenAI-compatible" does not imply `/v1/responses`. Responses mode always uses `store: false` and replays each turn's output items from the local session instead of leaving conversation state on the provider side; it does not send `temperature`, which reasoning models generally reject. The trade-off is larger session files: each turn keeps its raw output items, including encrypted reasoning.
 
 ### Backup models
 

@@ -60,6 +60,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		BaseURL  string `json:"base_url"`
 		APIKey   string `json:"api_key"`
 		Dialect  string `json:"thinking_dialect"`
+		Protocol string `json:"protocol"`
 		Model    string `json:"model"`
 		// PromptCache 未设置按开启算，与 modelcfg.Resolved 的口径一致
 		PromptCache *bool `json:"prompt_cache"`
@@ -72,11 +73,15 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.no_model_to_test", "请先为该提供商添加模型后再测试"))
 		return
 	}
-	// 密钥留空表示沿用已保存的值（界面上只拿得到掩码）
-	if req.APIKey == "" {
-		if p, _, ok := s.models.Lookup(req.Provider, req.Model); ok {
+	// 密钥留空表示沿用已保存的值（界面上只拿得到掩码）；协议同理，
+	// 旧页面缓存里没有这一项时按该提供商已保存的协议测试。但接口类型被改过时
+	// 不能继承：Responses 协议只属于 openai_compat，改成 Anthropic 后带回来
+	// 只会在 llm.New 里变成 400。
+	if p, _, ok := s.models.Lookup(req.Provider, req.Model); ok {
+		if req.APIKey == "" {
 			req.APIKey = p.APIKey
 		}
+		req.Protocol = inheritTestProtocol(req.Type, p.Type, req.Protocol, p.Protocol)
 	}
 	if req.APIKey == "" && modelcfg.RequiresKey(req.BaseURL) {
 		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.need_api_key", "请填写 API Key"))
@@ -85,6 +90,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 
 	provider, err := llm.New(llm.Config{
 		Type: req.Type, BaseURL: req.BaseURL, APIKey: req.APIKey, Dialect: req.Dialect,
+		Protocol:    req.Protocol,
 		PromptCache: req.PromptCache == nil || *req.PromptCache,
 		Lang:        s.lang,
 	})
@@ -97,6 +103,19 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// inheritTestProtocol 决定连接测试没有显式带协议时要不要沿用已保存值。
+// 只在请求仍是 openai_compat、且与保存的接口类型一致时继承；请求显式给了
+// 协议就照用，切换接口类型后则保持空串（等同 chat）。
+func inheritTestProtocol(reqType, savedType, requested, saved string) string {
+	if requested != "" {
+		return requested
+	}
+	if reqType == llm.TypeOpenAICompat && savedType == llm.TypeOpenAICompat {
+		return saved
+	}
+	return ""
 }
 
 // applyCurrentModel 按当前选中项与备用链重建 Provider，并热切换到 Agent。
@@ -145,6 +164,7 @@ func (s *Server) modelsView(lang string) map[string]any {
 			"api_key_masked":   modelcfg.MaskKey(p.APIKey),
 			"has_api_key":      p.APIKey != "",
 			"thinking_dialect": p.Dialect,
+			"protocol":         p.Protocol,
 			// 三态：true / false / null（未设置，按开启算）。界面据此区分「用户明确关过」
 			// 与「从未设置」，后者保存时仍写回 null，免得一次保存就把条目从 config.yaml 接管过来。
 			"prompt_cache": p.PromptCache,
@@ -162,6 +182,7 @@ func (s *Server) modelsView(lang string) map[string]any {
 		"fallbacks": fallbacks,
 		"types":     modelcfg.TypeOptions(lang),
 		"dialects":  modelcfg.DialectOptions(lang),
+		"protocols": modelcfg.ProtocolOptions(lang),
 		// 预置随这一份下发而不是另开一个接口：它只在「添加提供商」那一步用得上，
 		// 而那一步之前必然已经取过这份文档，多一次往返换不来什么。
 		"presets": modelcfg.PresetOptions(lang, view.Providers),

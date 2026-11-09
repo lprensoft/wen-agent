@@ -44,7 +44,7 @@
 | `model.max_tokens` | 单次回复的输出上限，默认 `4096` |
 | `model.thinking` | 思考模式：`off` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `high`（思考过程在 Web UI 以可折叠块展示） |
 | `model.context_length` | 模型上下文窗口（token），默认 1000000；超出预算时自动从最旧对话轮次整轮裁剪；会话实测占用达到 90% 时自动压缩为摘要 |
-| `providers.<name>` | 提供商注册表：`type`（`openai_compat` / `anthropic`）、`base_url`、`api_key`，可选 `thinking_dialect` 与 `prompt_cache`（见下） |
+| `providers.<name>` | 提供商注册表：`type`（`openai_compat` / `anthropic`）、`base_url`、`api_key`，可选 `thinking_dialect`、`protocol` 与 `prompt_cache`（见下） |
 | `agent.system_prompt` | 系统提示词，默认留空（运行时会自动在其前注入 `[系统环境]` 块：操作系统、Shell、工作目录、区域语言） |
 | `agent.max_turns` | 单次请求内工具循环上限，默认 `20` |
 | `agent.workdir` | 插件与环境块共用的工作目录，空 = 进程当前目录 |
@@ -93,6 +93,7 @@ providers:
 - config.yaml 的 `providers:` 与 `model:` 段（如果写了）是初始值：同名条目由 models.json 完全覆盖；config.yaml 里**新增**的提供商仍会出现在列表中（标记「来自配置文件」），在界面上删除它会记一条删除坠碑，重启不会复活；从未在界面上改过的条目不写进 models.json，继续跟随配置文件。
 - 每个模型条目可单独覆盖 `context_length` / `max_tokens` / `thinking` / `temperature`，留空则回退到 `model:` 段的全局值。
 - **注意**：`${VAR}` 展开后的密钥一旦被写进 models.json 就固定下来，此后修改环境变量不再生效。
+- `protocol` 只对 `openai_compat` 有意义：默认 `chat`（`/v1/chat/completions`），可改为 `responses`（`/v1/responses`）。**只有确认对方真的实现了 Responses API 才改**——同样是「OpenAI 兼容」，不代表有 `/v1/responses`。Responses 模式固定 `store: false`，把每轮输出项原样保存在会话里回放，不把对话状态放到提供商一侧；该模式暂不发送 `temperature`，因为推理模型普遍拒绝它。代价是会话文件会比 Chat 模式大（多存一份原始输出项，含加密推理）。
 
 ### 备用模型
 

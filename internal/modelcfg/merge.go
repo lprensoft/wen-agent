@@ -126,6 +126,7 @@ func normalize(f *File) {
 		p.BaseURL = strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 		p.APIKey = strings.TrimSpace(p.APIKey)
 		p.Dialect = strings.TrimSpace(p.Dialect)
+		p.Protocol = strings.TrimSpace(p.Protocol)
 		p.Source = ""
 		for j := range p.Models {
 			m := &p.Models[j]

@@ -7,7 +7,7 @@
 ```
 cmd/wen/                 入口（注册内置插件、装配各层）
 internal/config/         配置加载（YAML + ${VAR} 环境变量替换）
-internal/llm/            Provider 接口 + OpenAI 兼容 / Anthropic 实现
+internal/llm/            Provider 接口 + OpenAI 兼容（Chat / Responses）/ Anthropic 实现
 internal/modelcfg/       模型与提供商配置（models.json 覆盖层，热切换）
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
 internal/backup/         配置目录的备份与恢复（wen export / wen import）
