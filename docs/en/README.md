@@ -23,3 +23,4 @@
 One-off research and design decisions, kept as they stood at the time. They are not updated alongside the code, and they exist in Chinese only.
 
 - [Plugin installation, ecosystem compatibility, and the choice of language](../decisions/agent-plugins-analysis.md) — why the project stays on Go, and why external plugins follow the Agent Plugins standard (2026-08-25, Chinese only)
+- [P1 external protocol verification](../decisions/external-protocol-verification.md) — protocol status and implementation boundaries for Responses, vision, IM media, voice, and embeddings (2026-11-09, Chinese only)

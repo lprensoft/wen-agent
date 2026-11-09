@@ -23,3 +23,4 @@
 一次性的调研与选型结论，记录当时的判断依据，不随代码更新，也不做双语。
 
 - [插件安装、生态兼容与语言选择](decisions/agent-plugins-analysis.md) —— 为什么继续用 Go，外源插件为什么走 Agent Plugins 标准（2026-08-25）
+- [P1 外部协议核对](decisions/external-protocol-verification.md) —— Responses、视觉、IM 媒体、语音与向量化的协议现状与实现边界（2026-11-09）
