@@ -56,6 +56,7 @@ type providerView struct {
 	Type        string           `json:"type"`
 	BaseURL     string           `json:"base_url"`
 	Dialect     string           `json:"thinking_dialect"`
+	Protocol    string           `json:"protocol"`
 	PromptCache *bool            `json:"prompt_cache"`
 	HasAPIKey   bool             `json:"has_api_key"`
 	MaskedKey   string           `json:"api_key_masked"`
@@ -70,7 +71,7 @@ func (d modelsDoc) toFile() modelcfg.File {
 	for _, p := range d.Providers {
 		providers = append(providers, modelcfg.Provider{
 			Name: p.Name, Type: p.Type, BaseURL: p.BaseURL,
-			Dialect: p.Dialect, PromptCache: p.PromptCache, Models: p.Models,
+			Dialect: p.Dialect, Protocol: p.Protocol, PromptCache: p.PromptCache, Models: p.Models,
 		})
 	}
 	return modelcfg.File{Version: 1, Providers: providers, Fallbacks: d.Fallbacks, Current: d.Current}
@@ -216,7 +217,7 @@ func (b *offlineBackend) loadModels() (modelsDoc, error) {
 		}
 		doc.Providers = append(doc.Providers, providerView{
 			Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, Dialect: p.Dialect,
-			PromptCache: p.PromptCache, HasAPIKey: p.APIKey != "",
+			Protocol: p.Protocol, PromptCache: p.PromptCache, HasAPIKey: p.APIKey != "",
 			MaskedKey: modelcfg.MaskKey(p.APIKey), Source: p.Source, Models: models,
 		})
 	}

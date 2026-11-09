@@ -14,8 +14,31 @@ const (
 	TypeAnthropic    = "anthropic"
 )
 
+// OpenAI 兼容提供商的线上协议。responses 只在提供商显式声明时启用：
+// 同样是 OpenAI 兼容，不代表对方实现了 /v1/responses。
+const (
+	ProtocolChat      = "chat"      // /v1/chat/completions，默认
+	ProtocolResponses = "responses" // /v1/responses
+)
+
 // KnownTypes 是支持的 API 模式（配置校验与界面下拉共用，避免两处漂移）。
 var KnownTypes = []string{TypeOpenAICompat, TypeAnthropic}
+
+// KnownProtocols 是 OpenAI 兼容模式可选的线上协议。
+var KnownProtocols = []string{ProtocolChat, ProtocolResponses}
+
+// ProtocolLabel 返回协议的显示名。
+func ProtocolLabel(lang, p string) string {
+	switch p {
+	case ProtocolResponses:
+		return i18n.T(lang, "llm.protocol.responses", "Responses API")
+	case ProtocolChat, "":
+		return i18n.T(lang, "llm.protocol.chat", "Chat Completions")
+	}
+	return p
+}
+
+func IsKnownProtocol(p string) bool { return p == "" || slices.Contains(KnownProtocols, p) }
 
 // TypeLabel 返回 API 模式的显示名。它进设置页的下拉框，按请求语言取。
 func TypeLabel(lang, typ string) string {
@@ -39,6 +62,9 @@ type Config struct {
 	// Dialect 是思考参数方言（见 dialect.go），仅 openai_compat 使用；
 	// 空串等同 DeepSeek 方言。
 	Dialect string
+	// Protocol 是 openai_compat 的线上协议：空串或 chat 走 /chat/completions，
+	// responses 走 /v1/responses。anthropic 不使用这个字段。
+	Protocol string
 	// Lang 是这个 provider 说话用的语言：它产生的报错会经会话进到对话界面。
 	// 取**进程**语言而不是某次请求的——provider 是进程级单实例，一次英文请求
 	// 建出来的它，之后要为每个人报错。
@@ -49,16 +75,31 @@ type Config struct {
 	PromptCache bool
 }
 
-// New 按 API 模式创建 Provider。
+// New 按 API 模式与线上协议创建 Provider。
 func New(cfg Config) (Provider, error) {
 	if !IsKnownDialect(cfg.Dialect) {
 		return nil, fmt.Errorf(i18n.T(cfg.Lang, "llm.err.bad_dialect",
 			"不支持的思考参数方言 %q（可选：%s）"), cfg.Dialect, strings.Join(KnownDialects, " / "))
 	}
+	if !IsKnownProtocol(cfg.Protocol) {
+		return nil, fmt.Errorf(i18n.T(cfg.Lang, "llm.err.bad_protocol",
+			"不支持的线上协议 %q（可选：%s）"), cfg.Protocol, strings.Join(KnownProtocols, " / "))
+	}
+	protocol := cfg.Protocol
+	if protocol == "" {
+		protocol = ProtocolChat
+	}
 	switch cfg.Type {
 	case TypeOpenAICompat:
+		if protocol == ProtocolResponses {
+			return NewResponses(cfg.Lang, cfg.BaseURL, cfg.APIKey), nil
+		}
 		return NewOpenAICompat(cfg.Lang, cfg.BaseURL, cfg.APIKey, cfg.Dialect), nil
 	case TypeAnthropic:
+		if protocol != ProtocolChat {
+			return nil, fmt.Errorf(i18n.T(cfg.Lang, "llm.err.protocol_type",
+				"线上协议 %q 只能用于 %s"), protocol, TypeOpenAICompat)
+		}
 		return NewAnthropic(cfg.Lang, cfg.BaseURL, cfg.APIKey, cfg.PromptCache), nil
 	}
 	return nil, fmt.Errorf(i18n.T(cfg.Lang, "llm.err.bad_type",

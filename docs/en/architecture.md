@@ -7,7 +7,7 @@
 ```
 cmd/wen/                 entry point (registers the built-in plugins, wires the layers together)
 internal/config/         config loading (YAML plus ${VAR} substitution from the environment)
-internal/llm/            the Provider interface plus the OpenAI-compatible and Anthropic implementations
+internal/llm/            the Provider interface plus the OpenAI-compatible (Chat / Responses) and Anthropic implementations
 internal/modelcfg/       model and provider configuration (the models.json overlay, hot switching)
 internal/agent/          the agent loop (tool calls / thinking / compaction / context budget)
 internal/backup/         packing and restoring the configuration directory (wen export / wen import)

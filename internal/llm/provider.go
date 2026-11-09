@@ -20,8 +20,15 @@ type Message struct {
 	// ReasoningBlocks 保留 provider 原始的思考块（含签名），跨轮回传时需要。
 	// 仅 Anthropic 使用；OpenAI 兼容模式忽略此字段，只用 Reasoning。
 	ReasoningBlocks []ReasoningBlock `json:"reasoning_blocks,omitempty"`
-	ToolCalls       []ToolCall       `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
-	ToolCallID      string           `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
+	// ResponsesItems 是 Responses API 上一轮输出的原始 Item 数组。推理项里的
+	// encrypted_content 与 function_call 的 call_id 只能原样回传，重新拼装会丢。
+	// 仅 protocol=responses 使用；其它 provider 忽略。
+	ResponsesItems json.RawMessage `json:"responses_items,omitempty"`
+	// ResponsesOrigin 标记这些 Item 是哪个 base_url + model 产出的。切到别的
+	// 提供商或模型时不能把推理项原样塞回去，buildRequest 会改走消息重建。
+	ResponsesOrigin string     `json:"responses_origin,omitempty"`
+	ToolCalls       []ToolCall `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
+	ToolCallID      string     `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
 }
 
 // ReasoningBlock 是一个原样保留的思考块。Anthropic 要求带签名原样回传，
@@ -90,6 +97,12 @@ type StreamEvent struct {
 	ToolCalls []ToolCall
 	Reasoning []ReasoningBlock
 	Usage     *Usage
+	// RawItems 是 Responses API 本次输出的完整 Item 数组，随 EventDone 下发。
+	// Agent 原样落盘到助手消息的 ResponsesItems，下一轮回放。
+	RawItems json.RawMessage
+	// RawOrigin 是 RawItems 的产出来源（base_url + model），用于避免把推理项
+	// 回放给另一个提供商或模型。
+	RawOrigin string
 	Err       error
 }
 

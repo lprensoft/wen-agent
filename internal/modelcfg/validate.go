@@ -45,6 +45,14 @@ func validateDoc(lang string, f File) error {
 			return fmt.Errorf(i18n.T(lang, "modelcfg.err.bad_dialect", "提供商 %q 的思考参数方言 %q 不支持（可选：%s）"),
 				name, p.Dialect, strings.Join(llm.KnownDialects, " / "))
 		}
+		if !llm.IsKnownProtocol(p.Protocol) {
+			return fmt.Errorf(i18n.T(lang, "modelcfg.err.bad_protocol", "提供商 %q 的线上协议 %q 不支持（可选：%s）"),
+				name, p.Protocol, strings.Join(llm.KnownProtocols, " / "))
+		}
+		if p.Protocol == llm.ProtocolResponses && p.Type != llm.TypeOpenAICompat {
+			return fmt.Errorf(i18n.T(lang, "modelcfg.err.protocol_type", "提供商 %q 的线上协议 responses 只能用于 %s"),
+				name, llm.TypeOpenAICompat)
+		}
 		if err := validateBaseURL(lang, p.BaseURL); err != nil {
 			return fmt.Errorf(i18n.T(lang, "modelcfg.err.provider_wrap", "提供商 %q 的 %w"), name, err)
 		}

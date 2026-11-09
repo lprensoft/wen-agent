@@ -1765,6 +1765,7 @@ function payloadFromDoc() {
       base_url: p.base_url,
       api_key: "",
       thinking_dialect: p.thinking_dialect || "",
+      protocol: p.protocol || "",
       // 三态原样带回：null 表示「未设置」，与「明确关过」不同
       prompt_cache: typeof p.prompt_cache === "boolean" ? p.prompt_cache : null,
       models: p.models,
@@ -2227,6 +2228,17 @@ function openProviderModal(name, preset) {
   dialectSelect.value = (p && p.thinking_dialect) || (preset && preset.thinking_dialect) || "deepseek";
   const dialectField = fieldEl(t("provider.dialect"), dialectSelect, t("provider.dialectDesc"));
 
+  // 线上协议：Chat Completions 是默认；只有确认对方实现了 /v1/responses 才选 Responses
+  const protocolSelect = document.createElement("select");
+  for (const proto of modelsDoc.protocols || []) {
+    const opt = document.createElement("option");
+    opt.value = proto.value;
+    opt.textContent = proto.label;
+    protocolSelect.appendChild(opt);
+  }
+  protocolSelect.value = (p && p.protocol) || "chat";
+  const protocolField = fieldEl(t("provider.protocol"), protocolSelect, t("provider.protocolDesc"));
+
   // 提示词缓存：仅 Anthropic 需要在请求里显式打断点，故只在该模式下出现。
   // 默认开启——未设置（null）与明确开启在效果上一致。
   const cacheSwitch = switchInput(p ? p.prompt_cache !== false : true);
@@ -2234,6 +2246,7 @@ function openProviderModal(name, preset) {
 
   const syncTypeFields = () => {
     dialectField.classList.toggle("hidden", typeSelect.value !== "openai_compat");
+    protocolField.classList.toggle("hidden", typeSelect.value !== "openai_compat");
     cacheField.classList.toggle("hidden", typeSelect.value !== "anthropic");
   };
 
@@ -2258,13 +2271,14 @@ function openProviderModal(name, preset) {
     fieldEl(t("provider.name"), nameInput, t("provider.nameDesc")),
     fieldEl(t("provider.type"), typeSelect, t("provider.typeDesc")),
     dialectField,
+    protocolField,
     fieldEl(t("provider.baseUrl"), urlInput, t("provider.baseUrlDesc")),
     keyField,
     cacheField,
   );
   syncTypeFields();
-  providerInputs = { name: nameInput, type: typeSelect, dialect: dialectSelect, base_url: urlInput,
-    api_key: keyInput, prompt_cache: cacheSwitch.input };
+  providerInputs = { name: nameInput, type: typeSelect, dialect: dialectSelect, protocol: protocolSelect,
+    base_url: urlInput, api_key: keyInput, prompt_cache: cacheSwitch.input };
 
   providerModal.classList.remove("hidden");
   nameInput.focus();
@@ -2290,8 +2304,9 @@ async function saveProvider() {
     type: providerInputs.type.value,
     base_url: providerInputs.base_url.value.trim(),
     api_key: providerInputs.api_key.value.trim(),
-    // 方言只对 OpenAI 兼容模式有意义，Anthropic 模式一律留空
+    // 方言与协议只对 OpenAI 兼容模式有意义，Anthropic 模式一律留空
     thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
+    protocol: providerInputs.type.value === "openai_compat" ? providerInputs.protocol.value : "",
     // 勾上就交回 null（未设置=开启）而不是 true：这样与 config.yaml 一致的条目不会
     // 因为多了一个显式取值就被 models.json 接管过来。
     prompt_cache: promptCacheValue(),
@@ -2335,6 +2350,7 @@ async function testProvider() {
         base_url: providerInputs.base_url.value.trim(),
         api_key: providerInputs.api_key.value.trim(),
         thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
+        protocol: providerInputs.type.value === "openai_compat" ? providerInputs.protocol.value : "",
         prompt_cache: promptCacheValue(),
         model: model.id,
       }),

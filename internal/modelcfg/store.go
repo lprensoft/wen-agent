@@ -37,6 +37,9 @@ type Provider struct {
 	APIKey  string `json:"api_key"`
 	// Dialect 是思考参数方言（openai_compat 专用），空串等同 deepseek。
 	Dialect string `json:"thinking_dialect,omitempty"`
+	// Protocol 是 openai_compat 的线上协议：空串等同 chat（/chat/completions），
+	// responses 走 /v1/responses。anthropic 不使用。
+	Protocol string `json:"protocol,omitempty"`
 	// PromptCache 是否使用提示词缓存（anthropic 专用；nil = 未设置，按开启算）。
 	// 开关存在的理由是它有钱的含义：命中按约十分之一计费，而未命中的写入要多付
 	// 约四分之一。连续对话几乎必然命中，但若使用节奏比缓存有效期还慢（消息间隔
@@ -69,6 +72,7 @@ func (r Resolved) LLMConfig(lang string) llm.Config {
 		BaseURL:     r.BaseURL,
 		APIKey:      r.APIKey,
 		Dialect:     r.Dialect,
+		Protocol:    r.Protocol,
 		PromptCache: r.PromptCache,
 		Lang:        lang,
 	}
@@ -81,6 +85,7 @@ type Resolved struct {
 	BaseURL       string
 	APIKey        string
 	Dialect       string // 思考参数方言
+	Protocol      string // 线上协议（openai_compat 专用；空串等同 chat）
 	PromptCache   bool   // 是否使用提示词缓存（anthropic 专用）
 	ModelID       string
 	Temperature   float64
@@ -153,7 +158,7 @@ func baseProviders(cfg *config.Config) []Provider {
 	for _, name := range names {
 		pc := cfg.Providers[name]
 		p := Provider{Name: name, Type: pc.Type, BaseURL: pc.BaseURL, APIKey: pc.APIKey,
-			Dialect: pc.ThinkingDialect, PromptCache: pc.PromptCache, Models: []Model{}}
+			Dialect: pc.ThinkingDialect, Protocol: pc.Protocol, PromptCache: pc.PromptCache, Models: []Model{}}
 		if name == cfg.Model.Provider && cfg.Model.Name != "" {
 			p.Models = append(p.Models, Model{ID: cfg.Model.Name})
 		}
@@ -255,6 +260,7 @@ func resolveSelection(lang string, f File, def config.ModelConfig, sel Selection
 		BaseURL:       p.BaseURL,
 		APIKey:        p.APIKey,
 		Dialect:       p.Dialect,
+		Protocol:      p.Protocol,
 		PromptCache:   p.PromptCache == nil || *p.PromptCache, // 未设置按开启算
 		ModelID:       m.ID,
 		Temperature:   def.Temperature,
@@ -444,6 +450,15 @@ func DialectOptions(lang string) []map[string]string {
 	out := make([]map[string]string, 0, len(llm.KnownDialects))
 	for _, d := range llm.KnownDialects {
 		out = append(out, map[string]string{"value": d, "label": llm.DialectLabel(lang, d)})
+	}
+	return out
+}
+
+// ProtocolOptions 返回界面下拉需要的线上协议候选。
+func ProtocolOptions(lang string) []map[string]string {
+	out := make([]map[string]string, 0, len(llm.KnownProtocols))
+	for _, p := range llm.KnownProtocols {
+		out = append(out, map[string]string{"value": p, "label": llm.ProtocolLabel(lang, p)})
 	}
 	return out
 }
