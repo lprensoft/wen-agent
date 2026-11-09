@@ -236,10 +236,15 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 	next := doc.toFile()
 	if remove {
 		next.Providers = dropProvider(next.Providers, p.Name)
+		before := len(next.Fallbacks)
+		next.Fallbacks = dropFallbacksForProvider(next.Fallbacks, p.Name)
 		if err := b.saveModels(next); err != nil {
 			return err
 		}
 		note(trf("cli.models.deleted", "✓ 提供商 %s 已删除", p.Name))
+		if len(next.Fallbacks) < before {
+			note(tr("cli.models.fallbacksCleaned", "✓ 已同时移除引用它的备用模型"))
+		}
 		return nil
 	}
 
@@ -253,12 +258,54 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 		next.Providers = append(next.Providers, edited)
 	} else {
 		next.Providers = replaceProvider(next.Providers, p.Name, edited)
+		next.Fallbacks = renameFallbackProvider(next.Fallbacks, p.Name, edited.Name)
+		next.Fallbacks = keepFallbacksForModels(next.Fallbacks, edited.Name, edited.Models)
 	}
 	if err := b.saveModels(next); err != nil {
 		return err
 	}
 	note(trf("cli.models.savedProvider", "✓ 提供商 %s 已保存", edited.Name))
 	return nil
+}
+
+func dropFallbacksForProvider(list []modelcfg.Selection, name string) []modelcfg.Selection {
+	out := make([]modelcfg.Selection, 0, len(list))
+	for _, sel := range list {
+		if strings.EqualFold(sel.Provider, name) {
+			continue
+		}
+		out = append(out, sel)
+	}
+	return out
+}
+
+func renameFallbackProvider(list []modelcfg.Selection, old, next string) []modelcfg.Selection {
+	if old == next {
+		return list
+	}
+	out := make([]modelcfg.Selection, 0, len(list))
+	for _, sel := range list {
+		if strings.EqualFold(sel.Provider, old) {
+			sel.Provider = next
+		}
+		out = append(out, sel)
+	}
+	return out
+}
+
+func keepFallbacksForModels(list []modelcfg.Selection, provider string, models []modelcfg.Model) []modelcfg.Selection {
+	ids := make(map[string]bool, len(models))
+	for _, m := range models {
+		ids[m.ID] = true
+	}
+	out := make([]modelcfg.Selection, 0, len(list))
+	for _, sel := range list {
+		if strings.EqualFold(sel.Provider, provider) && !ids[sel.Model] {
+			continue
+		}
+		out = append(out, sel)
+	}
+	return out
 }
 
 func dropProvider(list []modelcfg.Provider, name string) []modelcfg.Provider {

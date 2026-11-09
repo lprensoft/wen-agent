@@ -131,6 +131,14 @@ func (e *wireError) text() string {
 	return head + ": " + e.Message
 }
 
+// code 返回流内错误帧的类型/代码。Type 为空时回落到 code 字段（有些兼容实现只填后者）。
+func (e *wireError) code() string {
+	if e.Type != "" {
+		return e.Type
+	}
+	return strings.Trim(string(e.Code), `"`)
+}
+
 // wireUsage 单独一个结构而不是直接解进 llm.Usage：缓存命中数各家字段名不同，
 // DeepSeek 放在顶层的 prompt_cache_hit_tokens，OpenAI 放在 prompt_tokens_details
 // 里面，两种都收下再归一。
@@ -339,7 +347,7 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 				continue
 			}
 			if chunk.Error != nil {
-				emit(StreamEvent{Type: EventError, Err: &APIError{Body: chunk.Error.text()}})
+				emit(StreamEvent{Type: EventError, Err: &APIError{Code: chunk.Error.code(), Body: chunk.Error.text()}})
 				return
 			}
 			if chunk.Usage != nil {

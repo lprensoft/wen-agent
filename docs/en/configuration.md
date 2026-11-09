@@ -94,6 +94,14 @@ Providers and models can be added, edited and removed on the settings page, and 
 - Each model entry can override `context_length` / `max_tokens` / `thinking` / `temperature` on its own; left empty, the global values from the `model:` section apply.
 - **Note**: once a key that came from `${VAR}` has been written into models.json it is fixed there, and changing the environment variable afterwards has no effect.
 
+### Backup models
+
+On the settings page under Models you can add an ordered chain of backup models below the main model. It is used only for transient failures: rate limiting (429), provider 5xx, request timeouts and network problems. Configuration errors (401/403/404), content filters and ordinary 4xx do not switch — those need the original text seen or the request itself fixed.
+
+When the chain is exhausted, the existing failure handling takes over: on interactive turns `FailureTranslator` turns the failure into a roleplay reply and the original error goes only into a session notice (visible in the web UI, never in the model context); background turns are not translated and report the failure to their initiator. With roleplay off, or when no plugin takes over, the original error is shown as before.
+
+The chain lives in `models.json` as `fallbacks` and takes effect on the next request. `wen config models` preserves it but does not edit it; add, remove and reorder in the web UI.
+
 ### Adding a provider
 
 "Add provider" on the settings page opens a list of presets first: pick one and the endpoint, thinking-parameter dialect and common models are all filled in — the only thing left is an API key, and the form links you to the page that issues it. If the vendor you want is not there, the last entry is "Custom" and takes you to the manual form as before. The `wen config` terminal interface follows the same flow.

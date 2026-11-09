@@ -67,12 +67,20 @@ type ModelOptions struct {
 	ContextLength int
 }
 
+// ModelTarget 是模型链中的一项：primary 在最前，fallback 依次跟随。
+type ModelTarget struct {
+	Provider llm.Provider
+	Options  ModelOptions
+	// Label 只用于日志与状态展示，如 "deepseek / deepseek-chat"。
+	Label string
+}
+
 type Agent struct {
-	mu       sync.RWMutex // 保护 provider 与 opts（模型可运行时切换）
-	provider llm.Provider
-	plugins  *plugin.Manager
-	store    *session.Store
-	opts     Options
+	mu      sync.RWMutex // 保护 targets 与 opts（模型可运行时切换）
+	targets []ModelTarget
+	plugins *plugin.Manager
+	store   *session.Store
+	opts    Options
 	// noticeSink 是会话注记的实时出口（见 notice.go）。同受 mu 保护：
 	// 它由 server 在启动时装一次，而注记从插件的后台 goroutine 上写出。
 	noticeSink NoticeSink
@@ -87,7 +95,19 @@ func New(provider llm.Provider, plugins *plugin.Manager, store *session.Store, o
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 20
 	}
-	return &Agent{provider: provider, plugins: plugins, store: store, opts: opts, turnLocks: map[string]*sync.Mutex{}}
+	a := &Agent{plugins: plugins, store: store, opts: opts, turnLocks: map[string]*sync.Mutex{}}
+	a.targets = []ModelTarget{{Provider: provider, Options: modelOptionsOf(opts)}}
+	return a
+}
+
+func modelOptionsOf(o Options) ModelOptions {
+	return ModelOptions{
+		Model:         o.Model,
+		Temperature:   o.Temperature,
+		MaxTokens:     o.MaxTokens,
+		Thinking:      o.Thinking,
+		ContextLength: o.ContextLength,
+	}
 }
 
 // turnLock 返回该会话的轮次锁（惰性创建）。
@@ -102,24 +122,33 @@ func (a *Agent) turnLock(sessionID string) *sync.Mutex {
 	return l
 }
 
-// snapshot 取一份当前 provider 与配置。一轮请求全程使用同一份快照，
+// snapshot 取一份当前模型链与配置。一轮请求全程使用同一份快照，
 // 避免长流中途被切换导致模型与上下文（尤其思考块签名）错配。
-func (a *Agent) snapshot() (llm.Provider, Options) {
+func (a *Agent) snapshot() ([]ModelTarget, Options) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.provider, a.opts
+	targets := append([]ModelTarget(nil), a.targets...)
+	return targets, a.opts
 }
 
-// SetModel 热切换 provider 与模型参数，下一次请求生效；进行中的请求不受影响。
+// SetModel 热切换单个 provider 与模型参数，下一次请求生效；进行中的请求不受影响。
 func (a *Agent) SetModel(p llm.Provider, m ModelOptions) {
+	a.SetModelTargets([]ModelTarget{{Provider: p, Options: m}})
+}
+
+// SetModelTargets 热切换整条模型链（第一项是主模型）。进行中的请求不受影响。
+func (a *Agent) SetModelTargets(targets []ModelTarget) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.provider = p
-	a.opts.Model = m.Model
-	a.opts.Temperature = m.Temperature
-	a.opts.MaxTokens = m.MaxTokens
-	a.opts.Thinking = m.Thinking
-	a.opts.ContextLength = m.ContextLength
+	a.targets = append([]ModelTarget(nil), targets...)
+	if len(targets) > 0 {
+		m := targets[0].Options
+		a.opts.Model = m.Model
+		a.opts.Temperature = m.Temperature
+		a.opts.MaxTokens = m.MaxTokens
+		a.opts.Thinking = m.Thinking
+		a.opts.ContextLength = m.ContextLength
+	}
 }
 
 // Options 返回当前生效配置的副本。
@@ -132,12 +161,37 @@ func (a *Agent) Options() Options {
 // Complete 用当前模型做一次一问一答的辅助调用：不带工具、不启用思考、不写入任何会话。
 // 供插件完成提炼、归类这类内部工作，与用户对话相互独立。
 func (a *Agent) Complete(ctx context.Context, prompt string) (string, error) {
-	provider, opts := a.snapshot()
-	events, err := provider.ChatStream(ctx, llm.ChatRequest{
-		Model:       opts.Model,
+	targets, opts := a.snapshot()
+	var lastErr error
+	for i, t := range targets {
+		if t.Provider == nil {
+			continue
+		}
+		out, err := a.completeOne(ctx, t, prompt)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !llm.IsTransientError(err) || ctx.Err() != nil {
+			return "", err
+		}
+		if i+1 < len(targets) {
+			i18n.Logf(opts.Lang, "log.agent.fallback", "agent: %s 调用失败，改用 %s：%v",
+				targetLabel(t, i), targetLabel(targets[i+1], i+1), err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
+	}
+	return "", lastErr
+}
+
+func (a *Agent) completeOne(ctx context.Context, t ModelTarget, prompt string) (string, error) {
+	events, err := t.Provider.ChatStream(ctx, llm.ChatRequest{
+		Model:       t.Options.Model,
 		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt}},
-		Temperature: opts.Temperature,
-		MaxTokens:   opts.MaxTokens,
+		Temperature: t.Options.Temperature,
+		MaxTokens:   t.Options.MaxTokens,
 		Thinking:    "off",
 	})
 	if err != nil {
@@ -188,7 +242,7 @@ func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, e
 
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(Event)) (string, error) {
 	startedAt := time.Now()
-	provider, opts := a.snapshot()
+	targets, opts := a.snapshot()
 
 	meta, history, err := a.store.Get(sessionID)
 	if err != nil {
@@ -300,7 +354,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 	var guard toolGuard
 	for turn := 0; turn < opts.MaxTurns; turn++ {
-		r, err := a.stream(ctx, provider, opts, msgs, pinned, emit)
+		r, err := a.stream(ctx, targets, opts, msgs, pinned, emit)
 		if err != nil {
 			// 给插件一个把失败转成正常回复的机会（如角色扮演场景把内容拦截
 			// 演成一句走神）。转译成功即按正常轮次收尾，原始错误进会话注记。
@@ -361,7 +415,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 		if len(r.toolCalls) == 0 {
 			// 无工具调用，本轮结束
-			a.maybeAutoCompact(ctx, provider, opts, sessionID, r.usage, emit)
+			a.maybeAutoCompact(ctx, targets, opts, sessionID, r.usage, emit)
 			a.plugins.NotifyTurnEnd(ctx, plugin.TurnEndEvent{
 				SessionID:   sessionID,
 				Origin:      origin,
@@ -411,10 +465,60 @@ type turnResult struct {
 	blocks    []llm.ReasoningBlock
 	toolCalls []llm.ToolCall
 	usage     *llm.Usage
+	// emitted 表示界面上已经看到过正文或思考增量。此时失败不能再换模型，
+	// 否则两家的输出会拼在一轮里。
+	emitted bool
 }
 
-// stream 发起一次 LLM 调用，转发文本与思考增量，返回本轮完整产出。
-func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
+// stream 按模型链发起一次 LLM 调用。只在尚未输出任何内容、且错误属于瞬态故障时
+// 切换到下一个模型；全部失败后把最后一个错误交回上层，由现有失败收尾处理
+// （交互轮次交给 FailureTranslator，后台轮次交给发起方）。
+func (a *Agent) stream(ctx context.Context, targets []ModelTarget, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
+	var lastErr error
+	for i, t := range targets {
+		if t.Provider == nil {
+			continue
+		}
+		r, err := a.streamOne(ctx, t.Provider, withTargetOptions(opts, t.Options), msgs, pinned, emit)
+		if err == nil {
+			return r, nil
+		}
+		lastErr = err
+		if !llm.IsTransientError(err) || ctx.Err() != nil || r.emitted {
+			return r, err
+		}
+		if i+1 < len(targets) {
+			i18n.Logf(opts.Lang, "log.agent.fallback", "agent: %s 调用失败，改用 %s：%v",
+				targetLabel(t, i), targetLabel(targets[i+1], i+1), err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
+	}
+	return turnResult{}, lastErr
+}
+
+func withTargetOptions(opts Options, m ModelOptions) Options {
+	opts.Model = m.Model
+	opts.Temperature = m.Temperature
+	opts.MaxTokens = m.MaxTokens
+	opts.Thinking = m.Thinking
+	opts.ContextLength = m.ContextLength
+	return opts
+}
+
+func targetLabel(t ModelTarget, i int) string {
+	if t.Label != "" {
+		return t.Label
+	}
+	if t.Options.Model != "" {
+		return t.Options.Model
+	}
+	return fmt.Sprintf("#%d", i+1)
+}
+
+// streamOne 是单次模型调用；fallback 的选择由 stream 负责。
+func (a *Agent) streamOne(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
 	var r turnResult
 	req := llm.ChatRequest{
 		Model:       opts.Model,
@@ -439,12 +543,14 @@ func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options,
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
+			r.emitted = true
 			r.content += ev.Content
 			emit(Event{Type: EventDelta, Content: ev.Content})
 			if preview != nil {
 				preview(r.content) // 本次响应到目前为止的全文，见 plugin.WithReplyPreview
 			}
 		case llm.EventReasoningDelta:
+			r.emitted = true
 			r.reasoning += ev.Content
 			emit(Event{Type: EventThinking, Content: ev.Content})
 		case llm.EventToolCalls:
@@ -508,7 +614,7 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 // 已按可见域过滤过的上下文；只看它的话，一个上下文很小的可见域会让整个会话永不触发
 // 压缩，而其它可见域的历史仍在无限增长、记忆提炼也永不发生。偏早压缩无害——压缩本来
 // 就是上下文溢出时的保底手段。
-func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opts Options, sessionID string, usage *llm.Usage, emit func(Event)) {
+func (a *Agent) maybeAutoCompact(ctx context.Context, targets []ModelTarget, opts Options, sessionID string, usage *llm.Usage, emit func(Event)) {
 	if opts.ContextLength <= 0 {
 		return
 	}
@@ -530,7 +636,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opt
 			emit(Event{Type: EventCompactDelta, Content: ev.Content})
 		}
 	}
-	if err := a.compact(ctx, provider, opts, sessionID, wrapped); err != nil {
+	if err := a.compact(ctx, targets, opts, sessionID, wrapped); err != nil {
 		emit(Event{Type: EventCompactDone, Error: err.Error()})
 		return
 	}

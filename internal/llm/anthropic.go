@@ -510,10 +510,12 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 				return
 			case "error":
 				msg := i18n.T(p.lang, "llm.err.unknown", "未知错误")
+				code := ""
 				if ev.Error != nil {
+					code = ev.Error.Type
 					msg = ev.Error.Type + ": " + ev.Error.Message
 				}
-				emit(StreamEvent{Type: EventError, Err: &APIError{Body: msg}})
+				emit(StreamEvent{Type: EventError, Err: &APIError{Code: code, Body: msg}})
 				return
 			}
 		}

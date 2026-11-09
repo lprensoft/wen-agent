@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"wen/internal/config"
 	"wen/internal/llm"
 
 	"wen/internal/i18n"
@@ -52,6 +53,20 @@ func validateDoc(lang string, f File) error {
 		}
 	}
 
+	return nil
+}
+
+// validateFallbacks 确认每个备用模型都指向真实存在、且具备可用密钥的组合。
+// 传入合并后的视图：config.yaml 里的提供商同样可以当备用模型。
+func validateFallbacks(lang string, f File) error {
+	for i, sel := range f.Fallbacks {
+		if sel.Provider == "" || sel.Model == "" {
+			return fmt.Errorf("%s", i18n.Tf(lang, "modelcfg.err.fallback_incomplete", "第 %d 个备用模型不完整", i+1))
+		}
+		if _, err := resolveSelection(lang, f, config.ModelConfig{}, sel); err != nil {
+			return fmt.Errorf("%s", i18n.Tf(lang, "modelcfg.err.fallback_resolve", "备用模型 %d（%s / %s）：%v", i+1, sel.Provider, sel.Model, err))
+		}
+	}
 	return nil
 }
 
