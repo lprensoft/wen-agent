@@ -9,6 +9,48 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v1.1.0] - 2026-11-09
+
+### 新增
+
+- 新增 Discord 私聊通道
+- 新增企业微信智能机器人长连接通道
+- 新增钉钉 Stream 模式私聊通道
+- 新增 Slack Socket Mode 私聊通道
+- 新增 Docker 部署，镜像同时提供 amd64 与 arm64
+- 新增 `wen export` 与 `wen import`，可备份与恢复配置目录
+- `wen serve` 新增 `-host` 参数，可覆盖监听地址
+
+### 修复
+
+- Slack 斜杠命令可正常使用，特殊字符与断线重连已修正
+- Slack 的帮助与确认提示显示 `/wen` 入口
+- 钉钉断线后能重新连接，纯文本消息可正常接收
+- 企业微信取消请求后，后续消息不再沿用旧回执
+- 企业微信入站顺序与回执不再错配
+- Discord 断线重连与消息处理已修正
+
+---
+
+### Added
+
+- New Discord DM channel
+- New WeCom smart-bot long-connection channel
+- New DingTalk Stream-mode DM channel
+- New Slack Socket Mode DM channel
+- New Docker deployment, with images for both amd64 and arm64
+- New `wen export` and `wen import` to back up and restore the configuration directory
+- `wen serve` gains a `-host` flag to override the listen address
+
+### Fixed
+
+- Slack slash commands work, and special characters and reconnection after a disconnect are fixed
+- Slack help and confirmation prompts show the `/wen` entry
+- DingTalk reconnects after a disconnect and receives plain-text messages
+- WeCom no longer reuses an old receipt for later messages after a request is cancelled
+- WeCom inbound ordering and receipt matching no longer get crossed
+- Discord reconnection and message handling are fixed
+
 ## [v1.0.0] - 2026-10-25
 
 ### 新增
