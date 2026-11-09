@@ -23,8 +23,11 @@ type File struct {
 	Providers []Provider `json:"providers"`
 	// Removed 是删除坠碑：config.yaml 里仍存在、但已在界面上删掉的提供商名，
 	// 防止它们在下次启动时复活。
-	Removed []string  `json:"removed_providers,omitempty"`
-	Current Selection `json:"current"`
+	Removed []string `json:"removed_providers,omitempty"`
+	// Fallbacks 是主模型不可用时按顺序尝试的备用模型。只在运行期瞬态错误
+	// （限流、服务端故障、网络问题）时切换，见 internal/agent。
+	Fallbacks []Selection `json:"fallbacks,omitempty"`
+	Current   Selection   `json:"current"`
 }
 
 type Provider struct {
@@ -57,6 +60,18 @@ type Model struct {
 type Selection struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+}
+
+// LLMConfig 把解析结果转成构造 Provider 所需的参数。
+func (r Resolved) LLMConfig(lang string) llm.Config {
+	return llm.Config{
+		Type:        r.Type,
+		BaseURL:     r.BaseURL,
+		APIKey:      r.APIKey,
+		Dialect:     r.Dialect,
+		PromptCache: r.PromptCache,
+		Lang:        lang,
+	}
 }
 
 // Resolved 是当前选中项与全局默认合并后的最终生效参数。
@@ -113,6 +128,9 @@ func NewStore(lang, path string, cfg *config.Config) (*Store, error) {
 		if err := validateDoc(lang, view); err != nil {
 			return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
 		}
+		if err := validateFallbacks(lang, view); err != nil {
+			return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
+		}
 	}
 	return s, nil
 }
@@ -165,6 +183,36 @@ func (s *Store) Resolve(lang string) (Resolved, error) {
 	return resolve(lang, s.viewLocked(), s.defaults)
 }
 
+// ResolveChain 返回主模型与按顺序排列的备用模型。重复项会被去掉。
+func (s *Store) ResolveChain(lang string) ([]Resolved, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f := s.viewLocked()
+	primary, err := resolve(lang, f, s.defaults)
+	if err != nil {
+		return nil, err
+	}
+	out := []Resolved{primary}
+	seen := map[string]bool{selectionKey(primary): true}
+	for i, sel := range f.Fallbacks {
+		r, err := resolveSelection(lang, f, s.defaults, sel)
+		if err != nil {
+			return nil, fmt.Errorf("%s", i18n.Tf(lang, "modelcfg.err.fallback_resolve", "备用模型 %d（%s / %s）：%v", i+1, sel.Provider, sel.Model, err))
+		}
+		key := selectionKey(r)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func selectionKey(r Resolved) string {
+	return strings.ToLower(r.ProviderName) + "\x00" + r.ModelID
+}
+
 // Status 返回 /api/status 需要的非敏感字段。
 func (s *Store) Status() (provider, model, thinking string, contextLength int) {
 	// 这里的报错被丢弃（拿不到就报空），语言无关紧要
@@ -179,18 +227,24 @@ func (s *Store) Status() (provider, model, thinking string, contextLength int) {
 // 向导。缺密钥因此也在这里报——此前它由 config.yaml 那一层查，查在合并 models.json
 // 之前，于是只看得见一半配置。
 func resolve(lang string, f File, def config.ModelConfig) (Resolved, error) {
-	// 一个都没有，或者有但哪个都选不上（提供商下没有任何模型）：都报「没配置」，
-	// 而不是下面那句「未找到提供商 ""」
-	if len(f.Providers) == 0 || f.Current.Provider == "" {
+	// 一个都没有时报「没配置」，而不是下面那句「未找到提供商 ""」。
+	if len(f.Providers) == 0 {
 		return Resolved{}, fmt.Errorf("%s", i18n.T(lang, "modelcfg.err.not_configured", "还没有配置模型"))
 	}
-	p, ok := findProvider(f.Providers, f.Current.Provider)
-	if !ok {
-		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_provider", "未找到提供商 %q"), f.Current.Provider)
+	return resolveSelection(lang, f, def, f.Current)
+}
+
+func resolveSelection(lang string, f File, def config.ModelConfig, sel Selection) (Resolved, error) {
+	if sel.Provider == "" {
+		return Resolved{}, fmt.Errorf("%s", i18n.T(lang, "modelcfg.err.not_configured", "还没有配置模型"))
 	}
-	m, ok := findModel(p.Models, f.Current.Model)
+	p, ok := findProvider(f.Providers, sel.Provider)
 	if !ok {
-		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), p.Name, f.Current.Model)
+		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_provider", "未找到提供商 %q"), sel.Provider)
+	}
+	m, ok := findModel(p.Models, sel.Model)
+	if !ok {
+		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_such_model", "提供商 %q 下未找到模型 %q"), p.Name, sel.Model)
 	}
 	if strings.TrimSpace(p.APIKey) == "" && RequiresKey(p.BaseURL) {
 		return Resolved{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.no_api_key", "提供商 %q 尚未配置 API Key，无法使用"), p.Name)
@@ -239,9 +293,15 @@ func (s *Store) Save(lang string, next File) (File, error) {
 	own.Removed = tombstones(own.Providers, s.base, s.own.Removed)
 	own.Providers = dropUnchangedBase(own.Providers, s.base, s.own.Providers)
 
+	// 备用模型可以指向 config.yaml 里的提供商，因此要在合并后的视图上校验。
+	view := mergeWithBase(own, s.base, s.baseSel)
+	if err := validateFallbacks(lang, view); err != nil {
+		return File{}, err
+	}
+
 	prev := s.own
 	s.own = own
-	view := s.viewLocked()
+	view = s.viewLocked()
 	// 删除保护：保存后当前使用的提供商与模型必须仍然存在
 	if err := checkCurrent(lang, view.Providers, own.Current); err != nil {
 		s.own = prev
@@ -272,12 +332,27 @@ func (s *Store) SetCurrent(lang string, sel Selection) (File, error) {
 	}
 
 	prev := s.own.Current
+	prevFallbacks := append([]Selection(nil), s.own.Fallbacks...)
 	s.own.Current = Selection{Provider: p.Name, Model: sel.Model}
+	// 把刚升为主模型的组合从备用链里去掉，避免设置页出现重复项。
+	s.own.Fallbacks = removeSelection(s.own.Fallbacks, s.own.Current)
 	if err := s.persistLocked(lang); err != nil {
 		s.own.Current = prev
+		s.own.Fallbacks = prevFallbacks
 		return File{}, err
 	}
 	return s.viewLocked(), nil
+}
+
+func removeSelection(list []Selection, want Selection) []Selection {
+	out := list[:0]
+	for _, sel := range list {
+		if strings.EqualFold(sel.Provider, want.Provider) && sel.Model == want.Model {
+			continue
+		}
+		out = append(out, sel)
+	}
+	return out
 }
 
 // Lookup 按名取提供商及其模型（供测试连接使用）。

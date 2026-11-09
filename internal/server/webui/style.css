@@ -1057,6 +1057,37 @@ body {
 .model-row-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; }
 .model-row:hover .model-row-actions, .model-row.active .model-row-actions { opacity: 1; }
 .model-empty { font-size: 12.5px; color: var(--text-dim); padding: 6px 8px; }
+
+/* 备用模型链：主模型失败时按顺序尝试 */
+.fallback-section {
+  margin-top: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fallback-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fallback-list { display: flex; flex-direction: column; gap: 6px; }
+.fallback-row { display: flex; align-items: center; gap: 8px; }
+.fallback-row select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+}
+.fallback-row select:focus { border-color: var(--accent); }
+.fallback-index { min-width: 18px; font-size: 11.5px; color: var(--text-dim); }
+.fallback-actions { display: flex; gap: 2px; }
+.fallback-empty { font-size: 12.5px; color: var(--text-dim); }
 .btn-link {
   border: none;
   background: none;

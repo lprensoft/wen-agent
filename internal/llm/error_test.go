@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -156,5 +158,80 @@ func TestOpenAICompatNormalFinishReason(t *testing.T) {
 	content, _, _ := collect(t, ch)
 	if content != "好的" {
 		t.Errorf("content = %q", content)
+	}
+}
+
+func TestIsTransientError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"rate limited", &APIError{Status: 429}, true},
+		{"request timeout", &APIError{Status: 408}, true},
+		{"server error", &APIError{Status: 503}, true},
+		{"stream server error", &APIError{Code: "server_error"}, true},
+		{"stream overloaded", &APIError{Code: "overloaded_error"}, true},
+		{"stream invalid request", &APIError{Code: "invalid_request_error"}, false},
+		{"bad request", &APIError{Status: 400}, false},
+		{"unauthorized", &APIError{Status: 401}, false},
+		{"content filter", &APIError{Kind: KindContentFilter}, false},
+		{"config kind", &APIError{Kind: KindConfig}, false},
+		{"cancelled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, true},
+		{"unexpected eof", io.ErrUnexpectedEOF, true},
+		{"network", &url.Error{Op: "Post", URL: "http://example.com", Err: errors.New("connection refused")}, true},
+		{"plain", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsTransientError(tc.err); got != tc.want {
+				t.Fatalf("IsTransientError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatStreamServerErrorIsTransient(t *testing.T) {
+	var got map[string]any
+	srv := sseServer(t, []string{`{"error":{"type":"server_error","message":"busy"}}`}, &got)
+	defer srv.Close()
+
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
+	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = collectErr(t, ch)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "server_error" {
+		t.Fatalf("error = %#v, want server_error", err)
+	}
+	if !IsTransientError(err) {
+		t.Fatal("stream server_error should be transient")
+	}
+}
+
+func TestAnthropicStreamOverloadedIsTransient(t *testing.T) {
+	var got map[string]any
+	srv := antServer(t, []antFrame{{
+		event: "error",
+		data:  `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+	}}, &got)
+	defer srv.Close()
+
+	p := NewAnthropic("", srv.URL, "sk-ant-test", false)
+	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "claude-sonnet-5-5", Messages: testMessages("hi"), MaxTokens: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = collectErr(t, ch)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "overloaded_error" {
+		t.Fatalf("error = %#v, want overloaded_error", err)
+	}
+	if !IsTransientError(err) {
+		t.Fatal("stream overloaded_error should be transient")
 	}
 }

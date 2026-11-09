@@ -99,27 +99,31 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// applyCurrentModel 按当前选中项重建 provider 并热切换到 Agent。
+// applyCurrentModel 按当前选中项与备用链重建 Provider，并热切换到 Agent。
 func (s *Server) applyCurrentModel(lang string) error {
-	cur, err := s.models.Resolve(lang)
+	chain, err := s.models.ResolveChain(lang)
 	if err != nil {
 		return err
 	}
-	provider, err := llm.New(llm.Config{
-		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
-		PromptCache: cur.PromptCache,
-		Lang:        s.lang,
-	})
-	if err != nil {
-		return err
+	targets := make([]agent.ModelTarget, 0, len(chain))
+	for _, cur := range chain {
+		provider, err := llm.New(cur.LLMConfig(s.lang))
+		if err != nil {
+			return err
+		}
+		targets = append(targets, agent.ModelTarget{
+			Provider: provider,
+			Options: agent.ModelOptions{
+				Model:         cur.ModelID,
+				Temperature:   cur.Temperature,
+				MaxTokens:     cur.MaxTokens,
+				Thinking:      cur.Thinking,
+				ContextLength: cur.ContextLength,
+			},
+			Label: cur.ProviderName + " / " + cur.ModelID,
+		})
 	}
-	s.agent.SetModel(provider, agent.ModelOptions{
-		Model:         cur.ModelID,
-		Temperature:   cur.Temperature,
-		MaxTokens:     cur.MaxTokens,
-		Thinking:      cur.Thinking,
-		ContextLength: cur.ContextLength,
-	})
+	s.agent.SetModelTargets(targets)
 	return nil
 }
 
@@ -148,9 +152,14 @@ func (s *Server) modelsView(lang string) map[string]any {
 			"models":       models,
 		})
 	}
+	fallbacks := view.Fallbacks
+	if fallbacks == nil {
+		fallbacks = []modelcfg.Selection{}
+	}
 	return map[string]any{
 		"providers": providers,
 		"current":   view.Current,
+		"fallbacks": fallbacks,
 		"types":     modelcfg.TypeOptions(lang),
 		"dialects":  modelcfg.DialectOptions(lang),
 		// 预置随这一份下发而不是另开一个接口：它只在「添加提供商」那一步用得上，

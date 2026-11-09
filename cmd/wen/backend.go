@@ -43,8 +43,9 @@ type backend interface {
 // modelsDoc 是模型配置的只读视图。api_key 只有掩码——两种模式都不需要明文：
 // 保存时留空即表示沿用旧值。
 type modelsDoc struct {
-	Providers []providerView     `json:"providers"`
-	Current   modelcfg.Selection `json:"current"`
+	Providers []providerView       `json:"providers"`
+	Current   modelcfg.Selection   `json:"current"`
+	Fallbacks []modelcfg.Selection `json:"fallbacks"`
 	// Presets 是「添加提供商」时可以直接挑的那张表，随 /api/models 一起下发。
 	// 名字已由服务端错开重名，拿来即填。
 	Presets []modelcfg.PresetView `json:"presets"`
@@ -72,7 +73,7 @@ func (d modelsDoc) toFile() modelcfg.File {
 			Dialect: p.Dialect, PromptCache: p.PromptCache, Models: p.Models,
 		})
 	}
-	return modelcfg.File{Version: 1, Providers: providers, Current: d.Current}
+	return modelcfg.File{Version: 1, Providers: providers, Fallbacks: d.Fallbacks, Current: d.Current}
 }
 
 type authState struct {
@@ -207,7 +208,7 @@ func (b *offlineBackend) pluginActionState(string, string) (plugin.ActionState, 
 
 func (b *offlineBackend) loadModels() (modelsDoc, error) {
 	view := b.models.Snapshot()
-	doc := modelsDoc{Current: view.Current, Presets: modelcfg.PresetOptions(uiLang, view.Providers)}
+	doc := modelsDoc{Current: view.Current, Fallbacks: view.Fallbacks, Presets: modelcfg.PresetOptions(uiLang, view.Providers)}
 	for _, p := range view.Providers {
 		models := p.Models
 		if models == nil {

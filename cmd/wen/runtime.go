@@ -150,22 +150,33 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		plugins.StopAll()
 		return nil, fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
 	}
-	cur, err := models.Resolve(uiLang)
+	chain, err := models.ResolveChain(uiLang)
 	if err != nil {
 		plugins.StopAll()
 		return nil, fmt.Errorf(tr("cli.err.bad_models", "模型配置无效: %w"), err)
 	}
-	provider, err := llm.New(llm.Config{
-		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
-		PromptCache: cur.PromptCache,
-		Lang:        uiLang,
-	})
-	if err != nil {
-		plugins.StopAll()
-		return nil, err
+	cur := chain[0]
+	targets := make([]agent.ModelTarget, 0, len(chain))
+	for _, r := range chain {
+		provider, err := llm.New(r.LLMConfig(uiLang))
+		if err != nil {
+			plugins.StopAll()
+			return nil, err
+		}
+		targets = append(targets, agent.ModelTarget{
+			Provider: provider,
+			Options: agent.ModelOptions{
+				Model:         r.ModelID,
+				Temperature:   r.Temperature,
+				MaxTokens:     r.MaxTokens,
+				Thinking:      r.Thinking,
+				ContextLength: r.ContextLength,
+			},
+			Label: r.ProviderName + " / " + r.ModelID,
+		})
 	}
 
-	ag = agent.New(provider, plugins, store, agent.Options{
+	ag = agent.New(targets[0].Provider, plugins, store, agent.Options{
 		Model:         cur.ModelID,
 		Temperature:   cur.Temperature,
 		MaxTokens:     cur.MaxTokens,
@@ -176,6 +187,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		Thinking:      cur.Thinking,
 		ContextLength: cur.ContextLength,
 	})
+	ag.SetModelTargets(targets)
 	return &runtime{
 		cfg: cfg, workdir: workdir, store: store, plugins: plugins,
 		models: models, current: cur, agent: ag,

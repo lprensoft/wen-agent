@@ -1770,6 +1770,7 @@ function payloadFromDoc() {
       models: p.models,
     })),
     current: modelsDoc.current,
+    fallbacks: modelsDoc.fallbacks || [],
   };
 }
 
@@ -1809,6 +1810,169 @@ function renderModels(doc) {
 
   for (const p of doc.providers) {
     modelsEl.appendChild(buildProviderCard(p));
+  }
+  renderFallbacks(doc);
+}
+
+// ---------- 备用模型链 ----------
+
+function fallbackKey(sel) {
+  return (sel.provider || "") + "\u0000" + (sel.model || "");
+}
+
+function fallbackProviderHasModels(p) {
+  return (p.models || []).length > 0;
+}
+
+// 与后端 modelcfg.RequiresKey 同一判据：本机地址不要求密钥，其余提供商必须已经配置。
+function fallbackLocalURL(baseURL) {
+  try {
+    const host = new URL(baseURL).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]" || host === "0.0.0.0";
+  } catch {
+    return false;
+  }
+}
+
+function fallbackProviderUsable(p) {
+  return fallbackProviderHasModels(p) && (!!p.has_api_key || fallbackLocalURL(p.base_url));
+}
+
+function fillFallbackModels(providerName, select, selected) {
+  select.textContent = "";
+  const p = (modelsDoc.providers || []).find((x) => x.name === providerName);
+  const models = (p && p.models) || [];
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.name || m.id;
+    select.appendChild(opt);
+  }
+  select.value = selected || (models[0] ? models[0].id : "");
+}
+
+function fallbackButton(label, title, onClick, disabled) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-icon btn-square";
+  btn.textContent = label;
+  btn.title = title;
+  btn.disabled = !!disabled;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function renderFallbacks(doc) {
+  const list = $("#fallback-list");
+  if (!list) return;
+  list.textContent = "";
+  const fallbacks = doc.fallbacks || [];
+  if (fallbacks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "fallback-empty";
+    empty.textContent = t("models.fallbackEmpty");
+    list.appendChild(empty);
+    return;
+  }
+  fallbacks.forEach((sel, i) => list.appendChild(buildFallbackRow(doc, sel, i, fallbacks.length)));
+}
+
+function buildFallbackRow(doc, sel, index, total) {
+  const row = document.createElement("div");
+  row.className = "fallback-row";
+
+  const order = document.createElement("span");
+  order.className = "fallback-index";
+  order.textContent = String(index + 1);
+  row.appendChild(order);
+
+  const providerSelect = document.createElement("select");
+  providerSelect.title = t("models.fallbackProvider");
+  for (const p of doc.providers || []) {
+    if (!fallbackProviderUsable(p)) continue;
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.textContent = p.name;
+    providerSelect.appendChild(opt);
+  }
+  const provider = sel.provider || (providerSelect.options[0] && providerSelect.options[0].value) || "";
+  providerSelect.value = provider;
+
+  const modelSelect = document.createElement("select");
+  modelSelect.title = t("models.fallbackModel");
+  fillFallbackModels(provider, modelSelect, sel.model);
+
+  providerSelect.addEventListener("change", () => {
+    fillFallbackModels(providerSelect.value, modelSelect, "");
+    updateFallback(index, providerSelect.value, modelSelect.value);
+  });
+  modelSelect.addEventListener("change", () => {
+    updateFallback(index, providerSelect.value, modelSelect.value);
+  });
+  row.append(providerSelect, modelSelect);
+
+  const actions = document.createElement("div");
+  actions.className = "fallback-actions";
+  actions.append(
+    fallbackButton("↑", t("models.fallbackUp"), () => moveFallback(index, -1), index === 0),
+    fallbackButton("↓", t("models.fallbackDown"), () => moveFallback(index, 1), index === total - 1),
+    fallbackButton("×", t("models.fallbackRemove"), () => removeFallback(index)),
+  );
+  row.appendChild(actions);
+  return row;
+}
+
+function updateFallback(index, provider, model) {
+  if (!provider || !model) return;
+  const next = (modelsDoc.fallbacks || []).slice();
+  next[index] = { provider, model };
+  saveFallbacks(next);
+}
+
+function moveFallback(index, delta) {
+  const next = (modelsDoc.fallbacks || []).slice();
+  const to = index + delta;
+  if (to < 0 || to >= next.length) return;
+  [next[index], next[to]] = [next[to], next[index]];
+  saveFallbacks(next);
+}
+
+function removeFallback(index) {
+  const next = (modelsDoc.fallbacks || []).slice();
+  next.splice(index, 1);
+  saveFallbacks(next);
+}
+
+function addFallback() {
+  if (!modelsDoc) return;
+  const used = new Set([fallbackKey(modelsDoc.current || {})]);
+  for (const sel of modelsDoc.fallbacks || []) used.add(fallbackKey(sel));
+  let usable = false;
+  for (const p of modelsDoc.providers || []) {
+    if (!fallbackProviderUsable(p)) continue;
+    usable = true;
+    for (const m of p.models || []) {
+      const sel = { provider: p.name, model: m.id };
+      if (!used.has(fallbackKey(sel))) {
+        saveFallbacks([...(modelsDoc.fallbacks || []), sel]);
+        return;
+      }
+    }
+  }
+  showModelsError(t(usable ? "models.fallbackNoMore" : "models.fallbackNoUsable"));
+}
+
+async function saveFallbacks(fallbacks) {
+  const payload = payloadFromDoc();
+  payload.fallbacks = fallbacks;
+  showModelsError("");
+  try {
+    await putModels(payload);
+  } catch (e) {
+    const msg = t("models.fallbacksSaveFailed", { msg: e.message });
+    // renderModels 开头会清空错误提示；先恢复界面，再把失败原因显示出来。
+    renderModels(modelsDoc);
+    showModelsError(msg);
   }
 }
 
@@ -1932,6 +2096,7 @@ async function deleteProvider(name) {
   if (!confirm(t("models.deleteProviderConfirm", { name }))) return;
   const payload = payloadFromDoc();
   payload.providers = payload.providers.filter((p) => p.name !== name);
+  payload.fallbacks = (payload.fallbacks || []).filter((sel) => sel.provider !== name);
   showModelsError("");
   try {
     await putModels(payload);
@@ -1945,6 +2110,9 @@ async function deleteModel(provider, id) {
   const payload = payloadFromDoc();
   const p = payload.providers.find((x) => x.name === provider);
   p.models = (p.models || []).filter((m) => m.id !== id);
+  payload.fallbacks = (payload.fallbacks || []).filter(
+    (sel) => !(sel.provider === provider && sel.model === id),
+  );
   showModelsError("");
   try {
     await putModels(payload);
@@ -2133,6 +2301,9 @@ async function saveProvider() {
     const p = payload.providers.find((x) => x.name === providerEditing);
     Object.assign(p, values, { models: p.models });
     if (payload.current.provider === providerEditing) payload.current.provider = values.name;
+    payload.fallbacks = (payload.fallbacks || []).map((sel) =>
+      sel.provider === providerEditing ? { ...sel, provider: values.name } : sel,
+    );
   } else {
     payload.providers.push({ ...values, models: pendingPresetModels || [] });
   }
@@ -2266,6 +2437,9 @@ async function saveModel() {
     if (payload.current.provider === p.name && payload.current.model === modelEditing.id) {
       payload.current.model = entry.id;
     }
+    payload.fallbacks = (payload.fallbacks || []).map((sel) =>
+      sel.provider === p.name && sel.model === modelEditing.id ? { ...sel, model: entry.id } : sel,
+    );
   } else {
     p.models.push(entry);
   }
@@ -2371,6 +2545,7 @@ function fieldEl(label, input, desc) {
 
 // 添加提供商先进预置列表，挑不到再走「自定义」到手工表单
 $("#btn-add-provider").addEventListener("click", openPresetModal);
+$("#btn-add-fallback").addEventListener("click", addFallback);
 $("#btn-preset-cancel").addEventListener("click", closePresetModal);
 $("#btn-preset-close").addEventListener("click", closePresetModal);
 presetModal.addEventListener("mousedown", (e) => {

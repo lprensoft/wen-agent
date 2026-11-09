@@ -98,8 +98,8 @@ func (a *Agent) Compact(ctx context.Context, sessionID string, emit func(Event))
 	l := a.turnLock(sessionID)
 	l.Lock()
 	defer l.Unlock()
-	provider, opts := a.snapshot()
-	if err := a.compact(ctx, provider, opts, sessionID, emit); err != nil {
+	targets, opts := a.snapshot()
+	if err := a.compact(ctx, targets, opts, sessionID, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
@@ -114,8 +114,8 @@ func (a *Agent) CompactTurn(ctx context.Context, sessionID string) error {
 		return plugin.ErrSessionBusy
 	}
 	defer l.Unlock()
-	provider, opts := a.snapshot()
-	return a.compact(ctx, provider, opts, sessionID, func(Event) {})
+	targets, opts := a.snapshot()
+	return a.compact(ctx, targets, opts, sessionID, func(Event) {})
 }
 
 // scopeGroup 是历史中属于同一可见域的一段消息。
@@ -176,7 +176,7 @@ func scopeForTag(tag string) plugin.Scope {
 	return plugin.Scope{Write: tag, Read: []string{tag}}
 }
 
-func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options, sessionID string, emit func(Event)) error {
+func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options, sessionID string, emit func(Event)) error {
 	_, history, err := a.store.Get(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
@@ -204,7 +204,7 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 		}
 		// 本组的可见域进 ctx：插件据此决定归档落哪个目录、记忆写哪个库、摘要该守哪些要求
 		gctx := plugin.WithScope(ctx, scopeForTag(g.tag))
-		summary, err := a.summarize(ctx, provider, opts, g.msgs, a.plugins.CompactPrompts(gctx), emit)
+		summary, err := a.summarize(ctx, targets, opts, g.msgs, a.plugins.CompactPrompts(gctx), emit)
 		if err != nil {
 			return err
 		}
@@ -243,7 +243,33 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 
 // summarize 让模型把一组消息压成一段摘要，过程以 delta 事件流式发布。
 // extras 是插件追加的摘要要求（见 plugin.CompactPrompter），可为空。
-func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, error) {
+// 与对话轮次相同：只有尚未输出摘要增量时才切换到备用模型。
+func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, error) {
+	var lastErr error
+	for i, t := range targets {
+		if t.Provider == nil {
+			continue
+		}
+		summary, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), msgs, extras, emit)
+		if err == nil {
+			return summary, nil
+		}
+		lastErr = err
+		if !llm.IsTransientError(err) || ctx.Err() != nil || emitted {
+			return "", err
+		}
+		if i+1 < len(targets) {
+			i18n.Logf(opts.Lang, "log.agent.fallback", "agent: %s 调用失败，改用 %s：%v",
+				targetLabel(t, i), targetLabel(targets[i+1], i+1), err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
+	}
+	return "", lastErr
+}
+
+func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, bool, error) {
 	events, err := provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       opts.Model,
 		Messages:    []llm.Message{{Role: llm.RoleUser, Content: buildCompactPrompt(opts.Lang, extras, serializeHistory(opts.Lang, msgs))}},
@@ -252,25 +278,27 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 		Thinking:    "off", // 压缩追求速度，不启用思考
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	var summary strings.Builder
+	emitted := false
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
+			emitted = true
 			summary.WriteString(ev.Content)
 			emit(Event{Type: EventDelta, Content: ev.Content})
 		case llm.EventError:
-			return "", ev.Err
+			return "", emitted, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", emitted, err
 	}
 	if strings.TrimSpace(summary.String()) == "" {
-		return "", fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
+		return "", emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
 	}
-	return summary.String(), nil
+	return summary.String(), emitted, nil
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。

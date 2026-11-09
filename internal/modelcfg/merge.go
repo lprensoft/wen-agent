@@ -12,7 +12,8 @@ import (
 //   - 只在 config.yaml 且未被删除：追加到末尾，标记 source=config
 //   - 只在 config.yaml 且已被删除（坠碑）：不出现
 func mergeWithBase(own File, base []Provider, baseSel Selection) File {
-	out := File{Version: 1, Current: own.Current, Removed: append([]string(nil), own.Removed...)}
+	out := File{Version: 1, Current: own.Current, Removed: append([]string(nil), own.Removed...),
+		Fallbacks: append([]Selection(nil), own.Fallbacks...)}
 
 	for _, p := range own.Providers {
 		p.Source = ""
@@ -142,6 +143,21 @@ func normalize(f *File) {
 	}
 	f.Current.Provider = strings.TrimSpace(f.Current.Provider)
 	f.Current.Model = strings.TrimSpace(f.Current.Model)
+
+	out := f.Fallbacks[:0]
+	for _, sel := range f.Fallbacks {
+		sel.Provider = strings.TrimSpace(sel.Provider)
+		sel.Model = strings.TrimSpace(sel.Model)
+		if sel.Provider == "" && sel.Model == "" {
+			continue
+		}
+		// 主模型自己不必再当备用模型；切换主模型时 SetCurrent 也会清掉对应项。
+		if strings.EqualFold(sel.Provider, f.Current.Provider) && sel.Model == f.Current.Model {
+			continue
+		}
+		out = append(out, sel)
+	}
+	f.Fallbacks = out
 }
 
 func containsFold(list []string, s string) bool {
