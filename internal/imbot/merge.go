@@ -126,11 +126,46 @@ func mergeMessages(msgs []Message) Message {
 		ReplyTo: last.ReplyTo,
 		Text:    strings.Join(texts, "\n"),
 	}
+	for _, m := range msgs {
+		out.Images = append(out.Images, m.Images...)
+	}
 	// 被扣过的消息与排在它后面的几条并成一轮时，「从何时起没回」按最早的那条算
 	for _, m := range msgs {
 		if !m.heldSince.IsZero() && (out.heldSince.IsZero() || m.heldSince.Before(out.heldSince)) {
 			out.heldSince, out.heldFor, out.heldAsleep = m.heldSince, m.heldFor, m.heldAsleep
 		}
+	}
+	return out
+}
+
+// splitByImageBudget 按图片预算把连发消息拆成几轮。合并窗口只该合并「还能一起
+// 发给模型」的消息；图片超限时若只丢掉附件、留下依赖它的文字，模型会看到一句
+// 不知所云的「和这张比呢」。拆批让每条消息的正文始终和它的图片待在一起。
+func splitByImageBudget(msgs []Message) [][]Message {
+	var out [][]Message
+	var cur []Message
+	count, total := 0, 0
+	for _, m := range msgs {
+		addCount, addBytes := 0, 0
+		for _, img := range m.Images {
+			addCount++
+			if n := len(img.Data); n > 0 {
+				addBytes += n
+			} else {
+				addBytes += img.Size
+			}
+		}
+		if len(cur) > 0 && (count+addCount > MaxImages || total+addBytes > MaxImageTotal) {
+			out = append(out, cur)
+			cur = nil
+			count, total = 0, 0
+		}
+		cur = append(cur, m)
+		count += addCount
+		total += addBytes
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
 	}
 	return out
 }
@@ -145,10 +180,10 @@ func isCommand(msg Message) bool {
 func (c *Core) processBatch(ctx context.Context, batch []Message) {
 	var chat []Message
 	flushChat := func() {
-		if len(chat) > 0 {
-			c.process(ctx, mergeMessages(chat))
-			chat = nil
+		for _, group := range splitByImageBudget(chat) {
+			c.process(ctx, mergeMessages(group))
 		}
+		chat = nil
 	}
 	for _, m := range batch {
 		if isCommand(m) {

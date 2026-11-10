@@ -359,6 +359,9 @@ func TestMixedKeepsTextPart(t *testing.T) {
 			{"msgtype": "image", "image": map[string]any{"url": "https://example.com/a.png"}},
 		},
 	})
+	if note := f.expectSend(t); !strings.Contains(note.content, "暂不支持") {
+		t.Fatalf("被忽略的图片应有一条提示: %+v", note)
+	}
 	m := f.expectSend(t)
 	if m.content != "收到：这是文字" {
 		t.Fatalf("图文混排应只取文字: %+v", m)

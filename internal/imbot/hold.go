@@ -10,6 +10,7 @@ import (
 
 	"wen/internal/availability"
 	"wen/internal/i18n"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -39,6 +40,53 @@ type heldMsg struct {
 	Arrived  time.Time `json:"arrived"`
 	Activity string    `json:"activity,omitempty"`
 	Sleeping bool      `json:"sleeping,omitempty"`
+}
+
+// heldImage 是扣留期间图片的落盘形式。llm.ImagePart.Data 标记为不落盘，
+// 若直接序列化 Message，重启后只剩一个没有字节、没有文件名的空引用。
+type heldImage struct {
+	Name      string `json:"name,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+}
+
+func (h heldMsg) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Msg      Message     `json:"msg"`
+		Images   []heldImage `json:"images,omitempty"`
+		Arrived  time.Time   `json:"arrived"`
+		Activity string      `json:"activity,omitempty"`
+		Sleeping bool        `json:"sleeping,omitempty"`
+	}
+	msg := h.Msg
+	msg.Images = nil
+	images := make([]heldImage, 0, len(h.Msg.Images))
+	for _, img := range h.Msg.Images {
+		images = append(images, heldImage{Name: img.Name, MediaType: img.MediaType, Size: img.Size, Data: img.Data})
+	}
+	return json.Marshal(wire{Msg: msg, Images: images, Arrived: h.Arrived, Activity: h.Activity, Sleeping: h.Sleeping})
+}
+
+func (h *heldMsg) UnmarshalJSON(raw []byte) error {
+	var w struct {
+		Msg      Message     `json:"msg"`
+		Images   []heldImage `json:"images,omitempty"`
+		Arrived  time.Time   `json:"arrived"`
+		Activity string      `json:"activity,omitempty"`
+		Sleeping bool        `json:"sleeping,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return err
+	}
+	w.Msg.Images = make([]llm.ImagePart, 0, len(w.Images))
+	for _, img := range w.Images {
+		w.Msg.Images = append(w.Msg.Images, llm.ImagePart{
+			Name: img.Name, MediaType: img.MediaType, Size: img.Size, Data: img.Data,
+		})
+	}
+	*h = heldMsg{Msg: w.Msg, Arrived: w.Arrived, Activity: w.Activity, Sleeping: w.Sleeping}
+	return nil
 }
 
 // holder 按用户攒着被扣住的消息。状态由 mu 保护；放行由 Core 的 holdLoop 统一做。
@@ -195,12 +243,41 @@ func (c *Core) releaseDue(now time.Time) time.Time {
 	for _, batch := range due {
 		// 按**此刻**的白名单再认一次：扣着的这段时间里（尤其跨过一次重启）用户可能已被
 		// 移出白名单，入队之后就会触发模型与工具执行，Handle 里那一道已经管不到了
-		if user := batch[0].Msg.UserID; !c.allowed(user) {
+		user := batch[0].Msg.UserID
+		if !c.allowed(user) {
 			i18n.Logf(c.cfg.Lang, "log.imbot.held_dropped",
 				"%s: 用户 %s 已不在白名单内，丢弃扣着的 %d 条消息", c.cfg.PluginName, user, len(batch))
 			continue
 		}
-		c.enqueueNow(ctx, releasedMessage(batch))
+		// 拆出的每一轮都可能撞上满队列。入不了队的不能丢：它们已经离开 held.json，
+		// 手头这些是唯一副本，必须原样扣回去等下一拍。
+		groups := splitByImageBudget(heldMessages(batch))
+		var unsent []Message
+		for i, group := range groups {
+			msg := mergeMessages(group)
+			msg.heldSince, msg.heldFor, msg.heldAsleep = batch[0].Arrived, batch[0].Activity, batch[0].Sleeping
+			if c.tryEnqueueNow(ctx, msg, false) {
+				continue
+			}
+			for _, rest := range groups[i:] {
+				unsent = append(unsent, rest...)
+			}
+			break
+		}
+		if len(unsent) > 0 {
+			h.mu.Lock()
+			for _, m := range unsent {
+				h.users[user] = append(h.users[user], heldMsg{
+					Msg: m, Arrived: batch[0].Arrived,
+					Activity: batch[0].Activity, Sleeping: batch[0].Sleeping,
+				})
+			}
+			err := h.saveLocked()
+			h.mu.Unlock()
+			if err != nil {
+				c.logHoldSaveFailed(err)
+			}
+		}
 	}
 	return next
 }
@@ -209,14 +286,11 @@ func (c *Core) logHoldSaveFailed(err error) {
 	i18n.Logf(c.cfg.Lang, "log.imbot.hold_save_failed", "%s: 扣着的消息存盘失败: %v", c.cfg.PluginName, err)
 }
 
-// releasedMessage 把一批扣着的消息合成一轮，并记下「从何时起、因为什么」被扣着。
-func releasedMessage(batch []heldMsg) Message {
-	msgs := make([]Message, len(batch))
+func heldMessages(batch []heldMsg) []Message {
+	out := make([]Message, len(batch))
 	for i, b := range batch {
-		msgs[i] = b.Msg
+		out[i] = b.Msg
 	}
-	out := mergeMessages(msgs)
-	out.heldSince, out.heldFor, out.heldAsleep = batch[0].Arrived, batch[0].Activity, batch[0].Sleeping
 	return out
 }
 

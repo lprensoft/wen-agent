@@ -18,6 +18,7 @@ import (
 
 	"wen/internal/availability"
 	"wen/internal/i18n"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -44,6 +45,9 @@ type Message struct {
 	// QQ 是 msg_id，微信是 context_token，Telegram 是 message_id，飞书是 message_id。
 	ReplyTo string
 	Text    string
+	// Images 是随消息下载好的图片。通道负责鉴权、大小限制与 MIME 判断，
+	// 骨架只把它们交给模型；为空表示没有图片。
+	Images []llm.ImagePart
 	// Note 是收到了正文之外的东西时给用户的提示（如「暂不支持该消息类型」）。
 	// Text 为空且 Note 非空时，骨架把 Note 回过去就结束，不进队列。
 	Note string
@@ -119,11 +123,12 @@ type Config struct {
 	// 这类「事情发生在轮次之外、没有回复渠道」的情况。可为 nil。
 	Notice plugin.NoticeFunc
 
-	RunTurn    plugin.RunTurnFunc
-	NewSession plugin.NewSessionFunc
-	Compact    plugin.CompactFunc
-	Status     plugin.StatusFunc
-	Sessions   plugin.SessionQuery
+	RunTurn       plugin.RunTurnFunc
+	RunTurnImages plugin.RunTurnImagesFunc
+	NewSession    plugin.NewSessionFunc
+	Compact       plugin.CompactFunc
+	Status        plugin.StatusFunc
+	Sessions      plugin.SessionQuery
 }
 
 // Core 是通道无关的那一半：分发、命令、会话绑定、确认代理、串行 worker。
@@ -181,7 +186,9 @@ func New(cfg Config) (*Core, error) {
 	if cfg.MergeWindow > 0 {
 		// 到期冲刷发生在计时器 goroutine 上，没有入站的 ctx 可用，拿 Core 自己的生命周期 ctx
 		c.merge = newMerger(cfg.MergeWindow, func(msgs []Message) {
-			c.enqueue(c.lifeCtx(context.Background()), mergeMessages(msgs))
+			for _, group := range splitByImageBudget(msgs) {
+				c.enqueue(c.lifeCtx(context.Background()), mergeMessages(group))
+			}
 		})
 	}
 	return c, nil
@@ -279,11 +286,15 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 	}
 
 	text := strings.TrimSpace(msg.Text)
-	if text == "" {
+	if text == "" && len(msg.Images) == 0 {
 		if msg.Note != "" {
 			c.send(ctx, msg, msg.Note)
 		}
 		return
+	}
+	// 图片下载失败等附件问题即使带了文字也要告诉用户，否则他会以为图片已经送到。
+	if msg.Note != "" {
+		c.send(ctx, msg, msg.Note)
 	}
 
 	// 命令不参与合并、立即处理；窗口里已经攒着的先作为一轮入队，顺序才与到达一致
@@ -340,10 +351,16 @@ func (c *Core) enqueue(ctx context.Context, msg Message) {
 
 // enqueueNow 跳过扣留直接入队：扣留到点放行时用。
 func (c *Core) enqueueNow(ctx context.Context, msg Message) {
+	_ = c.tryEnqueueNow(ctx, msg, true)
+}
+
+// tryEnqueueNow 尝试入队，队列满时返回 false。扣留放行用 notify=false：
+// 那一批已经离开 held.json，入不了队时要原样扣回去，而不是让用户重发。
+func (c *Core) tryEnqueueNow(ctx context.Context, msg Message, notify bool) bool {
 	c.mu.Lock()
 	if c.cancel == nil { // 尚未 Start 或已 Stop
 		c.mu.Unlock()
-		return
+		return false
 	}
 	q, ok := c.workers[msg.UserID]
 	if !ok {
@@ -356,8 +373,12 @@ func (c *Core) enqueueNow(ctx context.Context, msg Message) {
 
 	select {
 	case q <- msg:
+		return true
 	default:
-		c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.queue_full", "上一条消息还在处理中，请稍候再发。"))
+		if notify {
+			c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.queue_full", "上一条消息还在处理中，请稍候再发。"))
+		}
+		return false
 	}
 }
 
@@ -370,6 +391,8 @@ func (c *Core) worker(ctx context.Context, q chan Message) {
 		case <-ctx.Done():
 			return
 		case msg := <-q:
+			// 队列腾出一格，扣留放行可能正等着重试（见 releaseDue 的 requeue）。
+			c.hold.poke()
 			if c.merge == nil {
 				c.process(ctx, msg)
 				continue

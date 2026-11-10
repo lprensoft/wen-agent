@@ -2,6 +2,7 @@ package telegrambot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,11 @@ import (
 )
 
 const testToken = "123:abc"
+
+var testPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
 
 // sentMsg 是假服务端收到的一次 sendMessage。
 type sentMsg struct {
@@ -116,6 +122,14 @@ func newFakeTG(t *testing.T) *fakeTG {
 		writeOK(w, true)
 	})
 
+	mux.HandleFunc("POST /bot"+testToken+"/getFile", func(w http.ResponseWriter, r *http.Request) {
+		writeOK(w, map[string]any{"file_path": "photos/test.png"})
+	})
+	mux.HandleFunc("GET /file/bot"+testToken+"/photos/test.png", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNG)
+	})
+
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -138,16 +152,7 @@ func (f *fakeTG) pushChat(chatID int64, chatType, text string) int64 {
 	f.nextID++
 	var u update
 	u.UpdateID = f.nextID
-	u.Message = &struct {
-		MessageID int64 `json:"message_id"`
-		Date      int64 `json:"date"`
-		Chat      struct {
-			ID   int64  `json:"id"`
-			Type string `json:"type"`
-		} `json:"chat"`
-		Text    string `json:"text"`
-		Caption string `json:"caption"`
-	}{MessageID: f.nextID * 10, Text: text}
+	u.Message = &updateMessage{MessageID: f.nextID * 10, Text: text}
 	u.Message.Chat.ID = chatID
 	u.Message.Chat.Type = chatType
 	f.pending = append(f.pending, u)
@@ -486,5 +491,20 @@ func TestStreamPreview(t *testing.T) {
 	case d := <-g.drafts:
 		t.Fatalf("开关关着不该发草稿: %+v", d)
 	default:
+	}
+}
+
+func TestInboundImageDownload(t *testing.T) {
+	p, _ := newInited(t, noopTurn, "42", nil)
+	var msg updateMessage
+	if err := json.Unmarshal([]byte(`{"message_id":1,"photo":[{"file_id":"f1","file_size":68}]}`), &msg); err != nil {
+		t.Fatal(err)
+	}
+	images, note := p.inboundImages(context.Background(), &msg)
+	if note != "" || len(images) != 1 || images[0].MediaType != "image/png" {
+		t.Fatalf("images=%+v note=%q", images, note)
+	}
+	if string(images[0].Data) != string(testPNG) {
+		t.Fatal("downloaded image bytes differ")
 	}
 }

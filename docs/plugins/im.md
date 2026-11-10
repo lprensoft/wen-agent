@@ -18,6 +18,7 @@
 - **像人一样发消息**：「像人一样发消息」（默认关）做三件事：回复按段落与句子拆成几条（每条约 120 字、最多 6 条，代码块与表格整段不拆）、两条之间按上一条的字数模拟打字间隔（0.4–2.5 秒，期间亮「正在输入」）、并在这条通道发起的轮次里提示模型用聊天的口吻说话（短句、口语、不用标题列表加粗）。后台轮次推过来的话同样分条。命令回执、错误提示、确认请求与过程通知不分条、不延迟；Web UI 与 CLI 不受影响。关着时行为与从前完全一致。
 - **忙时晚点回**：「忙时晚点回」（默认关）让角色忙着、睡着时不秒回。忙不忙看[日程](life.md)里进行中的活动与[心跳](background.md)里的睡眠：重忙时消息最多等十分钟（抽空看一眼），完全顾不上时等到忙完（提前忙完就提前回），睡着时攒到「多久被吵醒」（默认 15 分钟）才算被吵醒，轻忙照常回。等着的时候不亮「正在输入」，期间连发的几条到时合成一轮。回的那一轮会告诉角色消息是多久前发来的、那时在做什么，道不道歉、怎么解释由角色自己定。等待一律不超过平台的被动回复窗口（QQ 最多等 45 分钟），命令照常立即处理。扣着的消息存在盘上，重启后按原来的到达时刻接着算。Web UI 不受影响。
 - **可以按人格分流**：开启 `dual_persona` 的分通道后，回复发往当前人格所属的那条通道，与你从哪条通道说话无关（见[双重人格](roleplay.md)）。
+- **图片**：`telegram_bot`、`discord_bot`、`slack_bot`、`feishu_bot` / `lark_bot` 会把私聊里的图片下载下来交给模型（图片消息也可以不带文字）。一次最多 4 张、单张 5 MB、总计 10 MB，只收 PNG / JPEG / GIF；下载后会完整解码校验，损坏或超限的图片回一句提示，不会进会话。其它通道暂不支持图片，仍回「暂不支持该消息类型」。
 
 各自的协议层：
 
@@ -29,7 +30,7 @@
 | `lark_bot` | Lark（国际版），同上 | 同上，但**与飞书不通用** | 与飞书是同一套实现的两次实例化。分成两个插件是因为国际版应用不能用于中国版，凭证与 open_id 都是两套，一个插件只能存一份凭证就只能连一边 |
 | `telegram_bot` | Bot API，HTTP 长轮询 | Bot Token | 大陆直连不通，配 `proxy`（http / socks5）；启动时若报 409 说明该 Bot 已设 webhook，需先自行 `deleteWebhook` |
 | `discord_bot` | Discord Bot API，Gateway WebSocket 收私信，REST 发送 | Bot Token | 机器人需与用户在同一服务器；只处理私信，服务器频道消息忽略；不需要 Message Content privileged intent（私信正文是官方例外）；白名单填 DM channel ID；单条 2000 字，超长分段；支持「正在输入」；大陆直连不通时配 `proxy` |
-| `slack_bot` | Slack Socket Mode，WebSocket 收私聊消息，`chat.postMessage` 发送 | App-Level Token / Bot Token | 应用开启 Socket Mode（app token 需 `connections:write`），Bot Token 需 `chat:write` 与 `im:history`；事件订阅 `message.im`；App Home 的 Messages 页必须打开；只处理私聊（`channel_type=im`），其他频道忽略；白名单填 DM channel ID；单条 3500 字，标准 markdown 会转成 Slack mrkdwn；需在 Slash Commands 里注册 `/wen`（子命令 new / status / compact / help / apply / deny，映射到骨架命令；也可选注册 `/wen-status` 等别名，避免占用 Slack 内置的 `/status`；Socket Mode 下由长连接接收） |
+| `slack_bot` | Slack Socket Mode，WebSocket 收私聊消息，`chat.postMessage` 发送 | App-Level Token / Bot Token | 应用开启 Socket Mode（app token 需 `connections:write`），Bot Token 需 `chat:write`、`im:history` 与 `files:read`（下载图片）；权限变更后要重新安装应用才会生效；事件订阅 `message.im`；App Home 的 Messages 页必须打开；只处理私聊（`channel_type=im`），其他频道忽略；白名单填 DM channel ID；单条 3500 字，标准 markdown 会转成 Slack mrkdwn；需在 Slash Commands 里注册 `/wen`（子命令 new / status / compact / help / apply / deny，映射到骨架命令；也可选注册 `/wen-status` 等别名，避免占用 Slack 内置的 `/status`；Socket Mode 下由长连接接收） |
 | `wecom_bot` | 企业微信智能机器人（长连接），WebSocket 收单聊消息、推主动消息 | BotID / Secret | 管理后台开启「API 模式」并选择「长连接」；只处理单聊，群聊 @ 消息忽略；白名单填 userid（创建者不是超级管理员时是加密 userid）；回调后 24 小时内可回复，主动推送前用户需先给机器人发过消息；单条消息内容 20480 字节，超长分段；同一机器人同时只能有一条长连接 |
 | `dingtalk_bot` | 钉钉 Stream 模式，WebSocket 长连接收单聊消息，OpenAPI 发消息 | Client ID / Secret / RobotCode | 开发者后台创建企业内部应用并添加机器人，消息接收模式选 Stream；需开通机器人收发消息权限；只处理单聊，群聊 @ 消息忽略；白名单填 senderStaffId（机器人发布上线后才有）；回复与推送统一走 batchSend（不用约 30 秒过期的 sessionWebhook），主动推送要求用户先发过消息；单条按 3600 字节 / 1800 字分段 |
 
@@ -39,7 +40,7 @@
 | `bot_token` | 空 | `telegram_bot` / `discord_bot` |
 | `bot_id` / `secret` | 空 | `wecom_bot`：长连接专用凭证，与回调模式的 Token / EncodingAESKey 不是一回事 |
 | `app_key` / `app_secret` / `robot_code` | 空 | `dingtalk_bot`：应用的 Client ID / Client Secret，以及机器人与消息推送页的 RobotCode |
-| `app_token` / `bot_token` | 空 | `slack_bot`：Socket Mode 的 App-Level Token（xapp-，`connections:write`）与 Bot Token（xoxb-，`chat:write` / `im:history`） |
+| `app_token` / `bot_token` | 空 | `slack_bot`：Socket Mode 的 App-Level Token（xapp-，`connections:write`）与 Bot Token（xoxb-，`chat:write` / `im:history` / `files:read`） |
 | `proxy` | 空 | `telegram_bot` / `discord_bot` / `slack_bot`，形如 `http://…` 或 `socks5://…`，留空直连 |
 | `whitelist` | 空 | 允许的用户 id，一行一个（QQ 用 openid，微信形如 `xxx@im.wechat`，飞书 / Lark 用 open_id，Telegram 用 chat_id，Discord 用 DM channel ID，企业微信用 userid，钉钉用 senderStaffId，Slack 用 DM channel ID） |
 | `api_base` | 官方地址 | 一般不需要改 |

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"wen/internal/imbot"
+	"wen/internal/llm"
 
 	"wen/internal/i18n"
 )
@@ -135,14 +136,13 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 	}
 
 	text := strings.TrimSpace(m.Text)
-	note := ""
 	if text == "" {
-		if c := strings.TrimSpace(m.Caption); c != "" {
-			text = c
-		} else {
-			note = i18n.T(p.langOf(), "plugin.telegram_bot.msg.unsupported",
-				"暂不支持该消息类型，请发文字。")
-		}
+		text = strings.TrimSpace(m.Caption)
+	}
+	images, note := p.inboundImages(ctx, m)
+	if text == "" && len(images) == 0 && note == "" {
+		note = i18n.T(p.langOf(), "plugin.telegram_bot.msg.unsupported",
+			"暂不支持该消息类型，请发文字。")
 	}
 
 	p.mu.Lock()
@@ -156,8 +156,48 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 		DedupID: fmt.Sprintf("%d", u.UpdateID),
 		ReplyTo: strconv.FormatInt(m.MessageID, 10),
 		Text:    text,
+		Images:  images,
 		Note:    note,
 	})
+}
+
+// inboundImages 下载一张图片。photo 里挑不超限的最大尺寸；没有 photo 时接受
+// image/* 的 document。失败只记日志并回一句提示，不让整条消息丢掉。
+func (p *Plugin) inboundImages(ctx context.Context, m *updateMessage) ([]llm.ImagePart, string) {
+	if m == nil {
+		return nil, ""
+	}
+	fileID := ""
+	if len(m.Photo) > 0 {
+		for i := len(m.Photo) - 1; i >= 0; i-- {
+			if m.Photo[i].FileSize == 0 || m.Photo[i].FileSize <= imbot.MaxImageBytes {
+				fileID = m.Photo[i].FileID
+				break
+			}
+		}
+	}
+	if fileID == "" && m.Document != nil && strings.HasPrefix(m.Document.MimeType, "image/") &&
+		(m.Document.FileSize == 0 || m.Document.FileSize <= imbot.MaxImageBytes) {
+		fileID = m.Document.FileID
+	}
+	if fileID == "" {
+		if len(m.Photo) > 0 || (m.Document != nil && strings.HasPrefix(m.Document.MimeType, "image/")) {
+			return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.image_too_large",
+				"图片超过大小上限，请压缩后再发。")
+		}
+		return nil, ""
+	}
+	data, err := p.downloadFile(ctx, fileID, imbot.MaxImageBytes)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.telegram.image_failed", "telegram_bot: 下载图片失败: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	img, err := imbot.ImageFromBytes(data)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.telegram.image_invalid", "telegram_bot: 图片无效（已跳过）: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	return []llm.ImagePart{img}, ""
 }
 
 // isTimeout 判定「等待窗口内没有新消息」这类超时，它不算失败。

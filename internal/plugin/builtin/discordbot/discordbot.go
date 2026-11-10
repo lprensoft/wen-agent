@@ -50,6 +50,9 @@ type Plugin struct {
 
 	client *http.Client
 	core   *imbot.Core // 通道无关的分发、命令、会话绑定与确认代理
+	// queue 把消息处理搬离网关读循环。附件下载可能很慢，留在读循环里会
+	// 让心跳 ACK 得不到处理，正常连接被误判为断线。
+	queue *imbot.OrderedQueue[gatewayFrame]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -185,10 +188,17 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	ctx := p.ctx
 	start := p.startGateway
+	queue := imbot.NewOrderedQueue[gatewayFrame]()
+	p.queue = queue
 	p.wg.Add(1)
 	p.mu.Unlock()
 
 	core.Start(ctx)
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.dispatchLoop(ctx, queue)
+	}()
 	go func() {
 		defer p.wg.Done()
 		start(ctx)

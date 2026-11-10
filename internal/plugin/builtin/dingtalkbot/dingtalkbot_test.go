@@ -400,6 +400,9 @@ func TestRichTextKeepsTextParts(t *testing.T) {
 		{"downloadCode": "abc"},
 	}}
 	f.pushCallback("stream-1", d)
+	if note := f.expectSend(t); !strings.Contains(note.text, "暂不支持") {
+		t.Fatalf("被忽略的图片应有一条提示: %+v", note)
+	}
 	if m := f.expectSend(t); m.text != "收到：这是文字" {
 		t.Fatalf("富文本应只取文字: %+v", m)
 	}

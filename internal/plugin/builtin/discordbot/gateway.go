@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 )
 
 // Discord Gateway 操作码（官方文档 v10）。
@@ -314,6 +316,24 @@ func (p *Plugin) handleDispatch(ctx context.Context, frame gatewayFrame, st *gat
 	case "RESUMED":
 		i18n.Logf(p.langOf(), "log.discord.gateway_restored", "discord_bot: 网关连接已恢复")
 	case "MESSAGE_CREATE":
+		// 交给分发队列：附件下载可能跨过心跳等待窗口，读循环不能停在这里。
+		p.mu.Lock()
+		queue := p.queue
+		p.mu.Unlock()
+		if queue != nil {
+			queue.Push(frame)
+			return
+		}
+		p.handleMessageCreate(ctx, frame)
+	}
+}
+
+func (p *Plugin) dispatchLoop(ctx context.Context, q *imbot.OrderedQueue[gatewayFrame]) {
+	for {
+		frame, ok := q.Pop(ctx)
+		if !ok {
+			return
+		}
 		p.handleMessageCreate(ctx, frame)
 	}
 }
@@ -331,6 +351,7 @@ func (p *Plugin) handleMessageCreate(ctx context.Context, frame gatewayFrame) {
 			Bot      bool   `json:"bot"`
 			Username string `json:"username"`
 		} `json:"author"`
+		Attachments []discordAttachment `json:"attachments"`
 	}
 	if err := json.Unmarshal(frame.D, &d); err != nil {
 		i18n.Logf(p.langOf(), "log.discord.event_parse_failed",
@@ -350,8 +371,8 @@ func (p *Plugin) handleMessageCreate(ctx context.Context, frame gatewayFrame) {
 	}
 
 	text := strings.TrimSpace(d.Content)
-	note := ""
-	if text == "" {
+	images, note := p.inboundImages(ctx, d.Attachments)
+	if text == "" && len(images) == 0 && note == "" {
 		note = i18n.T(p.langOf(), "plugin.discord_bot.msg.unsupported",
 			"暂不支持该消息类型，请发文字。")
 	}
@@ -367,6 +388,81 @@ func (p *Plugin) handleMessageCreate(ctx context.Context, frame gatewayFrame) {
 		DedupID: d.ID,
 		ReplyTo: d.ID,
 		Text:    text,
+		Images:  images,
 		Note:    note,
 	})
+}
+
+type discordAttachment struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	URL         string `json:"url"`
+}
+
+func (p *Plugin) inboundImages(ctx context.Context, attachments []discordAttachment) ([]llm.ImagePart, string) {
+	var out []llm.ImagePart
+	total := 0
+	tooMany := false
+	for _, a := range attachments {
+		if !strings.HasPrefix(a.ContentType, "image/") || a.URL == "" {
+			continue
+		}
+		if len(out) >= imbot.MaxImages {
+			tooMany = true
+			continue
+		}
+		if a.Size > imbot.MaxImageBytes || total+int(a.Size) > imbot.MaxImageTotal {
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.image_too_large",
+				"图片超过大小上限，请压缩后再发。")
+		}
+		data, err := p.download(ctx, a.URL, imbot.MaxImageBytes)
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.discord.image_failed", "discord_bot: 下载图片失败: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.image_failed", "图片下载失败，请重发。")
+		}
+		img, err := imbot.ImageFromBytes(data)
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.discord.image_invalid", "discord_bot: 图片无效（已跳过）: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.image_failed", "图片下载失败，请重发。")
+		}
+		out = append(out, img)
+		total += len(data)
+	}
+	if tooMany {
+		return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.image_too_many",
+			"一次最多处理 4 张图片，其余图片未发送给模型。")
+	}
+	return out, ""
+}
+
+// download 取 Discord 附件。附件 URL 本身带签名，不需要 Bot 鉴权。
+func (p *Plugin) download(ctx context.Context, url string, limit int64) ([]byte, error) {
+	p.mu.Lock()
+	client := p.client
+	p.mu.Unlock()
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("文件超过 %d MB", limit>>20)
+	}
+	return data, nil
 }

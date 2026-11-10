@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/llm"
 )
 
 // busy 在忙碌公告板上写一条状态，用例结束时撤掉：公告板是进程级的。
@@ -210,5 +212,92 @@ func TestHeldMessagesRecheckWhitelist(t *testing.T) {
 	rec.expectNone(t, 300*time.Millisecond)
 	if _, err := os.Stat(filepath.Join(dir, "held.json")); !os.IsNotExist(err) {
 		t.Errorf("丢弃后不该再留在盘上：%v", err)
+	}
+}
+
+func TestHeldMessagePersistsImages(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "held.json")
+	h := &holder{path: path, users: map[string][]heldMsg{}, kick: make(chan struct{}, 1)}
+	img := llm.ImagePart{MediaType: "image/png", Size: 3, Data: []byte("png")}
+	h.users["u1"] = []heldMsg{{Msg: Message{UserID: "u1", Text: "看图", Images: []llm.ImagePart{img}}}}
+	if err := h.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := newHolder(dir)
+	batch := loaded.users["u1"]
+	if len(batch) != 1 || len(batch[0].Msg.Images) != 1 {
+		t.Fatalf("held batch = %+v", batch)
+	}
+	if string(batch[0].Msg.Images[0].Data) != "png" || batch[0].Msg.Images[0].MediaType != "image/png" {
+		t.Fatalf("held image = %+v", batch[0].Msg.Images[0])
+	}
+}
+
+func TestRequeuedHeldMessageRetriesAfterQueueDrains(t *testing.T) {
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	runs := 0
+	var seen []string
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		mu.Lock()
+		runs++
+		seen = append(seen, input)
+		mu.Unlock()
+		select {
+		case <-gate:
+		case <-time.After(2 * time.Second):
+		}
+		return "收到", nil
+	}
+	c, _ := newCore(t, runTurn, func(cfg *Config) { cfg.QueueSize = 1 })
+
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "第一轮"})
+	for {
+		mu.Lock()
+		n := runs
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "占住队列"})
+
+	c.hold.mu.Lock()
+	c.hold.users["u1"] = []heldMsg{
+		{Msg: Message{UserID: "u1", Text: "扣1"}, Arrived: time.Now().Add(-time.Minute)},
+		{Msg: Message{UserID: "u1", Text: "扣2"}, Arrived: time.Now().Add(-time.Minute)},
+		{Msg: Message{UserID: "u1", Text: "扣3"}, Arrived: time.Now().Add(-time.Minute)},
+	}
+	c.hold.mu.Unlock()
+
+	c.releaseDue(time.Now())
+	c.hold.mu.Lock()
+	if got := len(c.hold.users["u1"]); got != 3 {
+		c.hold.mu.Unlock()
+		t.Fatalf("queue full should requeue all held messages, got %d", got)
+	}
+	c.hold.mu.Unlock()
+
+	close(gate)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		got := append([]string(nil), seen...)
+		mu.Unlock()
+		for _, input := range got {
+			if strings.Contains(input, "扣3") {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			c.hold.mu.Lock()
+			left := len(c.hold.users["u1"])
+			c.hold.mu.Unlock()
+			t.Fatalf("requeued messages never retried, held=%d seen=%v", left, got)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

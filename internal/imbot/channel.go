@@ -122,6 +122,7 @@ func NewCore(opts CoreOptions) (*Core, error) {
 		Typing:         opts.Typing,
 		Preview:        opts.Preview,
 		RunTurn:        opts.Ctx.RunTurn,
+		RunTurnImages:  opts.Ctx.RunTurnImages,
 		NewSession:     opts.Ctx.NewSession,
 		Compact:        opts.Ctx.Compact,
 		Status:         opts.Ctx.Status,

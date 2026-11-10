@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"wen/internal/llm"
 )
 
 // turnRecorder 记下每轮的输入，供合并窗口的测试核对「几条合成了一轮」。
@@ -189,7 +191,7 @@ func TestMergeWindowCallsOnAcceptedPerMessage(t *testing.T) {
 
 func TestMergeMessages(t *testing.T) {
 	one := Message{UserID: "u", ReplyTo: "r", Text: "只一条"}
-	if got := mergeMessages([]Message{one}); got != one {
+	if got := mergeMessages([]Message{one}); got.UserID != one.UserID || got.ReplyTo != one.ReplyTo || got.Text != one.Text {
 		t.Fatalf("单条原样返回: %+v", got)
 	}
 	got := mergeMessages([]Message{
@@ -199,5 +201,40 @@ func TestMergeMessages(t *testing.T) {
 	})
 	if got.Text != "甲\n乙" || got.ReplyTo != "r3" {
 		t.Fatalf("合并结果异常: %+v", got)
+	}
+}
+
+func TestMergeMessagesKeepsImages(t *testing.T) {
+	got := mergeMessages([]Message{
+		{UserID: "u", Text: "一", Images: []llm.ImagePart{{Name: "a", MediaType: "image/png"}}},
+		{UserID: "u", Text: "二", Images: []llm.ImagePart{{Name: "b", MediaType: "image/png"}}},
+	})
+	if len(got.Images) != 2 || got.Images[0].Name != "a" || got.Images[1].Name != "b" {
+		t.Fatalf("images = %+v", got.Images)
+	}
+}
+
+func TestSplitByImageBudgetKeepsTextWithImages(t *testing.T) {
+	img := func(name string) llm.ImagePart {
+		return llm.ImagePart{Name: name, MediaType: "image/png", Data: []byte("x")}
+	}
+	var msgs []Message
+	for i := 0; i < 5; i++ {
+		msgs = append(msgs, Message{UserID: "u", Text: fmt.Sprintf("第%d张", i), Images: []llm.ImagePart{img(fmt.Sprint(i))}})
+	}
+	groups := splitByImageBudget(msgs)
+	if len(groups) != 2 || len(groups[0]) != 4 || len(groups[1]) != 1 {
+		t.Fatalf("groups = %d/%d", len(groups), func() int { return len(groups[0]) }())
+	}
+	total := 0
+	for _, g := range groups {
+		m := mergeMessages(g)
+		total += len(m.Images)
+		if len(m.Images) != len(g) {
+			t.Fatalf("image count = %d, want %d", len(m.Images), len(g))
+		}
+	}
+	if total != 5 {
+		t.Fatalf("lost images: %d", total)
 	}
 }

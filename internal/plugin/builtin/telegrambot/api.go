@@ -101,19 +101,75 @@ func (p *Plugin) apiCall(ctx context.Context, client *http.Client, method string
 	return nil
 }
 
-// update 是 getUpdates 返回的一条更新。只关心私聊文本消息，其余字段不取。
+// update 是 getUpdates 返回的一条更新。图片取 photo 的最大尺寸或 image/*
+// 的 document；其余媒体暂不下载。
 type update struct {
-	UpdateID int64 `json:"update_id"`
-	Message  *struct {
-		MessageID int64 `json:"message_id"`
-		Date      int64 `json:"date"`
-		Chat      struct {
-			ID   int64  `json:"id"`
-			Type string `json:"type"` // private / group / supergroup / channel
-		} `json:"chat"`
-		Text    string `json:"text"`
-		Caption string `json:"caption"`
-	} `json:"message"`
+	UpdateID int64          `json:"update_id"`
+	Message  *updateMessage `json:"message"`
+}
+
+type updateMessage struct {
+	MessageID int64 `json:"message_id"`
+	Date      int64 `json:"date"`
+	Chat      struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"` // private / group / supergroup / channel
+	} `json:"chat"`
+	Text    string `json:"text"`
+	Caption string `json:"caption"`
+	Photo   []struct {
+		FileID   string `json:"file_id"`
+		FileSize int64  `json:"file_size"`
+		Width    int    `json:"width"`
+		Height   int    `json:"height"`
+	} `json:"photo"`
+	Document *struct {
+		FileID   string `json:"file_id"`
+		FileName string `json:"file_name"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	} `json:"document"`
+}
+
+// downloadFile 通过 getFile 取 file_path，再下载文件内容；超过 limit 直接拒绝，
+// 不把大文件读进内存。
+func (p *Plugin) downloadFile(ctx context.Context, fileID string, limit int64) ([]byte, error) {
+	var info struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := p.apiCall(ctx, p.client, "getFile", map[string]any{"file_id": fileID}, &info); err != nil {
+		return nil, err
+	}
+	if info.FilePath == "" {
+		return nil, fmt.Errorf("getFile 未返回 file_path")
+	}
+	p.mu.Lock()
+	base, token, client := p.apiBase, p.token, p.client
+	p.mu.Unlock()
+	if token == "" {
+		return nil, fmt.Errorf("尚未配置 Bot Token")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		base+"/file/bot"+token+"/"+info.FilePath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("下载文件失败（HTTP %d）", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("文件超过 %d MB", limit>>20)
+	}
+	return data, nil
 }
 
 func truncate(s string, max int) string {
