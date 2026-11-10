@@ -156,7 +156,7 @@ type fakeSessions struct{}
 
 func (fakeSessions) LastActive() (string, time.Time, error) { return "", time.Time{}, nil }
 func (fakeSessions) LastInteraction() (time.Time, error)    { return time.Time{}, nil }
-func (fakeSessions) Exists(string) bool                    { return true }
+func (fakeSessions) Exists(string) bool                     { return true }
 
 // TestSendImageThroughTurn 走完整链路：Core 把入站消息放进轮次 ctx → 工具读图
 // → SendTurnImage 用本轮用户与回复凭据交给通道。
