@@ -30,7 +30,7 @@
 - **[插件化架构](docs/architecture.md)**：精简核心（agent 循环 / session / server / llm）+ 插件扩展，三十六个内置插件按功能分组呈现，可在设置页随时开关与配置，改动即时生效。核心只认识通用机制，不知道「记忆」「人格」「心情」这些具体功能的存在
 - **[模型可配置](docs/configuration.md)**：提供商与模型在设置页增删改并热切换，下一次请求即生效；新增提供商时可从一张预置列表里挑（DeepSeek、智谱、Kimi、通义千问、豆包、MiniMax、硅基流动、OpenAI、Anthropic、Gemini、xAI、OpenRouter、Ollama，国内与国际站各一条），地址与常用模型都已填好，只需补一个 API Key；支持 OpenAI 兼容协议与 Anthropic Messages API
 - **[命令执行有人把关](docs/plugins/tools.md)**：`exec_command` 采取执行前拦截并交人确认，极高危命令直接拒绝，不做那种能被轻易绕过的路径沙箱
-- **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，思考过程与工具调用可视化，后台任务的动静也会实时出现在会话里
+- **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，思考过程与工具调用可视化，可随消息发送图片，后台任务的动静也会实时出现在会话里
 - **[自己更新自己](docs/plugins/self-update.md)**：每天查一次 GitHub 上的新版本，设置页上一键完成下载、校验（SHA256）、试运行、替换与重启，Windows / macOS / Linux 都不需要包管理器；只查不装，装不装由你点
 - **Session 管理**：每个会话一个 JSONL 文件（首行 meta + 逐行消息），重启不丢历史
 - **不用写配置文件**：第一次运行时由向导问一句用哪家的哪个模型，其余全部取默认值；端口、语言这类启动期配置要改时才需要一份 `config.yaml`

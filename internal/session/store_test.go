@@ -240,3 +240,35 @@ func ids(metas []Meta) []string {
 	}
 	return out
 }
+
+func TestSessionImagesLifecycle(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("\x89PNG\r\n\x1a\nfake")
+	name, err := s.PutImage(meta.ID, "image/png", data)
+	if err != nil {
+		t.Fatalf("PutImage: %v", err)
+	}
+	got, err := s.ReadImage(meta.ID, name)
+	if err != nil || string(got) != string(data) {
+		t.Fatalf("ReadImage = %q, %v", got, err)
+	}
+	if _, err := s.PutImage(meta.ID, "image/tiff", data); err == nil {
+		t.Fatal("unsupported media type should be rejected")
+	}
+	if _, err := s.ImagePath(meta.ID, "../escape"); err == nil {
+		t.Fatal("path traversal should be rejected")
+	}
+	if err := s.Delete(meta.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadImage(meta.ID, name); err == nil {
+		t.Fatal("image should be removed together with its session")
+	}
+}

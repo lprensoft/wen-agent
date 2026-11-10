@@ -68,8 +68,9 @@ type wireStreamOptions struct {
 }
 
 type wireMessage struct {
-	Role             string         `json:"role"`
-	Content          string         `json:"content"`
+	Role string `json:"role"`
+	// Content 在纯文本时是字符串，带图片时是 content part 数组。
+	Content          any            `json:"content"`
 	ReasoningContent string         `json:"reasoning_content,omitempty"`
 	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
@@ -183,7 +184,7 @@ func buildRequest(req ChatRequest, dialect string) wireRequest {
 	for _, m := range req.Messages {
 		wm := wireMessage{
 			Role:             m.Role,
-			Content:          m.Content,
+			Content:          wireContent(m),
 			ReasoningContent: m.Reasoning,
 			ToolCallID:       m.ToolCallID,
 		}
@@ -210,6 +211,31 @@ func buildRequest(req ChatRequest, dialect string) wireRequest {
 		})
 	}
 	return wr
+}
+
+// wireContent 在带图片时返回 content part 数组；纯文本仍用字符串，兼容那些
+// 只认字符串 content 的实现。
+func wireContent(m Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, img := range m.Images {
+		if len(img.Data) == 0 {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": imageDataURL(img)},
+		})
+	}
+	if len(parts) == 0 {
+		return m.Content
+	}
+	return parts
 }
 
 // applyThinking 按方言拼思考参数。

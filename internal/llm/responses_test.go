@@ -472,3 +472,35 @@ func TestResponsesDoesNotReplayFunctionCallsTwice(t *testing.T) {
 		t.Fatalf("function call duplicated: %v", input)
 	}
 }
+
+func TestResponsesImageParts(t *testing.T) {
+	srv, got := responsesServer(t, []string{
+		`{"type":"response.completed","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	})
+	defer srv.Close()
+
+	p := NewResponses("", srv.URL, "")
+	ch, err := p.ChatStream(context.Background(), ChatRequest{
+		Model: "m",
+		Messages: []Message{{Role: RoleUser, Content: "看图", Images: []ImagePart{
+			{MediaType: "image/png", Data: []byte("png-bytes")},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectResponses(t, ch)
+
+	input, _ := (*got)["input"].([]any)
+	content, _ := input[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %v", content)
+	}
+	img := content[1].(map[string]any)
+	if img["type"] != "input_image" {
+		t.Fatalf("image part = %v", img)
+	}
+	if url, _ := img["image_url"].(string); url[:5] != "data:" {
+		t.Fatalf("image url = %q", url)
+	}
+}

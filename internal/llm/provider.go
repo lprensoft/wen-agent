@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 )
 
@@ -26,9 +27,24 @@ type Message struct {
 	ResponsesItems json.RawMessage `json:"responses_items,omitempty"`
 	// ResponsesOrigin 标记这些 Item 是哪个 base_url + model 产出的。切到别的
 	// 提供商或模型时不能把推理项原样塞回去，buildRequest 会改走消息重建。
-	ResponsesOrigin string     `json:"responses_origin,omitempty"`
-	ToolCalls       []ToolCall `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
-	ToolCallID      string     `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
+	ResponsesOrigin string `json:"responses_origin,omitempty"`
+	// Images 是随消息一起发送的图片。Data 只在进程内使用，落盘时由会话层换成
+	// Name 引用；后续轮次从会话附件目录按需读回。
+	Images     []ImagePart `json:"images,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
+	ToolCallID string      `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
+}
+
+// ImagePart 是一张随消息发送的图片。
+type ImagePart struct {
+	Name      string `json:"name,omitempty"`       // 会话附件文件名；进程内可为空
+	MediaType string `json:"media_type,omitempty"` // image/png、image/jpeg、image/gif、image/webp
+	Size      int    `json:"size,omitempty"`       // 原始字节数，供界面展示
+	Data      []byte `json:"-"`                    // 只在进程内保留
+}
+
+func imageDataURL(img ImagePart) string {
+	return "data:" + img.MediaType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
 }
 
 // ReasoningBlock 是一个原样保留的思考块。Anthropic 要求带签名原样回传，

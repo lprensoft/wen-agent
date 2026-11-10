@@ -133,7 +133,7 @@ func buildResponsesRequest(lang, origin string, req ChatRequest) responsesReques
 			}
 		default:
 			wr.Input = append(wr.Input, mustRaw(map[string]any{
-				"role": m.Role, "content": m.Content,
+				"role": m.Role, "content": responsesContent(m),
 			}))
 		}
 	}
@@ -144,6 +144,31 @@ func buildResponsesRequest(lang, origin string, req ChatRequest) responsesReques
 		})
 	}
 	return wr
+}
+
+// responsesContent 在带图片时返回 input content part 数组；纯文本仍用字符串，
+// 兼容只认字符串 content 的实现。
+func responsesContent(m Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "input_text", "text": m.Content})
+	}
+	for _, img := range m.Images {
+		if len(img.Data) == 0 {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"type":      "input_image",
+			"image_url": imageDataURL(img),
+		})
+	}
+	if len(parts) == 0 {
+		return m.Content
+	}
+	return parts
 }
 
 // responsesEffort 把思考档位映射到 Responses 的 reasoning.effort。

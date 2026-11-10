@@ -204,7 +204,7 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 		}
 		// 本组的可见域进 ctx：插件据此决定归档落哪个目录、记忆写哪个库、摘要该守哪些要求
 		gctx := plugin.WithScope(ctx, scopeForTag(g.tag))
-		summary, err := a.summarize(ctx, targets, opts, g.msgs, a.plugins.CompactPrompts(gctx), emit)
+		summary, retained, err := a.summarize(ctx, targets, opts, sessionID, g.msgs, a.plugins.CompactPrompts(gctx), emit)
 		if err != nil {
 			return err
 		}
@@ -231,6 +231,9 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 			Tag:     g.tag,
 			TS:      now,
 		})
+		// 摘要预算装不下的图片，其原消息必须保留：图片里的信息还没有变成文字，
+		// 随摘要一起删掉就等于永久丢失。这些消息排在摘要之后，下一轮仍能被模型看到。
+		out = append(out, retained...)
 	}
 
 	if err := a.store.Replace(sessionID, out); err != nil {
@@ -244,19 +247,19 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 // summarize 让模型把一组消息压成一段摘要，过程以 delta 事件流式发布。
 // extras 是插件追加的摘要要求（见 plugin.CompactPrompter），可为空。
 // 与对话轮次相同：只有尚未输出摘要增量时才切换到备用模型。
-func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, error) {
+func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, error) {
 	var lastErr error
 	for i, t := range targets {
 		if t.Provider == nil {
 			continue
 		}
-		summary, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), msgs, extras, emit)
+		summary, retained, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), sessionID, msgs, extras, emit)
 		if err == nil {
-			return summary, nil
+			return summary, retained, nil
 		}
 		lastErr = err
 		if !llm.IsTransientError(err) || ctx.Err() != nil || emitted {
-			return "", err
+			return "", nil, err
 		}
 		if i+1 < len(targets) {
 			i18n.Logf(opts.Lang, "log.agent.fallback", "agent: %s 调用失败，改用 %s：%v",
@@ -266,19 +269,25 @@ func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Optio
 	if lastErr == nil {
 		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
 	}
-	return "", lastErr
+	return "", nil, lastErr
 }
 
-func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, bool, error) {
+func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, bool, error) {
+	images, labels, retained := a.summaryImages(sessionID, opts.Lang, msgs)
+	promptText := buildCompactPrompt(opts.Lang, extras, serializeHistoryWithLabels(opts.Lang, msgs, labels))
+	if len(images) > 0 {
+		promptText += "\n\n" + prompt.T(opts.Lang, "prompt.core.compact.images",
+			"随本条消息附带的图片，按历史里图片编号的先后顺序给出。")
+	}
 	events, err := provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       opts.Model,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: buildCompactPrompt(opts.Lang, extras, serializeHistory(opts.Lang, msgs))}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: promptText, Images: images}},
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
 		Thinking:    "off", // 压缩追求速度，不启用思考
 	})
 	if err != nil {
-		return "", false, err
+		return "", nil, false, err
 	}
 	var summary strings.Builder
 	emitted := false
@@ -289,16 +298,16 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 			summary.WriteString(ev.Content)
 			emit(Event{Type: EventDelta, Content: ev.Content})
 		case llm.EventError:
-			return "", emitted, ev.Err
+			return "", nil, emitted, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", emitted, err
+		return "", nil, emitted, err
 	}
 	if strings.TrimSpace(summary.String()) == "" {
-		return "", emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
+		return "", nil, emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
 	}
-	return summary.String(), emitted, nil
+	return summary.String(), retained, emitted, nil
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。
@@ -309,6 +318,62 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 // 每天以同样的措辞重新出现。要求摘要写绝对日期，前提是先把日期给它。
 // 一次性输入（心跳提示词等）不进摘要：它们是机器注入的模板文案，不是对话内容。
 func serializeHistory(lang string, msgs []session.StoredMessage) string {
+	return serializeHistoryWithLabels(lang, msgs, nil)
+}
+
+// summaryImages 选出随摘要请求一起发送的图片，并给历史里的每张图一个编号标签。
+// 图片是随机文件名，只给名字对模型没有意义；按出现顺序编号、随请求附带原图，
+// 摘要才能把「那张图里有什么」写进去。超出数量或总字节预算的图明确标成未附带，
+// 不假装它们已经被看过。
+func (a *Agent) summaryImages(sessionID, lang string, msgs []session.StoredMessage) ([]llm.ImagePart, map[string]string, []session.StoredMessage) {
+	const maxImages = 8
+	const maxBytes = 10 << 20
+	labels := map[string]string{}
+	omitted := map[string]bool{}
+	var out []llm.ImagePart
+	total := 0
+	n := 0
+	for _, m := range msgs {
+		for _, img := range m.Images {
+			n++
+			ref := fmt.Sprintf("#%d", n)
+			if len(out) >= maxImages || total+img.Size > maxBytes {
+				labels[img.Name] = ref + prompt.T(lang, "prompt.core.compact.image_omitted", "，未随摘要附带")
+				omitted[img.Name] = true
+				continue
+			}
+			data, err := a.store.ReadImage(sessionID, img.Name)
+			if err != nil {
+				i18n.Logf(lang, "log.agent.image_load_failed", "agent: 读取聊天图片 %s 失败（已跳过）: %v", img.Name, err)
+				labels[img.Name] = ref + prompt.T(lang, "prompt.core.compact.image_omitted", "，未随摘要附带")
+				continue
+			}
+			if len(out) >= maxImages || total+len(data) > maxBytes {
+				labels[img.Name] = ref + prompt.T(lang, "prompt.core.compact.image_omitted", "，未随摘要附带")
+				omitted[img.Name] = true
+				continue
+			}
+			img.Data = data
+			out = append(out, img)
+			total += len(data)
+			labels[img.Name] = ref + prompt.T(lang, "prompt.core.compact.image_attached", "，已随摘要附带")
+		}
+	}
+	var retained []session.StoredMessage
+	if len(omitted) > 0 {
+		for _, m := range msgs {
+			for _, img := range m.Images {
+				if omitted[img.Name] {
+					retained = append(retained, m)
+					break
+				}
+			}
+		}
+	}
+	return out, labels, retained
+}
+
+func serializeHistoryWithLabels(lang string, msgs []session.StoredMessage, labels map[string]string) string {
 	var b strings.Builder
 	var day string
 	for _, m := range msgs {
@@ -324,6 +389,13 @@ func serializeHistory(lang string, msgs []session.StoredMessage) string {
 		switch m.Role {
 		case llm.RoleUser:
 			fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.user", "用户: %s\n"), m.Content)
+			for _, img := range m.Images {
+				if label, ok := labels[img.Name]; ok {
+					fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.image_labeled", "[图片 %s]\n"), label)
+					continue
+				}
+				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.image", "[图片: %s]\n"), img.Name)
+			}
 		case llm.RoleAssistant:
 			if m.Content != "" {
 				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.assistant", "助手: %s\n"), m.Content)

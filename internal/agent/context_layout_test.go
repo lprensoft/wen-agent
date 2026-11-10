@@ -343,3 +343,72 @@ func TestHistoryRulesIsInSystem(t *testing.T) {
 		t.Error("system 前缀在两轮之间发生了变化")
 	}
 }
+
+func TestRetainedOldImageDoesNotMoveLastTimeBack(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	now := time.Now()
+	if err := store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "摘要"},
+		Kind:    session.KindSummary,
+		TS:      now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 压缩保留下来的旧图片消息排在摘要之后，时间戳仍是 14 小时前。
+	if err := store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "旧图",
+			Images: []llm.ImagePart{{Name: "x.png", MediaType: "image/png", Size: 1}}},
+		TS: now.Add(-14 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "接着聊", func(Event) {})
+
+	msgs := provider.reqs[0].Messages
+	last := msgs[len(msgs)-1].Content
+	if strings.Contains(last, "14 小时") || strings.Contains(last, "距上一条消息") {
+		t.Fatalf("重排的旧消息不应让最近时间倒退: %q", last)
+	}
+}
+
+func TestRetainedOldImageKeepsOwnDayMark(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	now := time.Now()
+	old := now.Add(-48 * time.Hour)
+	if err := store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "摘要"},
+		Kind:    session.KindSummary,
+		TS:      now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	name, err := store.PutImage(meta.ID, "image/png", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "两天前的旧图",
+			Images: []llm.ImagePart{{Name: name, MediaType: "image/png", Size: 1}}},
+		TS: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "接着聊", func(Event) {})
+
+	msgs := provider.reqs[0].Messages
+	if _, ok := dayMarkOf(msgs, old.Format("2006-01-02")); !ok {
+		t.Fatal("旧图片消息应保留自己的日界线")
+	}
+	last := msgs[len(msgs)-1].Content
+	if strings.Contains(last, "距上一条消息") || strings.Contains(last, "48 小时") {
+		t.Fatalf("本轮间隔不应被旧消息拉长: %q", last)
+	}
+}

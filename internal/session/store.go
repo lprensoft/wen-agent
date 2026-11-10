@@ -186,6 +186,66 @@ func (s *Store) Append(id string, msg StoredMessage) error {
 	return err
 }
 
+// PutImage 把一张聊天图片写进该会话的附件目录，返回可安全放进消息的名字。
+// 图片不进 JSONL：会话行保持轻量，读取历史时只按需加载。
+func (s *Store) PutImage(id, mediaType string, data []byte) (string, error) {
+	if _, err := s.path(id); err != nil {
+		return "", err
+	}
+	ext := imageExt(mediaType)
+	if ext == "" {
+		return "", fmt.Errorf("unsupported image media type %q", mediaType)
+	}
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	name := hex.EncodeToString(buf[:]) + ext
+	dir := filepath.Join(s.dir, id, "images")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// ImagePath 返回会话图片的落盘路径。名字只允许 PutImage 生成的形式，
+// 防止 API 里带路径穿越。
+func (s *Store) ImagePath(id, name string) (string, error) {
+	if _, err := s.path(id); err != nil {
+		return "", err
+	}
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid image name %q", name)
+	}
+	return filepath.Join(s.dir, id, "images", name), nil
+}
+
+// ReadImage 读取会话图片的原始字节。
+func (s *Store) ReadImage(id, name string) ([]byte, error) {
+	p, err := s.ImagePath(id, name)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(p)
+}
+
+func imageExt(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	}
+	return ""
+}
+
 // SetTitle 更新 meta 行的标题。
 func (s *Store) SetTitle(id, title string) error {
 	return s.updateMeta(id, func(m *Meta) { m.Title = title })
@@ -288,6 +348,8 @@ func (s *Store) Delete(id string) error {
 	if err := os.Remove(p); err != nil {
 		return err
 	}
+	// 会话附件与正文同生命周期；删除会话时一并不能留下孤儿图片。
+	_ = os.RemoveAll(filepath.Join(s.dir, id))
 	s.mu.Lock()
 	delete(s.locks, id)
 	s.mu.Unlock()
