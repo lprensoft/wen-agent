@@ -7,9 +7,10 @@
 |---|---|---|
 | GET | `/api/sessions` | List sessions |
 | POST | `/api/sessions` | Create a session |
-| GET | `/api/sessions/{id}` | The session's message history |
+| GET | `/api/sessions/{id}` | The session's message history (images carry only `name` / `media_type` / `size`) |
+| GET | `/api/sessions/{id}/images/{name}` | Returns the raw bytes of one chat image in the session |
 | DELETE | `/api/sessions/{id}` | Delete a session |
-| POST | `/api/chat` | `{"session_id","message"}` → an SSE stream (`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`) |
+| POST | `/api/chat` | `{"session_id","message","images"}` → an SSE stream (`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`). `images` is optional; each item is `{"media_type","data"}` with `data` in base64 |
 | POST | `/api/sessions/{id}/compact` | Compact that session's history by hand (an SSE stream; the frames are the `compact_*` ones from `/api/chat`) |
 | POST | `/api/confirmations/{id}` | `{"approved": bool}` answers one confirmation request (the id comes from the `confirm_request` frame). Returns 409 if it has already timed out or been answered |
 | GET | `/api/plugins` | The plugin list and their state (including the `source`, the `config_fields` declarations and the `config` values currently in effect) |
@@ -27,3 +28,5 @@
 | POST | `/api/auth/login` | `{"password"}` signs in and issues a session cookie |
 | POST | `/api/auth/logout` | Signs out |
 | PUT | `/api/auth/password` | `{"current","new"}` sets or clears the access password; an empty `new` clears it (allowed only while listening on localhost alone) |
+
+A chat message carries at most 4 images, each up to 5 MB and 10 MB in total; only PNG, JPEG and GIF are accepted, and both the type and decodability are decided from the bytes rather than the declared MIME. Images live under `<session dir>/<session id>/images/`; the JSONL stores only file references, and deleting the session removes them too.

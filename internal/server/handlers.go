@@ -1,8 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"net/http"
 	"os"
 	"sort"
@@ -11,9 +16,18 @@ import (
 
 	"wen/internal/agent"
 	"wen/internal/i18n"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 	"wen/internal/version"
+)
+
+const (
+	maxChatImages      = 4
+	maxChatImageBytes  = 5 << 20
+	maxChatImageTotal  = 10 << 20
+	maxChatImagePixels = 25_000_000 // 解码前的尺寸上限，挡住压缩炸弹
+	maxChatRequestSize = 20 << 20   // base64 膨胀后的余量
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -75,18 +89,25 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 // chat 处理一条用户消息，以 SSE 流返回 Agent 事件。
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		Message   string `json:"message"`
+		SessionID string      `json:"session_id"`
+		Message   string      `json:"message"`
+		Images    []chatImage `json:"images"`
 		// DebugPrompt 打开时逐次发回实际提交给模型的请求体，供界面调试查看。
 		// 默认关闭：整轮的完整上下文可能有数 MB，不看的时候不该付这份代价。
 		DebugPrompt bool `json:"debug_prompt"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatRequestSize)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.bad_body", "请求体解析失败或超过大小上限"))
 		return
 	}
-	if req.SessionID == "" || req.Message == "" {
-		writeError(w, http.StatusBadRequest, "session_id and message are required")
+	images, errMsg := normalizeChatImages(reqLang(r), req.Images)
+	if errMsg != "" {
+		writeError(w, http.StatusBadRequest, errMsg)
+		return
+	}
+	if req.SessionID == "" || (req.Message == "" && len(images) == 0) {
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.empty_message", "消息与图片不能同时为空"))
 		return
 	}
 	if _, _, err := s.store.Get(req.SessionID); err != nil {
@@ -106,7 +127,81 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if req.DebugPrompt {
 		ctx = agent.WithPromptTrace(ctx)
 	}
+	if len(images) > 0 {
+		s.agent.RunWithImages(ctx, req.SessionID, req.Message, images, emit)
+		return
+	}
 	s.agent.Run(ctx, req.SessionID, req.Message, emit)
+}
+
+type chatImage struct {
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// normalizeChatImages 校验并归一化界面传来的图片。MIME 以实际字节为准，
+// 不信任浏览器给的 media_type；只接受三家模型都支持的格式。
+func normalizeChatImages(lang string, in []chatImage) ([]llm.ImagePart, string) {
+	if len(in) > maxChatImages {
+		return nil, i18n.Tf(lang, "server.err.images_too_many", "一次最多发送 %d 张图片", maxChatImages)
+	}
+	total := 0
+	out := make([]llm.ImagePart, 0, len(in))
+	for _, img := range in {
+		if len(img.Data) == 0 {
+			return nil, i18n.T(lang, "server.err.image_empty", "图片内容为空")
+		}
+		if len(img.Data) > maxChatImageBytes {
+			return nil, i18n.Tf(lang, "server.err.image_too_large", "单张图片不能超过 %d MB", maxChatImageBytes>>20)
+		}
+		total += len(img.Data)
+		if total > maxChatImageTotal {
+			return nil, i18n.Tf(lang, "server.err.images_total_too_large", "图片总大小不能超过 %d MB", maxChatImageTotal>>20)
+		}
+		// 只看文件头不够：签名字节对、后面全是垃圾的图片能通过 MIME 检查，
+		// 但模型会在解码时拒绝，而这张图已经随消息落盘、后续每一轮都会重发。
+		// 因此完整解码一次；先读尺寸，避免几 MB 的压缩炸弹把内存打满。
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(img.Data))
+		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+			return nil, i18n.T(lang, "server.err.image_corrupt", "图片无法解码或已损坏")
+		}
+		if cfg.Width*cfg.Height > maxChatImagePixels {
+			return nil, i18n.T(lang, "server.err.image_too_large_pixels", "图片尺寸过大")
+		}
+		if _, _, err := image.Decode(bytes.NewReader(img.Data)); err != nil {
+			return nil, i18n.T(lang, "server.err.image_corrupt", "图片无法解码或已损坏")
+		}
+		var mediaType string
+		switch format {
+		case "png":
+			mediaType = "image/png"
+		case "jpeg":
+			mediaType = "image/jpeg"
+		case "gif":
+			mediaType = "image/gif"
+		default:
+			return nil, i18n.T(lang, "server.err.image_unsupported", "只支持 PNG、JPEG 与 GIF 图片")
+		}
+		out = append(out, llm.ImagePart{MediaType: mediaType, Size: len(img.Data), Data: img.Data})
+	}
+	return out, ""
+}
+
+// sessionImage 以原样字节返回会话里的一张聊天图片。
+func (s *Server) sessionImage(w http.ResponseWriter, r *http.Request) {
+	data, err := s.store.ReadImage(r.PathValue("id"), r.PathValue("name"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if os.IsNotExist(err) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", http.DetectContentType(data))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = w.Write(data)
 }
 
 // startSSE 设置 SSE 响应头，返回 Agent 事件写入函数与一个原始帧写入函数

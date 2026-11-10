@@ -111,6 +111,81 @@ func TestCompactSplitsByScope(t *testing.T) {
 	}
 }
 
+func TestCompactSendsImagesToSummarizer(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	data := []byte("fake-image")
+	name, err := store.PutImage(meta.ID, "image/png", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := bulk(llm.RoleUser, "a")
+	user.Images = []llm.ImagePart{{Name: name, MediaType: "image/png", Size: len(data)}}
+	if err := store.Append(meta.ID, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(meta.ID, bulk(llm.RoleAssistant, "a")); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	if len(provider.reqs) != 1 {
+		t.Fatalf("summary requests = %d", len(provider.reqs))
+	}
+	req := provider.reqs[0].Messages[0]
+	if len(req.Images) != 1 || string(req.Images[0].Data) != string(data) {
+		t.Fatalf("summary images = %+v", req.Images)
+	}
+	if !strings.Contains(req.Content, "[图片 #1，已随摘要附带]") {
+		t.Fatalf("transcript did not label the attached image: %s", req.Content)
+	}
+}
+
+func TestCompactRetainsImagesBeyondSummaryBudget(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	var last string
+	for i := 0; i < 9; i++ {
+		name, err := store.PutImage(meta.ID, "image/png", []byte("img"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = name
+		m := tagged(msg(llm.RoleUser, "看图"), "a")
+		m.Images = []llm.ImagePart{{Name: name, MediaType: "image/png", Size: 3}}
+		if err := store.Append(meta.ID, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Append(meta.ID, bulk(llm.RoleAssistant, "a")); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	if len(provider.reqs) != 1 || len(provider.reqs[0].Messages[0].Images) != 8 {
+		t.Fatalf("summary should carry the first 8 images: %+v", provider.reqs)
+	}
+	_, msgs, err := store.Get(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptName := ""
+	for _, m := range msgs {
+		if len(m.Images) > 0 {
+			keptName = m.Images[0].Name
+		}
+	}
+	if keptName != last {
+		t.Fatalf("the 9th image must survive compaction: %+v", msgs)
+	}
+}
+
 func TestCompactKeepsSmallGroupVerbatim(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()

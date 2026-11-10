@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,8 +120,16 @@ type antBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"` // tool_result
 	Content   string `json:"content,omitempty"`     // tool_result
 
+	Source *antImageSource `json:"source,omitempty"` // image
+
 	// CacheControl 标记「到本块为止的内容作为一段提示词缓存」，见 markCacheBreakpoints。
 	CacheControl *antCacheControl `json:"cache_control,omitempty"`
+}
+
+type antImageSource struct {
+	Type      string `json:"type"` // base64
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 // antCacheControl 目前只有 ephemeral 一种类型（默认 5 分钟有效期，每次命中会续期）。
@@ -247,9 +256,24 @@ func buildAnthropicRequest(req ChatRequest, o antBuild) antRequest {
 				system = append(system, m.Content) // system 提到顶层，不进 messages
 			}
 		case RoleUser:
-			if m.Content != "" {
-				appendBlocks("user", []antBlock{{Type: "text", Text: m.Content}})
+			var blocks []antBlock
+			for _, img := range m.Images {
+				if len(img.Data) == 0 {
+					continue
+				}
+				blocks = append(blocks, antBlock{
+					Type: "image",
+					Source: &antImageSource{
+						Type:      "base64",
+						MediaType: img.MediaType,
+						Data:      base64.StdEncoding.EncodeToString(img.Data),
+					},
+				})
 			}
+			if m.Content != "" {
+				blocks = append(blocks, antBlock{Type: "text", Text: m.Content})
+			}
+			appendBlocks("user", blocks)
 		case RoleTool:
 			// Anthropic 没有 tool 角色：工具结果作为 user 消息里的 tool_result block，
 			// 同一轮的多个结果会因上面的合并逻辑落进同一条 user 消息

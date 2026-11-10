@@ -7,9 +7,10 @@
 |---|---|---|
 | GET | `/api/sessions` | 会话列表 |
 | POST | `/api/sessions` | 新建会话 |
-| GET | `/api/sessions/{id}` | 会话历史消息 |
+| GET | `/api/sessions/{id}` | 会话历史消息（图片只给 `name` / `media_type` / `size`） |
+| GET | `/api/sessions/{id}/images/{name}` | 返回会话里一张聊天图片的原始字节 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
-| POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`） |
+| POST | `/api/chat` | `{"session_id","message","images"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`）。`images` 可省略，每项是 `{"media_type","data"}`，`data` 为 base64 |
 | POST | `/api/sessions/{id}/compact` | 手动压缩该会话的历史（SSE 流，帧同 `/api/chat` 的 `compact_*`） |
 | POST | `/api/confirmations/{id}` | `{"approved": bool}` 回答一次操作确认（id 取自 `confirm_request` 帧）。已超时或已回答过时返回 409 |
 | GET | `/api/plugins` | 插件列表与状态（含来源 `source`、可配置项声明 `config_fields` 与当前生效值 `config`） |
@@ -27,4 +28,6 @@
 | POST | `/api/auth/login` | `{"password"}` 登录，成功后下发会话 Cookie |
 | POST | `/api/auth/logout` | 退出登录 |
 | PUT | `/api/auth/password` | `{"current","new"}` 设置或清除访问口令；`new` 留空表示清除（仅在只监听本机时允许） |
+
+聊天图片一次最多 4 张、单张不超过 5 MB、总计不超过 10 MB；只接受 PNG、JPEG 与 GIF；类型与可解码性按文件字节判断，不信任请求里声明的 MIME。图片写入 `<会话目录>/<会话 id>/images/`，JSONL 里只保存文件名引用，删除会话时一并删除。
 

@@ -221,7 +221,20 @@ func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(
 	l := a.turnLock(sessionID)
 	l.Lock()
 	defer l.Unlock()
-	if _, err := a.run(ctx, sessionID, userInput, emit); err != nil {
+	if _, err := a.run(ctx, sessionID, userInput, nil, emit); err != nil {
+		emit(Event{Type: EventError, Error: err.Error()})
+		return
+	}
+	emit(Event{Type: EventDone})
+}
+
+// RunWithImages 与 Run 相同，但本轮用户消息额外携带图片。图片会先写进会话
+// 附件目录，消息里只保存文件引用；后续轮次由 run 按需读回。
+func (a *Agent) RunWithImages(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, emit func(Event)) {
+	l := a.turnLock(sessionID)
+	l.Lock()
+	defer l.Unlock()
+	if _, err := a.run(ctx, sessionID, userInput, images, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
@@ -237,10 +250,10 @@ func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, e
 		return "", plugin.ErrSessionBusy
 	}
 	defer l.Unlock()
-	return a.run(ctx, sessionID, input, func(Event) {})
+	return a.run(ctx, sessionID, input, nil, func(Event) {})
 }
 
-func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(Event)) (string, error) {
+func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, emit func(Event)) (string, error) {
 	startedAt := time.Now()
 	targets, opts := a.snapshot()
 
@@ -262,6 +275,9 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	// 一次性输入不参与命名：心跳提示词不该成为会话标题。
 	if meta.Title == "" && !ephemeral {
 		title := []rune(userInput)
+		if len(title) == 0 && len(images) > 0 {
+			title = []rune(i18n.T(opts.Lang, "agent.title.image", "图片"))
+		}
 		if len(title) > titleMaxRunes {
 			title = title[:titleMaxRunes]
 		}
@@ -269,7 +285,16 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	}
 
 	origin := plugin.TurnOriginFrom(ctx)
-	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput}
+	// 图片先落盘，消息里只留引用；本轮请求用的副本仍带原始字节。
+	refs := make([]llm.ImagePart, 0, len(images))
+	for _, img := range images {
+		name, err := a.store.PutImage(sessionID, img.MediaType, img.Data)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", i18n.T(opts.Lang, "agent.err.save_image", "保存聊天图片失败"), err)
+		}
+		refs = append(refs, llm.ImagePart{Name: name, MediaType: img.MediaType, Size: len(img.Data)})
+	}
+	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput, Images: refs}
 	userKind := ""
 	if ephemeral {
 		userKind = session.KindEphemeral
@@ -315,17 +340,23 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	breakable := true // 上一条消息有没有还挂着的工具调用
 	for _, h := range visibleHistory(history, scope) {
 		m := h.Message
+		a.hydrateImages(sessionID, &m, opts.Lang)
 		note := pending
 		pending = ""
 		if !h.TS.IsZero() {
+			// 日界线按每条消息自己的时间戳生成，不能被「时间不倒退」的条件吞掉：
+			// 压缩后旧图片消息排在今天的摘要之后，它仍需要自己的日期，否则原文里
+			// 的「明天」会被当成今天。
 			if d := h.TS.Format("2006-01-02"); d != markedDay {
 				markedDay = d
 				note += dayMark(opts.Lang, h.TS) + "\n"
 			}
-		}
-		note += gapNote(opts.Lang, lastTS, h.TS)
-		if !h.TS.IsZero() {
-			lastTS = h.TS
+			// 间隔与「最近一条消息」只取最大值；重排到后面的旧消息不推进 lastTS，
+			// 否则下一轮状态块会把刚发生的对话说成十几小时前。
+			if lastTS.IsZero() || !h.TS.Before(lastTS) {
+				note += gapNote(opts.Lang, lastTS, h.TS)
+				lastTS = h.TS
+			}
 		}
 		switch {
 		case note == "":
@@ -343,6 +374,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	}
 	// 本轮状态块拼在用户输入前面，落盘的那条（userMsg）保持原样不受影响
 	wireUser := userMsg
+	if len(images) > 0 {
+		wireUser.Images = make([]llm.ImagePart, len(refs))
+		for i, img := range images {
+			wireUser.Images[i] = img
+			wireUser.Images[i].Name = refs[i].Name
+			wireUser.Images[i].Size = refs[i].Size
+		}
+	}
 	var sinceLast time.Duration
 	if !lastTS.IsZero() {
 		sinceLast = startedAt.Sub(lastTS)
@@ -661,7 +700,33 @@ func estimateTokens(m llm.Message) int {
 	for _, tc := range m.ToolCalls {
 		n += len(tc.Name) + len(tc.Arguments)
 	}
-	return n/3 + 8
+	// 图片按固定预算估：真实视觉 token 随尺寸与 detail 变化，这里只求给裁剪
+	// 留出余量，不能按字节数算——2 MB 的图会被估成几十万 token。
+	return n/3 + 8 + len(m.Images)*1500
+}
+
+// hydrateImages 把历史消息里的图片引用读回内存。读不出来的图片直接丢掉并记日志，
+// 不让一张损坏的附件拖垮整段历史。
+func (a *Agent) hydrateImages(sessionID string, m *llm.Message, lang string) {
+	if len(m.Images) == 0 {
+		return
+	}
+	kept := make([]llm.ImagePart, 0, len(m.Images))
+	for _, img := range m.Images {
+		if len(img.Data) == 0 && img.Name != "" {
+			data, err := a.store.ReadImage(sessionID, img.Name)
+			if err != nil {
+				i18n.Logf(lang, "log.agent.image_load_failed", "agent: 读取聊天图片 %s 失败（已跳过）: %v", img.Name, err)
+				continue
+			}
+			img.Data = data
+		}
+		if len(img.Data) == 0 {
+			continue
+		}
+		kept = append(kept, img)
+	}
+	m.Images = kept
 }
 
 // trimToBudget 在超出上下文预算时，从最旧的对话轮次（以 user 消息开头）开始整轮丢弃，

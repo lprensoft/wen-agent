@@ -24,6 +24,16 @@ const messagesEl = $("#messages");
 const sessionListEl = $("#session-list");
 const inputEl = $("#input");
 const sendBtn = $("#btn-send");
+const attachBtn = $("#btn-attach");
+const imageInput = $("#image-input");
+const pendingImagesEl = $("#pending-images");
+
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_TOTAL = 10 * 1024 * 1024;
+let pendingImages = []; // {name, mediaType, dataBase64, dataUrl, size}
+let imageReadPromise = Promise.resolve();
+let sending = false;
 
 let currentSession = null; // 当前 session id
 let busy = false;          // 正在等待回复
@@ -438,8 +448,10 @@ async function newSession() {
   return meta.id;
 }
 
-async function selectSession(id) {
-  if (busy) return;
+// internal=true 用于停止生成、压缩完成后的收尾重载：那是当前发送流程的一部分，
+// 不能被「发送中禁止切换」挡住。
+async function selectSession(id, internal = false) {
+  if (!internal && (busy || sending)) return;
   currentSession = id;
   const res = await fetch(`/api/sessions/${id}`);
   if (!res.ok) { await loadSessions(); return; }
@@ -505,7 +517,7 @@ function scrollBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function addBubble(role, text) {
+function addBubble(role, text, images = []) {
   hideHint();
   const wrap = document.createElement("div");
   wrap.className = `msg ${role}`;
@@ -515,7 +527,19 @@ function addBubble(role, text) {
     bubble.classList.add("md");
     renderMarkdown(bubble, text);
   } else {
-    bubble.textContent = text;
+    for (const src of images) {
+      const img = document.createElement("img");
+      img.className = "chat-image";
+      img.src = src;
+      img.alt = t("chat.imageAlt");
+      img.loading = "lazy";
+      bubble.appendChild(img);
+    }
+    if (text) {
+      const line = document.createElement("div");
+      line.textContent = text;
+      bubble.appendChild(line);
+    }
   }
   wrap.appendChild(bubble);
   messagesEl.appendChild(wrap);
@@ -765,7 +789,10 @@ function renderHistory(messages) {
           : t("block.backgroundWake", { origin: m.origin || t("block.backgroundWakeSystem") }),
         m.origin === "heartbeat" ? "heartbeat" : "");
     } else if (m.role === "user") {
-      addBubble("user", m.content);
+      const images = (m.images || [])
+        .filter((img) => img.name)
+        .map((img) => `/api/sessions/${encodeURIComponent(currentSession)}/images/${encodeURIComponent(img.name)}`);
+      addBubble("user", m.content, images);
     } else if (m.role === "assistant") {
       if (m.reasoning_content) addThinkingBlock(m.reasoning_content, false);
       if (m.content) addBubble("assistant", m.content);
@@ -781,20 +808,118 @@ function renderHistory(messages) {
 
 // ---------- 发送消息 + SSE 流 ----------
 
+function renderPendingImages() {
+  pendingImagesEl.textContent = "";
+  pendingImagesEl.classList.toggle("hidden", pendingImages.length === 0);
+  pendingImages.forEach((img, index) => {
+    const wrap = document.createElement("div");
+    wrap.className = "pending-image";
+    const el = document.createElement("img");
+    el.src = img.dataUrl;
+    el.alt = t("chat.imageAlt");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.title = t("common.delete");
+    remove.addEventListener("click", () => {
+      pendingImages.splice(index, 1);
+      renderPendingImages();
+    });
+    wrap.append(el, remove);
+    pendingImagesEl.appendChild(wrap);
+  });
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addImageFiles(files) {
+  for (const file of files) {
+    if (pendingImages.length >= MAX_IMAGES) {
+      addSysBlock(t("chat.imageLimit"));
+      break;
+    }
+    if (!["image/png", "image/jpeg", "image/gif"].includes(file.type)) {
+      addSysBlock(t("chat.imageType"));
+      continue;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      addSysBlock(t("chat.imageSize"));
+      continue;
+    }
+    const total = pendingImages.reduce((n, img) => n + img.size, 0);
+    if (total + file.size > MAX_IMAGE_TOTAL) {
+      addSysBlock(t("chat.imageTotal"));
+      break;
+    }
+    const dataUrl = await readImageFile(file);
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) continue;
+    const head = dataUrl.slice(5, comma);
+    pendingImages.push({
+      name: file.name,
+      mediaType: head.split(";")[0],
+      dataBase64: dataUrl.slice(comma + 1),
+      dataUrl,
+      size: file.size,
+    });
+  }
+  renderPendingImages();
+}
+
+// 读取是异步的，发送必须排在所有已选文件之后，否则选多张图时先点发送只会
+// 带走已经读完的那几张，剩下的落进下一条消息。
+function queueImageFiles(files) {
+  imageReadPromise = imageReadPromise.then(() => addImageFiles(files)).catch((err) => {
+    console.error(err);
+  });
+  return imageReadPromise;
+}
+
+attachBtn.addEventListener("click", () => imageInput.click());
+imageInput.addEventListener("change", () => {
+  queueImageFiles([...imageInput.files]);
+  imageInput.value = "";
+});
+
 async function sendMessage() {
+  if (sending) return;
+  sending = true;
+  // 固定本次发送的目标会话：等待图片读取期间用户仍可能切换会话，
+  // 后续请求必须落回点击发送时的那个会话。
+  let target = currentSession;
+  try {
+    await imageReadPromise;
+    await sendMessageNow(target);
+  } finally {
+    sending = false;
+  }
+}
+
+async function sendMessageNow(targetSession) {
   const text = inputEl.value.trim();
-  if (!text || busy) return;
-  if (text.startsWith("/")) {
+  const images = pendingImages.slice();
+  if ((!text && images.length === 0) || busy) return;
+  if (text.startsWith("/") && images.length === 0) {
     await handleCommand(text);
     return;
   }
-  if (!currentSession) await newSession();
+  let target = targetSession;
+  if (!target) target = await newSession();
 
   chatAbort = new AbortController();
   setSending(true);
   inputEl.value = "";
   autoGrow();
-  addBubble("user", text);
+  addBubble("user", text, images.map((img) => img.dataUrl));
+  pendingImages = [];
+  renderPendingImages();
 
   let aborted = false; // 用户点了停止，结束后按落盘内容重载历史
 
@@ -824,8 +949,9 @@ async function sendMessage() {
       // 提示词采集由界面开关驱动：关着时服务端不组装也不下发，
       // 代价是它只对开启之后的轮次生效，回溯不了之前的
       body: JSON.stringify({
-        session_id: currentSession,
+        session_id: target,
         message: text,
+        images: images.map((img) => ({ media_type: img.mediaType, data: img.dataBase64 })),
         debug_prompt: !!filters.prompt,
       }),
       signal: chatAbort.signal,
@@ -921,10 +1047,10 @@ async function sendMessage() {
     setSending(false);
     chatAbort = null;
     if (aborted) {
-      await selectSession(currentSession); // 半截生成不落盘，按磁盘内容重载对齐
+      await selectSession(currentSession, true); // 半截生成不落盘，按磁盘内容重载对齐
       addSysBlock(t("chat.stopped"));
     } else if (autoCompacted) {
-      await selectSession(currentSession); // 重载压缩后的历史
+      await selectSession(currentSession, true); // 重载压缩后的历史
       addSysBlock(t("chat.autoCompacted"));
     } else {
       refreshFp(); // 本轮内容已在流式过程中上屏，只校准指纹防止轮询重画
@@ -1100,7 +1226,7 @@ async function runCompact() {
     }
     if (!failed) {
       busy = false; // selectSession 在 busy 时不工作，先复位
-      await selectSession(currentSession); // 重新加载压缩后的历史
+      await selectSession(currentSession, true); // 重新加载压缩后的历史
       addSysBlock(t("compact.done"));
     }
   } catch (e) {
@@ -2675,7 +2801,9 @@ $("#chat-form").addEventListener("submit", (e) => {
   sendMessage();
 });
 
-$("#btn-new").addEventListener("click", newSession);
+$("#btn-new").addEventListener("click", () => {
+  if (!busy && !sending) newSession();
+});
 
 // 切换语言后就地重绘：静态文案由 i18n.js 自己填，动态渲染出来的部分在这里点名重画。
 // 不整页刷新，是因为那会丢掉输入框里没发出去的内容与消息区的滚动位置——而语言是

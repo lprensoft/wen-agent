@@ -569,3 +569,25 @@ func TestAnthropicWorkspaceErrorIsExplained(t *testing.T) {
 		t.Error("应归为配置错误")
 	}
 }
+
+func TestAnthropicImageBlocks(t *testing.T) {
+	got, _ := antRun(t, textFrames("ok"), ChatRequest{
+		Model: "claude",
+		Messages: []Message{{Role: RoleUser, Content: "看图", Images: []ImagePart{
+			{MediaType: "image/png", Data: []byte("png-bytes")},
+		}}},
+	})
+	msgs, _ := got["messages"].([]any)
+	content, _ := msgs[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %v", content)
+	}
+	img := content[0].(map[string]any)
+	if img["type"] != "image" {
+		t.Fatalf("first block = %v", img)
+	}
+	source := img["source"].(map[string]any)
+	if source["type"] != "base64" || source["media_type"] != "image/png" {
+		t.Fatalf("source = %v", source)
+	}
+}

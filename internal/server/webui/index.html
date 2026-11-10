@@ -59,8 +59,13 @@
       <form id="chat-form" class="composer">
         <div class="composer-box">
           <div id="cmd-menu" class="cmd-menu hidden"></div>
+          <div id="pending-images" class="pending-images hidden"></div>
           <textarea id="input" rows="1" data-i18n-placeholder="chat.placeholder"></textarea>
           <div class="composer-bar">
+            <input id="image-input" type="file" accept="image/png,image/jpeg,image/gif" multiple hidden>
+            <button type="button" id="btn-attach" class="chip chip-icon" data-i18n-title="chat.attachTitle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.6l-8.5 8.5a6 6 0 0 1-8.5-8.5l8.5-8.5a4 4 0 0 1 5.7 5.7l-8.6 8.5a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg>
+            </button>
             <div class="composer-anchor">
               <button type="button" id="btn-filter" class="chip" data-i18n-title="chat.filterTitle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M7 12h10"/><path d="M11 19h2"/></svg>

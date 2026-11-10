@@ -232,3 +232,35 @@ func TestAPIErrorStatus(t *testing.T) {
 func testMessages(text string) []Message {
 	return []Message{{Role: RoleUser, Content: text}}
 }
+
+func TestOpenAIChatImageParts(t *testing.T) {
+	var got map[string]any
+	srv := sseServer(t, []string{`{"choices":[{"delta":{"content":"ok"}}]}`}, &got)
+	defer srv.Close()
+
+	p := NewOpenAICompat("", srv.URL, "sk-test", "")
+	ch, err := p.ChatStream(context.Background(), ChatRequest{
+		Model: "m",
+		Messages: []Message{{Role: RoleUser, Content: "看图", Images: []ImagePart{
+			{MediaType: "image/png", Data: []byte("png-bytes")},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	msgs, _ := got["messages"].([]any)
+	content, _ := msgs[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %v", content)
+	}
+	if content[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("first part = %v", content[0])
+	}
+	img := content[1].(map[string]any)
+	url := img["image_url"].(map[string]any)["url"].(string)
+	if img["type"] != "image_url" || url[:5] != "data:" {
+		t.Fatalf("image part = %v", img)
+	}
+}
