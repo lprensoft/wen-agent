@@ -84,6 +84,12 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 			}
 			return ag.RunTurn(ctx, sessionID, input)
 		},
+		RunTurnImages: func(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error) {
+			if ag == nil {
+				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
+			}
+			return ag.RunTurnWithImages(ctx, sessionID, input, images)
+		},
 		Notice: func(ctx context.Context, sessionID, text string) error {
 			if ag == nil {
 				return fmt.Errorf("%s", tr("cli.err.no_session", "会话尚未就绪"))

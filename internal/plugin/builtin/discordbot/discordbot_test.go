@@ -2,6 +2,7 @@ package discordbot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -495,3 +496,46 @@ func TestBuildProxy(t *testing.T) {
 func noopTurn(context.Context, string, string) (string, error) { return "", nil }
 
 func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
+
+var testDiscordPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
+
+func TestInboundImageDownload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testDiscordPNG)
+	}))
+	defer srv.Close()
+
+	p := New()
+	p.client = srv.Client()
+	images, note := p.inboundImages(context.Background(), []discordAttachment{{
+		Filename: "a.png", ContentType: "image/png", Size: int64(len(testDiscordPNG)), URL: srv.URL,
+	}})
+	if note != "" || len(images) != 1 || images[0].MediaType != "image/png" {
+		t.Fatalf("images=%+v note=%q", images, note)
+	}
+}
+
+func TestInboundImagesReportsTooMany(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testDiscordPNG)
+	}))
+	defer srv.Close()
+
+	p := New()
+	p.client = srv.Client()
+	var files []discordAttachment
+	for i := 0; i < 5; i++ {
+		files = append(files, discordAttachment{
+			Filename: "a.png", ContentType: "image/png", Size: int64(len(testDiscordPNG)), URL: srv.URL,
+		})
+	}
+	images, note := p.inboundImages(context.Background(), files)
+	if len(images) != 4 || !strings.Contains(note, "4 张") {
+		t.Fatalf("images=%d note=%q", len(images), note)
+	}
+}

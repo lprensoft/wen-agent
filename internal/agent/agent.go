@@ -253,6 +253,17 @@ func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, e
 	return a.run(ctx, sessionID, input, nil, func(Event) {})
 }
 
+// RunTurnWithImages 与 RunTurn 相同，但本轮用户消息额外携带图片。供 IM 通道
+// 把用户发来的图片交给模型；忙时同样立即返回 ErrSessionBusy。
+func (a *Agent) RunTurnWithImages(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error) {
+	l := a.turnLock(sessionID)
+	if !l.TryLock() {
+		return "", plugin.ErrSessionBusy
+	}
+	defer l.Unlock()
+	return a.run(ctx, sessionID, input, images, func(Event) {})
+}
+
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, emit func(Event)) (string, error) {
 	startedAt := time.Now()
 	targets, opts := a.snapshot()

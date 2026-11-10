@@ -2,8 +2,10 @@ package slackbot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -611,5 +613,63 @@ func TestInitRequiresCredentials(t *testing.T) {
 	err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"bot_token": "123"})
 	if err == nil {
 		t.Fatal("缺 App-Level Token 时应拒绝启用")
+	}
+}
+
+var testSlackPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestInboundImageDownload(t *testing.T) {
+	p := New()
+	p.botToken = "xoxb-test"
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			t.Fatalf("missing auth: %v", r.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(strings.NewReader(string(testSlackPNG))),
+			Request:    r,
+		}, nil
+	})}
+	images, note := p.inboundImages(context.Background(), []slackFile{{
+		Name: "a.png", Mimetype: "image/png", Size: int64(len(testSlackPNG)),
+		URLPrivate: "https://files.slack.com/files-pri/T1/F1/a.png",
+	}})
+	if note != "" || len(images) != 1 || images[0].MediaType != "image/png" {
+		t.Fatalf("images=%+v note=%q", images, note)
+	}
+}
+
+func TestInboundExternalFileIsSkipped(t *testing.T) {
+	p := New()
+	images, note := p.inboundImages(context.Background(), []slackFile{{
+		Name: "a.png", Mimetype: "image/png", Size: 10, IsExternal: true,
+		URLPrivate: "https://evil.example.com/a.png",
+	}})
+	if len(images) != 0 || !strings.Contains(note, "外部文件") {
+		t.Fatalf("external image should be skipped: %+v %q", images, note)
+	}
+}
+
+func TestSlackFileURLTrusted(t *testing.T) {
+	cases := map[string]bool{
+		"https://files.slack.com/files-pri/T/F/a.png":      true,
+		"https://files-edge.slack.com/files-pri/T/F/a.png": true,
+		"http://files.slack.com/files-pri/T/F/a.png":       false,
+		"https://evil.example.com/a.png":                   false,
+		"https://slack.com.evil.example/a.png":             false,
+	}
+	for raw, want := range cases {
+		if got := slackFileURLTrusted(raw); got != want {
+			t.Errorf("slackFileURLTrusted(%q) = %v, want %v", raw, got, want)
+		}
 	}
 }

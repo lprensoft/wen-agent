@@ -3,6 +3,8 @@ package larkbot
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
 	"wen/internal/imbot"
+	"wen/internal/llm"
 
 	"wen/internal/i18n"
 )
@@ -79,43 +82,103 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		return
 	}
 
-	text, note := parseContent(p.langOf(), deref(msg.MessageType), deref(msg.Content))
+	messageID := deref(msg.MessageId)
+	text, note, imageKey := parseContent(p.langOf(), deref(msg.MessageType), deref(msg.Content))
 
 	p.mu.Lock()
-	core, ctx := p.core, p.ctx
+	core, runCtx := p.core, p.ctx
 	p.mu.Unlock()
-	if core == nil || ctx == nil {
+	if core == nil || runCtx == nil {
 		return
 	}
-	messageID := deref(msg.MessageId)
-	core.Handle(ctx, imbot.Message{
+	images, imageNote := p.inboundImages(runCtx, messageID, imageKey)
+	if note == "" {
+		note = imageNote
+	}
+	core.Handle(runCtx, imbot.Message{
 		UserID:  openID,
 		DedupID: messageID,
 		ReplyTo: messageID,
 		Text:    text,
+		Images:  images,
 		Note:    note,
 	})
 }
 
-// parseContent 从事件的 content（JSON 字符串）里取出正文。
-// 只认文本与富文本的纯文字部分，其余类型回一句暂不支持。
-func parseContent(lang, msgType, content string) (text, note string) {
+// parseContent 从事件的 content（JSON 字符串）里取出正文或图片 key。
+// 只认文本与图片，其余类型回一句暂不支持。
+func parseContent(lang, msgType, content string) (text, note, imageKey string) {
 	switch msgType {
 	case "text":
 		var c struct {
 			Text string `json:"text"`
 		}
 		if err := json.Unmarshal([]byte(content), &c); err != nil {
-			return "", i18n.T(lang, "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。")
+			return "", i18n.T(lang, "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。"), ""
 		}
 		text = strings.TrimSpace(mentionRe.ReplaceAllString(c.Text, ""))
 		if text == "" {
-			return "", i18n.T(lang, "plugin.lark_bot.msg.no_text", "没有收到文字内容。")
+			return "", i18n.T(lang, "plugin.lark_bot.msg.no_text", "没有收到文字内容。"), ""
 		}
-		return text, ""
+		return text, "", ""
+	case "image":
+		var c struct {
+			ImageKey string `json:"image_key"`
+		}
+		if err := json.Unmarshal([]byte(content), &c); err != nil || c.ImageKey == "" {
+			return "", i18n.T(lang, "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。"), ""
+		}
+		return "", "", c.ImageKey
 	default:
-		return "", i18n.T(lang, "plugin.lark_bot.msg.unsupported", "暂不支持该消息类型，请发文字。")
+		return "", i18n.T(lang, "plugin.lark_bot.msg.unsupported", "暂不支持该消息类型，请发文字。"), ""
 	}
+}
+
+// inboundImages 按消息资源接口下载图片；飞书的下载地址需要 tenant token。
+func (p *Plugin) inboundImages(ctx context.Context, messageID, imageKey string) ([]llm.ImagePart, string) {
+	if imageKey == "" {
+		return nil, ""
+	}
+	if messageID == "" {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	p.mu.Lock()
+	base, tokens, client := p.apiBase, p.tokens, p.client
+	p.mu.Unlock()
+	if tokens == nil || client == nil {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	token, err := tokens.Get(ctx)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 获取 token 失败: %v", p.Name(), err)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	url := base + "/open-apis/im/v1/messages/" + messageID + "/resources/" + imageKey + "?type=image"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 下载图片失败: %v", p.Name(), err)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 下载图片失败（HTTP %d）", p.Name(), resp.StatusCode)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, imbot.MaxImageBytes+1))
+	if err != nil || int64(len(data)) > imbot.MaxImageBytes {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_too_large", "图片超过大小上限，请压缩后再发。")
+	}
+	img, err := imbot.ImageFromBytes(data)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.lark.image_invalid", "%s: 图片无效（已跳过）: %v", p.Name(), err)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	}
+	return []llm.ImagePart{img}, ""
 }
 
 func deref(s *string) string {

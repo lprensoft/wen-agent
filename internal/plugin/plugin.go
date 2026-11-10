@@ -50,6 +50,9 @@ type InitContext struct {
 	// 不注入确认通道时，需要用户确认的危险操作会按拒绝处理——这是无人值守场景想要的默认。
 	// 为 nil 表示当前不可用，插件应降级。每次调用都是一轮真实的模型对话开销。
 	RunTurn RunTurnFunc
+	// RunTurnImages 与 RunTurn 相同，只是本轮用户消息额外携带图片。为 nil 时
+	// 需要发图的通道只能退化为纯文本。
+	RunTurnImages RunTurnImagesFunc
 	// NewSession 新建一个会话并返回其 ID。为 nil 表示不可用。
 	NewSession NewSessionFunc
 	// Compact 压缩指定会话的历史。会话忙时返回 ErrSessionBusy。为 nil 表示不可用。

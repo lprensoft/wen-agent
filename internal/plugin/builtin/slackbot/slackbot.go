@@ -4,7 +4,7 @@
 // 地址，连上后逐条 ack 带 envelope_id 的事件；Slack 每隔几小时会发 disconnect
 // （warning / refresh_requested），按正常断线重连。斜杠命令走 slash_commands
 // 信封；入站文本先还原 Slack 的 HTML 实体与 <url|label>、<@…> 格式。发消息走 Web API chat.postMessage
-// （Bot Token）。私聊靠 message.im 事件，需 im:history；App Home 的 Messages 页必须
+// （Bot Token）。私聊靠 message.im 事件，需 im:history；图片下载另需 files:read；App Home 的 Messages 页必须
 // 打开，否则用户私聊不到机器人。
 //
 // 页面里的「用户标识」用 DM channel ID：一条私信就是一个 D 开头的频道，回复与
@@ -113,7 +113,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "bot_token", Label: "Bot Token", Type: plugin.FieldString, Default: "",
-			Description: "OAuth & Permissions 安装应用后得到的 Bot User OAuth Token，形如 xoxb-…。需要 chat:write 与 im:history。只保存在本机，不会上传到任何地方",
+			Description: "OAuth & Permissions 安装应用后得到的 Bot User OAuth Token，形如 xoxb-…。需要 chat:write、im:history 与 files:read（下载图片；改权限后要重新安装应用）。只保存在本机，不会上传到任何地方",
 		},
 		imbot.WhitelistField("DM channel 白名单",
 			"每行一个 Slack 私聊频道 ID（D 开头）。只响应名单内频道；留空拒绝所有人。"+

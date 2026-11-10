@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"wen/internal/llm"
 )
 
 // ErrSessionBusy 表示会话正被另一轮对话或压缩占用。
@@ -14,6 +16,10 @@ var ErrSessionBusy = errors.New("会话正被其他轮次占用")
 // RunTurnFunc 以给定输入在指定会话上跑一轮完整对话（写入会话、带工具、注入 system 提示词），
 // 返回助手的最终文本。见 InitContext.RunTurn。
 type RunTurnFunc func(ctx context.Context, sessionID, input string) (string, error)
+
+// RunTurnImagesFunc 与 RunTurnFunc 相同，但本轮用户消息额外携带图片。
+// 见 InitContext.RunTurnImages。
+type RunTurnImagesFunc func(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error)
 
 // NewSessionFunc 新建一个会话并返回其 ID。见 InitContext.NewSession。
 type NewSessionFunc func() (string, error)

@@ -2,6 +2,7 @@ package larkbot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,6 +48,15 @@ func newFakeLark(t *testing.T) *fakeLark {
 		n := f.tokens.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"code":0,"msg":"ok","tenant_access_token":"t-%d","expire":%d}`, n, f.expire.Load())
+	})
+
+	mux.HandleFunc("GET /open-apis/im/v1/messages/{id}/resources/{key}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "no auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testLarkPNG)
 	})
 
 	mux.HandleFunc("POST /open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -218,16 +228,20 @@ func TestParseContent(t *testing.T) {
 		content        string
 		wantText       string
 		wantNoteSubstr string
+		wantImageKey   string
 	}{
-		{"文本", "text", `{"text":"你好"}`, "你好", ""},
-		{"剥掉 @ 占位符", "text", `{"text":"@_user_1 你好"}`, "你好", ""},
-		{"空文本", "text", `{"text":"   "}`, "", "没有收到文字"},
-		{"坏 JSON", "text", `{`, "", "解析失败"},
-		{"图片", "image", `{"image_key":"x"}`, "", "暂不支持"},
+		{"文本", "text", `{"text":"你好"}`, "你好", "", ""},
+		{"剥掉 @ 占位符", "text", `{"text":"@_user_1 你好"}`, "你好", "", ""},
+		{"空文本", "text", `{"text":"   "}`, "", "没有收到文字", ""},
+		{"坏 JSON", "text", `{`, "", "解析失败", ""},
+		{"图片", "image", `{"image_key":"x"}`, "", "", "x"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			text, note := parseContent("", c.msgType, c.content)
+			text, note, imageKey := parseContent("", c.msgType, c.content)
+			if imageKey != c.wantImageKey {
+				t.Errorf("图片 key = %q，想要 %q", imageKey, c.wantImageKey)
+			}
 			if text != c.wantText {
 				t.Errorf("正文 = %q，想要 %q", text, c.wantText)
 			}
@@ -366,7 +380,7 @@ func TestWhitelistAndP2POnly(t *testing.T) {
 
 func TestUnsupportedTypeGetsNote(t *testing.T) {
 	p, f := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
-	p.onMessage(event("ou_me", "user", "p2p", "image", `{"image_key":"x"}`, "om_i"))
+	p.onMessage(event("ou_me", "user", "p2p", "file", `{}`, "om_f"))
 	if m := f.expectSend(t); !strings.Contains(m.Content, "暂不支持") {
 		t.Fatalf("应回一句暂不支持: %+v", m)
 	}
@@ -485,5 +499,21 @@ func TestJoinCN(t *testing.T) {
 		if got := joinCN(c.parts...); got != c.want {
 			t.Errorf("joinCN(%q)\n= %q\n想要 %q", c.parts, got, c.want)
 		}
+	}
+}
+
+var testLarkPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
+
+func TestInboundImageDownload(t *testing.T) {
+	p, _ := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
+	images, note := p.inboundImages(context.Background(), "om_1", "img_1")
+	if note != "" || len(images) != 1 || images[0].MediaType != "image/png" {
+		t.Fatalf("images=%+v note=%q", images, note)
+	}
+	if string(images[0].Data) != string(testLarkPNG) {
+		t.Fatal("downloaded image bytes differ")
 	}
 }

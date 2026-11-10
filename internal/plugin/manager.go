@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"wen/internal/i18n"
+	"wen/internal/llm"
 )
 
 // 插件来源。
@@ -195,6 +196,11 @@ func (m *Manager) initCtxFor(name string) InitContext {
 	if base := m.ictx.RunTurn; base != nil {
 		ictx.RunTurn = func(ctx context.Context, sessionID, input string) (string, error) {
 			return base(WithTurnOrigin(ctx, name), sessionID, input)
+		}
+	}
+	if base := m.ictx.RunTurnImages; base != nil {
+		ictx.RunTurnImages = func(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error) {
+			return base(WithTurnOrigin(ctx, name), sessionID, input, images)
 		}
 	}
 	if base := m.ictx.Notice; base != nil {

@@ -114,7 +114,12 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	}
 
 	c.typing(ctx, msg, true)
-	final, err := c.cfg.RunTurn(tctx, sid, msg.Text)
+	var final string
+	if len(msg.Images) > 0 && c.cfg.RunTurnImages != nil {
+		final, err = c.cfg.RunTurnImages(tctx, sid, msg.Text, msg.Images)
+	} else {
+		final, err = c.cfg.RunTurn(tctx, sid, msg.Text)
+	}
 	stopPreview() // 必须在正式回复之前：最后一次预览不能落在回复后面
 	c.typing(ctx, msg, false)
 	if err != nil {

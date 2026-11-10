@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -117,6 +118,26 @@ func TestNewRequiresCapabilities(t *testing.T) {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s 时应拒绝构造", name)
 		}
+	}
+}
+
+func TestHandlePassesImagesToRunTurnImages(t *testing.T) {
+	var got []llm.ImagePart
+	c, f := newCore(t, func(context.Context, string, string) (string, error) {
+		t.Fatal("images should use RunTurnImages")
+		return "", nil
+	}, func(cfg *Config) {
+		cfg.RunTurnImages = func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+			got = images
+			return "收到图片", nil
+		}
+	})
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "看图", Images: []llm.ImagePart{{MediaType: "image/png"}}})
+	if m := f.expect(t); !strings.Contains(m.text, "收到图片") {
+		t.Fatalf("reply = %+v", m)
+	}
+	if len(got) != 1 || got[0].MediaType != "image/png" {
+		t.Fatalf("images = %+v", got)
 	}
 }
 
@@ -544,5 +565,40 @@ func TestPushNoticeDisabledByDefault(t *testing.T) {
 	case <-pushed:
 		t.Fatal("开关默认关，不该推送")
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestHandlePureImageMessage(t *testing.T) {
+	var got []llm.ImagePart
+	c, f := newCore(t, func(context.Context, string, string) (string, error) {
+		t.Fatal("image-only message should use RunTurnImages")
+		return "", nil
+	}, func(cfg *Config) {
+		cfg.RunTurnImages = func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+			got = images
+			return "看到了", nil
+		}
+	})
+	c.Handle(context.Background(), Message{UserID: "u1", Images: []llm.ImagePart{{MediaType: "image/png"}}})
+	if m := f.expect(t); !strings.Contains(m.text, "看到了") {
+		t.Fatalf("reply = %+v", m)
+	}
+	if len(got) != 1 {
+		t.Fatalf("images = %+v", got)
+	}
+}
+
+func TestHandleSendsAttachmentNoteWithText(t *testing.T) {
+	c, f := newCore(t, func(context.Context, string, string) (string, error) {
+		return "文字回复", nil
+	}, nil)
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "带图的文字", Note: "图片下载失败"})
+	first := f.expect(t)
+	if first.text != "图片下载失败" {
+		t.Fatalf("first reply = %+v", first)
+	}
+	second := f.expect(t)
+	if second.text != "文字回复" {
+		t.Fatalf("second reply = %+v", second)
 	}
 }
