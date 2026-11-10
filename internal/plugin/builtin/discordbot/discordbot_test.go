@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -27,11 +29,19 @@ type sentMessage struct {
 	replyTo   string
 }
 
+type sentImage struct {
+	channelID string
+	replyTo   string
+	filename  string
+	data      []byte
+}
+
 type fakeDiscord struct {
 	t   *testing.T
 	srv *httptest.Server
 
 	sends      chan sentMessage
+	images     chan sentImage
 	typing     chan string
 	ready      chan struct{}
 	heartbeats chan struct{}
@@ -47,6 +57,7 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 	f := &fakeDiscord{
 		t:          t,
 		sends:      make(chan sentMessage, 32),
+		images:     make(chan sentImage, 8),
 		typing:     make(chan string, 32),
 		ready:      make(chan struct{}, 4),
 		heartbeats: make(chan struct{}, 8),
@@ -93,6 +104,33 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		}
 	})
 	mux.HandleFunc("POST /api/v10/channels/{channel}/messages", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			file, hdr, err := r.FormFile("files[0]")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer file.Close()
+			data, _ := io.ReadAll(file)
+			var payload struct {
+				MessageReference *struct {
+					MessageID string `json:"message_id"`
+				} `json:"message_reference"`
+			}
+			_ = json.Unmarshal([]byte(r.FormValue("payload_json")), &payload)
+			replyTo := ""
+			if payload.MessageReference != nil {
+				replyTo = payload.MessageReference.MessageID
+			}
+			select {
+			case f.images <- sentImage{
+				channelID: r.PathValue("channel"), replyTo: replyTo, filename: hdr.Filename, data: data,
+			}:
+			default:
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "sent-img"})
+			return
+		}
 		var body struct {
 			Content          string `json:"content"`
 			MessageReference *struct {
@@ -537,5 +575,24 @@ func TestInboundImagesReportsTooMany(t *testing.T) {
 	images, note := p.inboundImages(context.Background(), files)
 	if len(images) != 4 || !strings.Contains(note, "4 张") {
 		t.Fatalf("images=%d note=%q", len(images), note)
+	}
+}
+
+func TestOutboundImageUsesMultipart(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "chan1", nil)
+	img := llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testDiscordPNG}
+	if err := (sender{p}).SendImage(context.Background(), "chan1", "msg-3", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+	select {
+	case got := <-f.images:
+		if got.channelID != "chan1" || got.replyTo != "msg-3" || got.filename != "a.png" {
+			t.Fatalf("multipart 内容不符: %+v", got)
+		}
+		if string(got.data) != string(testDiscordPNG) {
+			t.Fatal("上传的图片字节不一致")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待带附件消息超时")
 	}
 }

@@ -2,18 +2,23 @@
 
 [← Plugin overview](README.md)　·　[← Back to README](../../../README.en.md)　·　[中文](../../plugins/tools.md)　·　English
 
-## Basic tools (read_file / web_fetch plugins)
+## Basic tools (read_file / web_fetch / media plugins)
 
-Two plugins with little to say about them, listed here only for completeness. `web_fetch` is on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it.
+These plugins are listed here only for completeness. `web_fetch` and `media` are on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it.
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
 - **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size.
+- **`media`** — sends an image from the working directory back to the current IM chat (`send_image`); see below for the limits and the path confinement.
 
 | Plugin | Setting | Default | Description |
 |---|---|---|---|
 | `read_file` | `max_bytes` | 65536 | The most bytes one read returns |
 | `web_fetch` | `timeout_seconds` | 20 | The longest to wait for a single page |
 | `web_fetch` | `max_bytes` | 65536 | The most bytes extracted from a single page |
+
+## Sending images (media plugin)
+
+`media` is on by default and provides one tool, `send_image`: the model sends a PNG / JPEG / GIF from the working directory (5 MB per image) back to the current IM user. The outlet follows the split-channel router: when a reply is routed to another channel, the image goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. It only works on IM turns started by a real person; calls from the web UI or background turns such as the heartbeat fail with a clear error. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. See [chat channels](im.md) for each channel's upload flow and limits.
 
 ## How command execution is kept safe (exec_command plugin)
 

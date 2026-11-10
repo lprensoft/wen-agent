@@ -64,10 +64,23 @@ type voiceItem struct {
 	Text string `json:"text,omitempty"` // 语音转文字内容（微信侧自带转写）
 }
 
+// cdnMedia 是 CDN 资源的引用：下载参数 + Base64(hex) 的 AES 密钥。
+type cdnMedia struct {
+	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
+	AESKey            string `json:"aes_key,omitempty"`
+	EncryptType       int    `json:"encrypt_type,omitempty"`
+}
+
+type imageItem struct {
+	Media   cdnMedia `json:"media"`
+	MidSize int      `json:"mid_size,omitempty"` // 密文字节数
+}
+
 type messageItem struct {
 	Type      int        `json:"type"` // 1=文本 2=图片 3=语音 4=文件 5=视频
 	TextItem  *textItem  `json:"text_item,omitempty"`
 	VoiceItem *voiceItem `json:"voice_item,omitempty"`
+	ImageItem *imageItem `json:"image_item,omitempty"`
 }
 
 // 消息发起方与状态。

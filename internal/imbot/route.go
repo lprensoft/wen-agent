@@ -173,34 +173,13 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) b
 		return false
 	}
 
-	users := c.binding.UsersFor(sessionID)
-	if len(users) == 0 {
-		known := c.binding.Users()
-		if len(known) != 1 {
-			i18n.Logf(c.cfg.Lang, "log.imbot.no_recipient", "%s: 没有可投递的用户（已知 %d 人，需要恰好 1 人才能自动接入会话）",
-				c.cfg.PluginName, len(known))
-			return false
-		}
-		prev := c.binding.Get(known[0])
-		if err := c.binding.Set(known[0], sessionID); err != nil {
-			i18n.Logf(c.cfg.Lang, "log.imbot.save_binding_failed", "%s: 保存会话映射失败: %v", c.cfg.PluginName, err)
-			return false
-		}
-		if prev != "" && prev != sessionID {
-			// 接管改写了一个已有的绑定：那个用户原本在别的会话里，此刻被搬了过来。
-			// 装了会话锚之后这该是罕见事（各通道本就共用一个会话），留痕是为了万一
-			// 再漂时有迹可循——此前它是完全无声的，表现出来就是「切回来接不上了」。
-			i18n.Logf(c.cfg.Lang, "log.imbot.rebound", "%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
-			c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.rebound",
-				"「%s」上的用户原本在会话 %s 里，已改绑到当前会话。", c.cfg.PluginName, prev))
-		} else {
-			i18n.Logf(c.cfg.Lang, "log.imbot.adopted", "%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
-		}
-		users = known
+	users, ok := c.recipientsFor(ctx, sessionID)
+	if !ok {
+		return false
 	}
 
 	pctx := c.lifeCtx(ctx)
-	ok := false
+	ok = false
 	for _, u := range users {
 		var sent bool
 		if paced {
@@ -213,6 +192,39 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) b
 		}
 	}
 	return ok
+}
+
+// recipientsFor 找出本通道上该会话对应的用户。本通道还没有人绑到这个会话时，
+// 会把「唯一一个跟机器人说过话的用户」接过来——分通道意味着两条通道要落在同一个
+// 会话上，否则两个人格待在两个会话里，可见域分区无从谈起。已知用户不止一个就
+// 放弃，不广播。
+func (c *Core) recipientsFor(ctx context.Context, sessionID string) ([]string, bool) {
+	users := c.binding.UsersFor(sessionID)
+	if len(users) > 0 {
+		return users, true
+	}
+	known := c.binding.Users()
+	if len(known) != 1 {
+		i18n.Logf(c.cfg.Lang, "log.imbot.no_recipient", "%s: 没有可投递的用户（已知 %d 人，需要恰好 1 人才能自动接入会话）",
+			c.cfg.PluginName, len(known))
+		return nil, false
+	}
+	prev := c.binding.Get(known[0])
+	if err := c.binding.Set(known[0], sessionID); err != nil {
+		i18n.Logf(c.cfg.Lang, "log.imbot.save_binding_failed", "%s: 保存会话映射失败: %v", c.cfg.PluginName, err)
+		return nil, false
+	}
+	if prev != "" && prev != sessionID {
+		// 接管改写了一个已有的绑定：那个用户原本在别的会话里，此刻被搬了过来。
+		// 装了会话锚之后该是罕见事（各通道本就共用一个会话），留痕是为了万一
+		// 再漂时有迹可循——此前它是完全无声的，表现出来就是「切回来接不上了」。
+		i18n.Logf(c.cfg.Lang, "log.imbot.rebound", "%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
+		c.notice(ctx, sessionID, i18n.Tf(c.cfg.Lang, "imbot.notice.rebound",
+			"「%s」上的用户原本在会话 %s 里，已改绑到当前会话。", c.cfg.PluginName, prev))
+	} else {
+		i18n.Logf(c.cfg.Lang, "log.imbot.adopted", "%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
+	}
+	return known, true
 }
 
 // lifeCtx 优先用本 Core 自己的生命周期 ctx：转投的调用方是另一条通道的 worker，

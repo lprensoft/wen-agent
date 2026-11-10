@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -36,6 +38,14 @@ type sentMsg struct {
 	} `json:"reply_parameters"`
 }
 
+// sentPhoto 是假服务端收到的一次 sendPhoto。
+type sentPhoto struct {
+	chatID   string
+	replyTo  int64
+	filename string
+	data     []byte
+}
+
 // fakeTG 是 Telegram Bot API 的假服务端。
 type fakeTG struct {
 	srv *httptest.Server
@@ -46,6 +56,8 @@ type fakeTG struct {
 	offsets []int64 // 每次 getUpdates 带来的 offset，用来验证游标推进
 
 	sent chan sentMsg
+
+	photos chan sentPhoto
 
 	// 下一次 sendMessage 的强制结果（用完即弃）
 	failNext atomic.Value // func() (int, string, int) -> code, description, retryAfter
@@ -61,7 +73,7 @@ type draftMsg struct {
 
 func newFakeTG(t *testing.T) *fakeTG {
 	t.Helper()
-	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64)}
+	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64), photos: make(chan sentPhoto, 8)}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /bot"+testToken+"/getUpdates", func(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +117,31 @@ func newFakeTG(t *testing.T) *fakeTG {
 		default:
 		}
 		writeOK(w, map[string]any{"message_id": 1})
+	})
+
+	mux.HandleFunc("POST /bot"+testToken+"/sendPhoto", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, hdr, err := r.FormFile("photo")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		var reply int64
+		var rp struct {
+			MessageID int64 `json:"message_id"`
+		}
+		_ = json.Unmarshal([]byte(r.FormValue("reply_parameters")), &rp)
+		reply = rp.MessageID
+		select {
+		case f.photos <- sentPhoto{chatID: r.FormValue("chat_id"), replyTo: reply, filename: hdr.Filename, data: data}:
+		default:
+		}
+		writeOK(w, map[string]any{"message_id": 2})
 	})
 
 	mux.HandleFunc("POST /bot"+testToken+"/sendMessageDraft", func(w http.ResponseWriter, r *http.Request) {
@@ -506,5 +543,27 @@ func TestInboundImageDownload(t *testing.T) {
 	}
 	if string(images[0].Data) != string(testPNG) {
 		t.Fatal("downloaded image bytes differ")
+	}
+}
+
+func TestOutboundImageUsesSendPhoto(t *testing.T) {
+	p, f := newInited(t, noopTurn, "42", nil)
+	img := llm.ImagePart{Name: "照片.txt", MediaType: "image/png", Data: testPNG}
+	if err := (sender{p}).SendImage(context.Background(), "42", "77", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+	select {
+	case got := <-f.photos:
+		if got.chatID != "42" || got.replyTo != 77 {
+			t.Fatalf("chat_id / reply_to 不符: %+v", got)
+		}
+		if got.filename != "照片.png" {
+			t.Fatalf("扩展名应按 MediaType 校正，得到 %q", got.filename)
+		}
+		if string(got.data) != string(testPNG) {
+			t.Fatal("上传的图片字节不一致")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 sendPhoto 超时")
 	}
 }

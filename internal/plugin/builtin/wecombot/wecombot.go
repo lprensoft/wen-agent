@@ -27,6 +27,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -233,4 +234,8 @@ type sender struct{ p *Plugin }
 
 func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 	s.p.send(ctx, userID, text, replyTo)
+}
+
+func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
+	return s.p.sendImage(ctx, userID, replyTo, img)
 }

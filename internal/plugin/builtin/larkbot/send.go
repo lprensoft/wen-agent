@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"time"
 
 	"wen/internal/i18n"
+	"wen/internal/llm"
 
 	"wen/internal/mdtext"
 )
@@ -64,6 +66,68 @@ func buildPayload(lang, format, text string) (string, string) {
 	}
 	raw, _ := json.Marshal(card)
 	return "interactive", string(raw)
+}
+
+// sendImage 先上传图片拿 image_key，再发一条 msg_type=image 的消息。
+// 上传接口的上限是 10 MB，这里只发已校验过的 5 MB 以内图片。
+func (p *Plugin) sendImage(ctx context.Context, openID, _ string, img llm.ImagePart) error {
+	p.mu.Lock()
+	base, tokens, client := p.apiBase, p.tokens, p.client
+	p.mu.Unlock()
+	if tokens == nil || client == nil {
+		return fmt.Errorf("尚未完成初始化")
+	}
+	token, err := tokens.Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("image_type", "message"); err != nil {
+		return err
+	}
+	fw, err := mw.CreateFormFile("image", img.FileName())
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(img.Data); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/open-apis/im/v1/images", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var env struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ImageKey string `json:"image_key"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("上传图片响应无法解析（HTTP %d）: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if env.Code != 0 {
+		return fmt.Errorf("上传图片返回 code=%d: %s", env.Code, env.Msg)
+	}
+	if env.Data.ImageKey == "" {
+		return fmt.Errorf("上传图片没有返回 image_key")
+	}
+	content, _ := json.Marshal(map[string]string{"image_key": env.Data.ImageKey})
+	return p.sendMessage(ctx, openID, "image", string(content))
 }
 
 // sendMessage 发一条消息给指定 open_id。

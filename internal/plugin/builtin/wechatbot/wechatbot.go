@@ -25,6 +25,7 @@ import (
 	"wen/internal/i18n"
 
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -59,6 +60,7 @@ type Plugin struct {
 	// 凭证（扫码绑定后持久化到 StateDir/credentials.json）
 	creds    credentials
 	stateDir string
+	cdnBase  string // iLink 媒体 CDN 基址；测试可指向本地假服务
 
 	// 运行组件
 	core   *imbot.Core            // 通道无关的分发、命令、会话绑定与确认代理
@@ -178,6 +180,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.creds = creds
 	p.stateDir = ictx.StateDir
+	if p.cdnBase == "" {
+		p.cdnBase = defCDNBase
+	}
 	p.tokens = tokens
 	p.typing = map[string]string{}
 	if p.pauseOnExpired == 0 {
@@ -307,4 +312,8 @@ type sender struct{ p *Plugin }
 
 func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 	s.p.send(ctx, userID, text, replyTo)
+}
+
+func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
+	return s.p.sendImage(ctx, userID, replyTo, img)
 }

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"time"
+
+	"wen/internal/llm"
 )
 
 // apiError 是 Discord REST 返回的非 2xx。RetryAfter 非零表示 429，
@@ -112,4 +115,66 @@ func (p *Plugin) sendMessage(ctx context.Context, channelID, content, replyTo st
 func (p *Plugin) sendTyping(ctx context.Context, channelID string) error {
 	_, err := p.apiDo(ctx, http.MethodPost, "/channels/"+channelID+"/typing", nil)
 	return err
+}
+
+// sendImage 用 multipart 发一条带附件的消息。Discord 单请求上限 25 MiB，
+// 图片只有 5 MB，不需要分片。
+func (p *Plugin) sendImage(ctx context.Context, channelID, replyTo string, img llm.ImagePart) error {
+	p.mu.Lock()
+	client, base, token := p.client, p.apiBase, p.token
+	p.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("discord_bot: 尚未初始化")
+	}
+
+	name := img.FileName()
+	payload := map[string]any{
+		"allowed_mentions": map[string]any{"parse": []string{}},
+		"attachments":      []map[string]any{{"id": 0, "filename": name}},
+	}
+	if replyTo != "" {
+		payload["message_reference"] = map[string]any{
+			"message_id":         replyTo,
+			"channel_id":         channelID,
+			"fail_if_not_exists": false,
+		}
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("payload_json", string(payloadJSON)); err != nil {
+		return err
+	}
+	fw, err := mw.CreateFormFile("files[0]", name)
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(img.Data); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/channels/"+channelID+"/messages", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+	req.Header.Set("User-Agent", "WenBot (https://github.com/lprensoft/wen-agent)")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return parseAPIError(resp, raw)
 }
