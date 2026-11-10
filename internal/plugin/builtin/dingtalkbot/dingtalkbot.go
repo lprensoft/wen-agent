@@ -27,6 +27,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -49,6 +50,7 @@ type Plugin struct {
 	appSecret string
 	robotCode string
 	apiBase   string
+	oapiBase  string // 老 OpenAPI（media/upload）所在域，测试可指向本地假服务
 	whitelist map[string]bool
 	format    string // formatMarkdown / formatPlain
 
@@ -166,6 +168,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.appSecret = appSecret
 	p.robotCode = robotCode
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
+	if p.oapiBase == "" {
+		p.oapiBase = defOAPIBase
+	}
 	p.whitelist = whitelist
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.client = &http.Client{Timeout: apiTimeout}
@@ -227,4 +232,8 @@ type sender struct{ p *Plugin }
 
 func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 	s.p.send(ctx, userID, text)
+}
+
+func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
+	return s.p.sendImage(ctx, userID, replyTo, img)
 }

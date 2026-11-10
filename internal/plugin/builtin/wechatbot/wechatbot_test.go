@@ -2,16 +2,22 @@ package wechatbot
 
 import (
 	"context"
+	"crypto/aes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -24,6 +30,15 @@ type sentWx struct {
 	contextToken string
 	msgType      int
 	msgState     int
+	itemType     int
+	image        *imageItem
+}
+
+// wxUpload 记录一次 CDN 上传：getuploadurl 给出的密钥与收到的密文。
+type wxUpload struct {
+	keyHex  string
+	rawSize int
+	cipher  []byte
 }
 
 type fakeILink struct {
@@ -31,6 +46,7 @@ type fakeILink struct {
 	srv   *httptest.Server
 	inbox chan wxMessage // 注入给 getupdates 的入站消息
 	sends chan sentWx    // sendmessage 捕获
+	media chan wxUpload  // CDN 上传捕获
 
 	qrStatus chan statusResponse // 扫码状态剧本，空时返回 wait
 	qrCount  atomic.Int32        // get_bot_qrcode 被调用的次数
@@ -40,6 +56,10 @@ type fakeILink struct {
 	lastReqBuf     atomic.Value // 最近一次 getupdates 请求携带的游标
 	lastStatusHost atomic.Value // 最近一次查扫码状态打到的主机
 	lifecycle      chan string  // 收到的上线、下线通知（notifystart / notifystop）
+
+	uploadMu   sync.Mutex
+	pendingKey string
+	pendingRaw int
 }
 
 func newFakeILink(t *testing.T) *fakeILink {
@@ -47,6 +67,7 @@ func newFakeILink(t *testing.T) *fakeILink {
 		t:         t,
 		inbox:     make(chan wxMessage, 32),
 		sends:     make(chan sentWx, 32),
+		media:     make(chan wxUpload, 8),
 		lifecycle: make(chan string, 8),
 	}
 	f.qrStatus = make(chan statusResponse, 8)
@@ -120,6 +141,44 @@ func newFakeILink(t *testing.T) *fakeILink {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0, "get_updates_buf": req.GetUpdatesBuf})
 		}
 	})
+	mux.HandleFunc("POST /ilink/bot/getuploadurl", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer TESTTOKEN" {
+			w.WriteHeader(401)
+			return
+		}
+		var req struct {
+			FileKey     string `json:"filekey"`
+			MediaType   int    `json:"media_type"`
+			ToUserID    string `json:"to_user_id"`
+			RawSize     int    `json:"rawsize"`
+			RawMD5      string `json:"rawfilemd5"`
+			FileSize    int    `json:"filesize"`
+			NoNeedThumb bool   `json:"no_need_thumb"`
+			AESKey      string `json:"aeskey"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.MediaType != 1 || req.ToUserID == "" || req.FileKey == "" || req.AESKey == "" || !req.NoNeedThumb {
+			t.Errorf("getuploadurl 参数不符: %+v", req)
+		}
+		f.uploadMu.Lock()
+		f.pendingKey, f.pendingRaw = req.AESKey, req.RawSize
+		f.uploadMu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0, "upload_param": "up-param"})
+	})
+
+	mux.HandleFunc("POST /cdn/upload", func(w http.ResponseWriter, r *http.Request) {
+		cipher, _ := io.ReadAll(r.Body)
+		f.uploadMu.Lock()
+		key, raw := f.pendingKey, f.pendingRaw
+		f.uploadMu.Unlock()
+		select {
+		case f.media <- wxUpload{keyHex: key, rawSize: raw, cipher: cipher}:
+		default:
+		}
+		w.Header().Set("x-encrypted-param", "enc-param")
+		_, _ = w.Write([]byte("ok"))
+	})
+
 	mux.HandleFunc("POST /ilink/bot/sendmessage", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer TESTTOKEN" {
 			w.WriteHeader(401)
@@ -130,8 +189,15 @@ func newFakeILink(t *testing.T) *fakeILink {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		text := ""
-		if len(req.Msg.ItemList) > 0 && req.Msg.ItemList[0].TextItem != nil {
-			text = req.Msg.ItemList[0].TextItem.Text
+		itemType := 0
+		var image *imageItem
+		if len(req.Msg.ItemList) > 0 {
+			item := req.Msg.ItemList[0]
+			itemType = item.Type
+			if item.TextItem != nil {
+				text = item.TextItem.Text
+			}
+			image = item.ImageItem
 		}
 		if req.Msg.ClientID == "" {
 			f.t.Error("sendmessage 缺少 client_id")
@@ -139,6 +205,7 @@ func newFakeILink(t *testing.T) *fakeILink {
 		f.sends <- sentWx{
 			to: req.Msg.ToUserID, text: text, contextToken: req.Msg.ContextToken,
 			msgType: req.Msg.MessageType, msgState: req.Msg.MessageState,
+			itemType: itemType, image: image,
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	})
@@ -234,6 +301,7 @@ func newBoundCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, ext
 
 	p := New()
 	p.pauseOnExpired = 100 * time.Millisecond // 测试不等真的一小时
+	p.cdnBase = f.srv.URL + "/cdn"
 	cfg := map[string]any{"api_base": f.srv.URL, "whitelist": whitelist}
 	for k, v := range extra {
 		cfg[k] = v
@@ -667,5 +735,87 @@ func TestSendPlainWhenConfigured(t *testing.T) {
 	m := f.expectSend(t)
 	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "｜ 引用") {
 		t.Fatalf("纯文本模式应剥掉标记并转换引用: %q", m.text)
+	}
+}
+
+var testWxPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
+
+func decryptWxECB(t *testing.T, keyHex string, ciphertext []byte) []byte {
+	t.Helper()
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		t.Fatalf("密文长度 %d 不是块大小的倍数", len(ciphertext))
+	}
+	out := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(out[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+	pad := int(out[len(out)-1])
+	if pad <= 0 || pad > aes.BlockSize {
+		t.Fatalf("填充长度无效: %d", pad)
+	}
+	return out[:len(out)-pad]
+}
+
+func TestOutboundImageUploadsAndSends(t *testing.T) {
+	p, f, _, _ := newBound(t, echoTurn, "user1")
+	img := llm.ImagePart{Name: "a", MediaType: "image/png", Data: testWxPNG}
+	if err := (sender{p}).SendImage(context.Background(), "user1", "CTX-user1", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	up := <-f.media
+	if up.rawSize != len(testWxPNG) {
+		t.Fatalf("rawsize 不符: %d", up.rawSize)
+	}
+	if got := decryptWxECB(t, up.keyHex, up.cipher); string(got) != string(testWxPNG) {
+		t.Fatal("上传的密文解密后与原图不一致")
+	}
+
+	m := f.expectSend(t)
+	if m.itemType != 2 || m.image == nil || m.contextToken != "CTX-user1" {
+		t.Fatalf("图片消息不符: %+v", m)
+	}
+	if m.image.Media.EncryptQueryParam != "enc-param" || m.image.Media.EncryptType != 1 {
+		t.Fatalf("image_item 引用不符: %+v", m.image.Media)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte(up.keyHex)); m.image.Media.AESKey != want {
+		t.Fatalf("aes_key 应为 base64(hex)，得到 %q", m.image.Media.AESKey)
+	}
+	if m.image.MidSize != len(up.cipher) {
+		t.Fatalf("mid_size=%d，密文长度 %d", m.image.MidSize, len(up.cipher))
+	}
+}
+
+func TestOutboundImageRequiresContextToken(t *testing.T) {
+	p, _, _, _ := newBound(t, echoTurn, "user1")
+	err := (sender{p}).SendImage(context.Background(), "user1", "",
+		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testWxPNG})
+	if err == nil || !strings.Contains(err.Error(), "context_token") {
+		t.Fatalf("缺 context_token 应拒绝，得到 %v", err)
+	}
+}
+
+func TestOutboundImageUsesSavedContextToken(t *testing.T) {
+	p, f, _, _ := newBound(t, echoTurn, "user1")
+	if err := p.tokens.Set("user1", "CTX-saved"); err != nil {
+		t.Fatal(err)
+	}
+	img := llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testWxPNG}
+	if err := (sender{p}).SendImage(context.Background(), "user1", "", img); err != nil {
+		t.Fatalf("已保存凭据时应能主动发送: %v", err)
+	}
+	if m := f.expectSend(t); m.contextToken != "CTX-saved" {
+		t.Fatalf("应使用持久化的 context_token，得到 %q", m.contextToken)
 	}
 }

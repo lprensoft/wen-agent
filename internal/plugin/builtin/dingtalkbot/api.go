@@ -16,6 +16,10 @@ const (
 	tokenPath    = "/v1.0/oauth2/accessToken"
 	sendPath     = "/v1.0/robot/oToMessages/batchSend"
 	downloadPath = "/v1.0/robot/messageFiles/download"
+	uploadPath   = "/media/upload"
+
+	// defOAPIBase 是老版 OpenAPI 域：媒体上传仍只在这里提供。
+	defOAPIBase = "https://oapi.dingtalk.com"
 
 	// tokenRefreshMargin 提前刷新，避免卡在过期边界上。
 	tokenRefreshMargin = 5 * time.Minute
@@ -79,16 +83,21 @@ func (t *tokenSource) invalidate() {
 // sampleText——纯文本模式不能让客户端再按 Markdown 渲染内容。token 失效时
 // 刷新一次再重试。
 func (p *Plugin) sendMessage(ctx context.Context, userID, title, text string, plain bool) error {
-	p.mu.Lock()
-	tokens, client, base, robotCode := p.tokens, p.client, p.apiBase, p.robotCode
-	p.mu.Unlock()
-
 	msgKey := "sampleMarkdown"
 	param := map[string]string{"title": title, "text": text}
 	if plain {
 		msgKey = "sampleText"
 		param = map[string]string{"content": text}
 	}
+	return p.sendRobot(ctx, userID, msgKey, param)
+}
+
+// sendRobot 用给定的消息模板给单个用户发一条消息。
+func (p *Plugin) sendRobot(ctx context.Context, userID, msgKey string, param map[string]string) error {
+	p.mu.Lock()
+	tokens, client, base, robotCode := p.tokens, p.client, p.apiBase, p.robotCode
+	p.mu.Unlock()
+
 	paramRaw, err := json.Marshal(param)
 	if err != nil {
 		return err

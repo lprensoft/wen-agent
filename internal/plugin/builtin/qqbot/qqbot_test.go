@@ -29,18 +29,27 @@ var testPNG = func() []byte {
 // ---------- 假 QQ 开放平台：鉴权 + 网关 + 发消息 API 三合一 ----------
 
 type sentMsg struct {
-	openid  string
-	content string
-	msgType int
-	msgID   string
-	seq     int
+	openid   string
+	content  string
+	msgType  int
+	msgID    string
+	seq      int
+	fileInfo string
+}
+
+type uploadReq struct {
+	openid   string
+	fileType int
+	fileName string
+	data     []byte
 }
 
 type fakeQQ struct {
-	t      *testing.T
-	srv    *httptest.Server
-	sends  chan sentMsg
-	typing chan sentMsg // msg_type=6 的「正在输入」单独收，不混进正文
+	t       *testing.T
+	srv     *httptest.Server
+	sends   chan sentMsg
+	typing  chan sentMsg // msg_type=6 的「正在输入」单独收，不混进正文
+	uploads chan uploadReq
 
 	mu             sync.Mutex
 	conn           *websocket.Conn
@@ -53,7 +62,10 @@ type fakeQQ struct {
 }
 
 func newFakeQQ(t *testing.T) *fakeQQ {
-	f := &fakeQQ{t: t, sends: make(chan sentMsg, 32), typing: make(chan sentMsg, 32), ready: make(chan struct{}, 4)}
+	f := &fakeQQ{
+		t: t, sends: make(chan sentMsg, 32), typing: make(chan sentMsg, 32),
+		uploads: make(chan uploadReq, 8), ready: make(chan struct{}, 4),
+	}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /app/getAppAccessToken", func(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +116,22 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 			_, _ = w.Write(testPNG)
 		}
 	})
+	mux.HandleFunc("POST /v2/users/{openid}/files", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			FileType int    `json:"file_type"`
+			FileName string `json:"file_name"`
+			FileData string `json:"file_data"`
+			SrvSend  bool   `json:"srv_send_msg"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		data, _ := base64.StdEncoding.DecodeString(body.FileData)
+		select {
+		case f.uploads <- uploadReq{openid: r.PathValue("openid"), fileType: body.FileType, fileName: body.FileName, data: data}:
+		default:
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"file_info": "f-info-1", "ttl": 3600})
+	})
+
 	mux.HandleFunc("POST /v2/users/{openid}/messages", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Content  string `json:"content"`
@@ -111,9 +139,10 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 			Markdown *struct {
 				Content string `json:"content"`
 			} `json:"markdown"`
-			MsgID    string `json:"msg_id"`
-			MsgSeq   int    `json:"msg_seq"`
-			IsWakeup bool   `json:"is_wakeup"`
+			Media    map[string]string `json:"media"`
+			MsgID    string            `json:"msg_id"`
+			MsgSeq   int               `json:"msg_seq"`
+			IsWakeup bool              `json:"is_wakeup"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.MsgType == 6 {
@@ -142,7 +171,10 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 		if body.Markdown != nil {
 			content = body.Markdown.Content
 		}
-		f.sends <- sentMsg{openid: r.PathValue("openid"), content: content, msgType: body.MsgType, msgID: body.MsgID, seq: body.MsgSeq}
+		f.sends <- sentMsg{
+			openid: r.PathValue("openid"), content: content, msgType: body.MsgType,
+			msgID: body.MsgID, seq: body.MsgSeq, fileInfo: body.Media["file_info"],
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "out-1"})
 	})
 	f.srv = httptest.NewServer(mux)
@@ -892,5 +924,40 @@ func TestNonImageAttachmentGetsNote(t *testing.T) {
 	m := f.expectSend(t)
 	if !strings.Contains(m.content, "暂不支持该消息类型") {
 		t.Fatalf("非图片附件应回提示: %+v", m)
+	}
+}
+
+// ---------- 出站图片 ----------
+
+func TestOutboundImageUploadsThenSendsRichMedia(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	img := llm.ImagePart{Name: "a", MediaType: "image/png", Data: testPNG}
+	if err := (sender{p}).SendImage(context.Background(), "user1", "msg-7", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	up := <-f.uploads
+	if up.openid != "user1" || up.fileType != 1 || up.fileName != "a.png" {
+		t.Fatalf("上传参数不符: %+v", up)
+	}
+	if string(up.data) != string(testPNG) {
+		t.Fatal("上传的图片字节不一致")
+	}
+
+	m := f.expectSend(t)
+	if m.msgType != 7 || m.fileInfo != "f-info-1" {
+		t.Fatalf("应发 msg_type=7 与 file_info: %+v", m)
+	}
+	if m.msgID != "msg-7" || m.seq <= 0 {
+		t.Fatalf("应挂在入站消息上被动回复: %+v", m)
+	}
+}
+
+func TestOutboundImageRejectsGIF(t *testing.T) {
+	p, _, _ := newInited(t, noopTurn, "user1")
+	err := (sender{p}).SendImage(context.Background(), "user1", "msg-7",
+		llm.ImagePart{Name: "a.gif", MediaType: "image/gif", Data: testPNG})
+	if err == nil || !strings.Contains(err.Error(), "GIF") {
+		t.Fatalf("QQ 应拒绝 GIF，得到 %v", err)
 	}
 }

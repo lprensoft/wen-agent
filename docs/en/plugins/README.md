@@ -11,6 +11,7 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | Group | Plugin | In one line | Default |
 |---|---|---|---|
 | [Basic tools](tools.md) | `read_file` | Reads a local text file | off |
+| | `media` | Sends an image from the working directory back to the current IM chat | on |
 | | `web_fetch` | Fetches the text of a web page | on |
 | | `exec_command` | Runs commands, intercepting destructive ones for a human to confirm | off |
 | [Memory and search](memory.md) | `memory` | Long-term memory across sessions: automatic distillation, revision on contradiction, a daily timeline, optional forgetting | on |

@@ -29,6 +29,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -113,7 +114,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "bot_token", Label: "Bot Token", Type: plugin.FieldString, Default: "",
-			Description: "OAuth & Permissions 安装应用后得到的 Bot User OAuth Token，形如 xoxb-…。需要 chat:write、im:history 与 files:read（下载图片；改权限后要重新安装应用）。只保存在本机，不会上传到任何地方",
+			Description: "OAuth & Permissions 安装应用后得到的 Bot User OAuth Token，形如 xoxb-…。需要 chat:write、im:history、files:read（下载图片）与 files:write（发送图片；改权限后要重新安装应用）。只保存在本机，不会上传到任何地方",
 		},
 		imbot.WhitelistField("DM channel 白名单",
 			"每行一个 Slack 私聊频道 ID（D 开头）。只响应名单内频道；留空拒绝所有人。"+
@@ -244,6 +245,10 @@ type sender struct{ p *Plugin }
 
 func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 	s.p.send(ctx, userID, text)
+}
+
+func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
+	return s.p.sendImage(ctx, userID, replyTo, img)
 }
 
 // buildProxy 按代理配置造 Transport 与 WebSocket 用的代理 URL。

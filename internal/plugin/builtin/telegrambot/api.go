@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -73,7 +74,52 @@ func (p *Plugin) apiCall(ctx context.Context, client *http.Client, method string
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return decodeAPIResult(method, raw, resp.StatusCode, out)
+}
 
+// apiCallMultipart 以 multipart/form-data 调一次 Bot API（发送文件用）。
+func (p *Plugin) apiCallMultipart(ctx context.Context, client *http.Client, method string, fields map[string]string, fileField, fileName string, fileData []byte, out any) error {
+	p.mu.Lock()
+	base, token := p.apiBase, p.token
+	p.mu.Unlock()
+	if token == "" {
+		return fmt.Errorf("尚未配置 Bot Token")
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	fw, err := mw.CreateFormFile(fileField, fileName)
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(fileData); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/bot"+token+"/"+method, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return decodeAPIResult(method, raw, resp.StatusCode, out)
+}
+
+// decodeAPIResult 解析 Bot API 的统一信封。
+func decodeAPIResult(method string, raw []byte, status int, out any) error {
 	var env struct {
 		OK          bool            `json:"ok"`
 		Result      json.RawMessage `json:"result"`
@@ -84,12 +130,12 @@ func (p *Plugin) apiCall(ctx context.Context, client *http.Client, method string
 		} `json:"parameters"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("%s 响应无法解析（HTTP %d）: %s", method, resp.StatusCode, truncate(string(raw), 200))
+		return fmt.Errorf("%s 响应无法解析（HTTP %d）: %s", method, status, truncate(string(raw), 200))
 	}
 	if !env.OK {
 		code := env.ErrorCode
 		if code == 0 {
-			code = resp.StatusCode
+			code = status
 		}
 		return &apiError{Code: code, Description: env.Description, RetryAfter: env.Parameters.RetryAfter}
 	}

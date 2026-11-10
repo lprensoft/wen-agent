@@ -68,6 +68,7 @@ type outboundFrame struct {
 type wsResponse struct {
 	errcode int
 	errmsg  string
+	body    json.RawMessage // 上传类请求的回执带 body（upload_id / media_id）
 }
 
 type wsResult struct {
@@ -411,7 +412,7 @@ func (p *Plugin) readLoop(w *wsConn, gate *callbackGate, queue *imbot.OrderedQue
 			}
 		default:
 			if f.Headers.ReqID != "" {
-				w.respond(f.Headers.ReqID, wsResult{resp: wsResponse{errcode: f.Errcode, errmsg: f.Errmsg}})
+				w.respond(f.Headers.ReqID, wsResult{resp: wsResponse{errcode: f.Errcode, errmsg: f.Errmsg, body: f.Body}})
 			}
 		}
 	}

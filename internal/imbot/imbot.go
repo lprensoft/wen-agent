@@ -37,6 +37,13 @@ type Sender interface {
 	Send(ctx context.Context, userID, text, replyTo string)
 }
 
+// ImageSender 是 Sender 的可选能力：把一张图片发给指定用户。replyTo 是本轮
+// 入站消息的回复凭据，通道应尽量挂在它上面做被动回复；为空表示主动发送。
+// 返回错误是因为图片发送失败时模型需要知道，不像文本那样可以静默丢弃。
+type ImageSender interface {
+	SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error
+}
+
 // Message 是一条已归一化的入站消息。
 type Message struct {
 	UserID  string // 通道内的用户标识（QQ openid / 微信 xxx@im.wechat / Telegram chat_id / 飞书 open_id）

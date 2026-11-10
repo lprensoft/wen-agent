@@ -2,6 +2,7 @@ package telegrambot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 
 	"wen/internal/mdtext"
 )
@@ -80,6 +82,26 @@ func (p *Plugin) send(ctx context.Context, chatID, text, replyTo string) {
 		// 只有第一段挂在原消息上回复，后续段落各自独立，免得刷一屏引用
 		replyTo = ""
 	}
+}
+
+// sendImage 用 sendPhoto 发一张图。照片上传上限 10 MB，这里只发工作目录里
+// 已校验过的 PNG / JPEG / GIF（单张 5 MB），不会触发分片上传。
+func (p *Plugin) sendImage(ctx context.Context, chatID, replyTo string, img llm.ImagePart) error {
+	p.mu.Lock()
+	client := p.client
+	p.mu.Unlock()
+
+	fields := map[string]string{"chat_id": chatID}
+	if replyTo != "" {
+		if id, err := strconv.ParseInt(replyTo, 10, 64); err == nil {
+			raw, _ := json.Marshal(map[string]any{
+				"message_id":                  id,
+				"allow_sending_without_reply": true,
+			})
+			fields["reply_parameters"] = string(raw)
+		}
+	}
+	return p.apiCallMultipart(ctx, client, "sendPhoto", fields, "photo", img.FileName(), img.Data, nil)
 }
 
 // sendMessage 发一条消息。parseMode 为空表示纯文本。

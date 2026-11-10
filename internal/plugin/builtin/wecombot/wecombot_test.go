@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -61,15 +62,25 @@ type sentFrame struct {
 	content  string
 	streamID string
 	finish   bool
+	msgType  string
+	mediaID  string
+}
+
+// uploadEvent 记录一次分片上传的关键参数。
+type uploadEvent struct {
+	cmd      string
+	filename string
+	chunk    []byte
 }
 
 type fakeWeCom struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	sends chan sentFrame
-	pings chan struct{}
-	ready chan struct{}
+	sends   chan sentFrame
+	pings   chan struct{}
+	ready   chan struct{}
+	uploads chan uploadEvent
 
 	writeMu sync.Mutex
 
@@ -84,10 +95,11 @@ type fakeWeCom struct {
 
 func newFakeWeCom(t *testing.T) *fakeWeCom {
 	f := &fakeWeCom{
-		t:     t,
-		sends: make(chan sentFrame, 32),
-		pings: make(chan struct{}, 16),
-		ready: make(chan struct{}, 4),
+		t:       t,
+		sends:   make(chan sentFrame, 32),
+		pings:   make(chan struct{}, 16),
+		ready:   make(chan struct{}, 4),
+		uploads: make(chan uploadEvent, 16),
 	}
 	up := websocket.Upgrader{}
 	encrypted := encryptImage(t)
@@ -158,6 +170,25 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 				continue
 			}
 			switch frame.Cmd {
+			case cmdUploadInit:
+				var body struct {
+					Filename string `json:"filename"`
+				}
+				_ = json.Unmarshal(frame.Body, &body)
+				f.uploads <- uploadEvent{cmd: cmdUploadInit, filename: body.Filename}
+				f.ackBody(frame.Headers.ReqID, 0, map[string]any{"upload_id": "up-1"})
+			case cmdUploadChunk:
+				var body struct {
+					ChunkIndex int    `json:"chunk_index"`
+					Base64Data string `json:"base64_data"`
+				}
+				_ = json.Unmarshal(frame.Body, &body)
+				data, _ := base64.StdEncoding.DecodeString(body.Base64Data)
+				f.uploads <- uploadEvent{cmd: cmdUploadChunk, chunk: data}
+				f.ackBody(frame.Headers.ReqID, 0, nil)
+			case cmdUploadFinish:
+				f.uploads <- uploadEvent{cmd: cmdUploadFinish}
+				f.ackBody(frame.Headers.ReqID, 0, map[string]any{"media_id": "media-1"})
 			case cmdPing:
 				select {
 				case f.pings <- struct{}{}:
@@ -173,6 +204,7 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 				var body struct {
 					ChatID   string `json:"chatid"`
 					ChatType int    `json:"chat_type"`
+					MsgType  string `json:"msgtype"`
 					Markdown struct {
 						Content string `json:"content"`
 					} `json:"markdown"`
@@ -181,6 +213,9 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 						Finish  bool   `json:"finish"`
 						Content string `json:"content"`
 					} `json:"stream"`
+					Image struct {
+						MediaID string `json:"media_id"`
+					} `json:"image"`
 				}
 				_ = json.Unmarshal(frame.Body, &body)
 				kind, content := "reply", body.Stream.Content
@@ -191,11 +226,12 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 					kind: kind, reqID: frame.Headers.ReqID,
 					chatID: body.ChatID, chatType: body.ChatType, content: content,
 					streamID: body.Stream.ID, finish: body.Stream.Finish,
+					msgType: body.MsgType, mediaID: body.Image.MediaID,
 				}
 				f.mu.Lock()
 				fail := f.failSends
 				hold := false
-				if frame.Cmd == cmdRespond && f.holdAck > 0 {
+				if (frame.Cmd == cmdRespond || frame.Cmd == cmdSend) && f.holdAck > 0 {
 					hold = true
 					f.holdAck--
 				}
@@ -229,11 +265,19 @@ func (f *fakeWeCom) write(v any) {
 }
 
 func (f *fakeWeCom) ack(reqID string, errcode int) {
-	f.write(map[string]any{
+	f.ackBody(reqID, errcode, nil)
+}
+
+func (f *fakeWeCom) ackBody(reqID string, errcode int, body any) {
+	frame := map[string]any{
 		"headers": map[string]any{"req_id": reqID},
 		"errcode": errcode,
 		"errmsg":  "ok",
-	})
+	}
+	if body != nil {
+		frame["body"] = body
+	}
+	f.write(frame)
 }
 
 func (f *fakeWeCom) pushCallback(msgID, reqID, chatType, userID, msgType string, body map[string]any) {
@@ -824,5 +868,92 @@ func TestInitRequiresCredentials(t *testing.T) {
 	err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"bot_id": "123"})
 	if err == nil {
 		t.Fatal("缺 Secret 时应拒绝启用")
+	}
+}
+
+func TestOutboundImageTimeoutReportsUnconfirmed(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil, func(p *Plugin) {
+		p.ackWait = 50 * time.Millisecond
+	})
+	f.mu.Lock()
+	f.holdAck = 1
+	f.mu.Unlock()
+
+	err := (sender{p}).SendImage(context.Background(), "user1", "cb-1",
+		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
+	if err == nil || !strings.Contains(err.Error(), "没有确认") || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+		t.Fatalf("回执超时应报告送达未知，得到 %v", err)
+	}
+}
+
+func TestOutboundImageActiveTimeoutReportsUnconfirmed(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil, func(p *Plugin) {
+		p.ackWait = 50 * time.Millisecond
+	})
+	f.mu.Lock()
+	f.holdAck = 1
+	f.mu.Unlock()
+
+	err := (sender{p}).SendImage(context.Background(), "user1", "",
+		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
+	if err == nil || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+		t.Fatalf("主动发送回执超时应报告送达未知，得到 %v", err)
+	}
+}
+
+func TestOutboundImageStaleFallbackTimeoutReportsUnconfirmed(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil, func(p *Plugin) {
+		p.ackWait = 50 * time.Millisecond
+	})
+	w := p.connSnapshot()
+	if w == nil {
+		t.Fatal("长连接尚未建立")
+	}
+	// 让被动回复先撞上「req_id 不可复用」，被迫走主动推送；再让主动推送也不回执。
+	w.mu.Lock()
+	w.stale["cb-1"] = struct{}{}
+	w.mu.Unlock()
+	f.mu.Lock()
+	f.holdAck = 1
+	f.mu.Unlock()
+
+	err := (sender{p}).SendImage(context.Background(), "user1", "cb-1",
+		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
+	if err == nil || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+		t.Fatalf("回退主动推送后回执超时也应报告送达未知，得到 %v", err)
+	}
+}
+
+func TestOutboundImageUploadsChunksThenReplies(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil)
+	img := llm.ImagePart{Name: "a", MediaType: "image/png", Data: testPNG}
+	if err := (sender{p}).SendImage(context.Background(), "user1", "cb-1", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	for _, want := range []string{cmdUploadInit, cmdUploadChunk, cmdUploadFinish} {
+		select {
+		case ev := <-f.uploads:
+			if ev.cmd != want {
+				t.Fatalf("上传顺序不对：先收到 %s，期望 %s", ev.cmd, want)
+			}
+			switch ev.cmd {
+			case cmdUploadInit:
+				if ev.filename != "a.png" {
+					t.Fatalf("上传文件名不符: %q", ev.filename)
+				}
+			case cmdUploadChunk:
+				if string(ev.chunk) != string(testPNG) {
+					t.Fatal("上传的分片内容不一致")
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("等待 %s 超时", want)
+		}
+	}
+
+	m := f.expectSend(t)
+	if m.kind != "reply" || m.reqID != "cb-1" || m.msgType != "image" || m.mediaID != "media-1" {
+		t.Fatalf("图片回复不符: %+v", m)
 	}
 }

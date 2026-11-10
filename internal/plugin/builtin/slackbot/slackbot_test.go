@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -27,13 +28,21 @@ type sentMsg struct {
 	mrkdwn  bool
 }
 
+type sentImage struct {
+	filename string
+	data     []byte
+	channel  string
+	fileID   string
+}
+
 type fakeSlack struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	sends chan sentMsg
-	acks  chan string
-	ready chan struct{}
+	sends  chan sentMsg
+	images chan sentImage
+	acks   chan string
+	ready  chan struct{}
 
 	writeMu sync.Mutex
 
@@ -47,10 +56,11 @@ type fakeSlack struct {
 
 func newFakeSlack(t *testing.T) *fakeSlack {
 	f := &fakeSlack{
-		t:     t,
-		sends: make(chan sentMsg, 64),
-		acks:  make(chan string, 64),
-		ready: make(chan struct{}, 4),
+		t:      t,
+		sends:  make(chan sentMsg, 64),
+		images: make(chan sentImage, 8),
+		acks:   make(chan string, 64),
+		ready:  make(chan struct{}, 4),
 	}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
@@ -99,6 +109,58 @@ func newFakeSlack(t *testing.T) *fakeSlack {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.sends <- sentMsg{channel: body.Channel, text: body.Text, mrkdwn: body.Mrkdwn}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "ts": "1.2", "channel": body.Channel})
+	})
+
+	mux.HandleFunc("/files.getUploadURLExternal", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid_auth"})
+			return
+		}
+		_ = r.ParseForm()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":         true,
+			"upload_url": f.srv.URL + "/upload/F123",
+			"file_id":    "F123",
+		})
+	})
+
+	mux.HandleFunc("/upload/{id}", func(w http.ResponseWriter, r *http.Request) {
+		file, hdr, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		select {
+		case f.images <- sentImage{filename: hdr.Filename, data: data}:
+		default:
+		}
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/files.completeUploadExternal", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid_auth"})
+			return
+		}
+		var body struct {
+			Files []struct {
+				ID string `json:"id"`
+			} `json:"files"`
+			ChannelID string `json:"channel_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Files) > 0 {
+			select {
+			case f.images <- sentImage{channel: body.ChannelID, fileID: body.Files[0].ID}:
+			default:
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    true,
+			"files": []map[string]string{{"id": "F123", "title": "a.png"}},
+		})
 	})
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -671,5 +733,22 @@ func TestSlackFileURLTrusted(t *testing.T) {
 		if got := slackFileURLTrusted(raw); got != want {
 			t.Errorf("slackFileURLTrusted(%q) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+func TestOutboundImageUsesExternalUpload(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "D1", nil)
+	img := llm.ImagePart{Name: "a", MediaType: "image/png", Data: testSlackPNG}
+	if err := (sender{p}).SendImage(context.Background(), "D1", "", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	upload := <-f.images
+	if upload.filename != "a.png" || string(upload.data) != string(testSlackPNG) {
+		t.Fatalf("上传内容不符: %+v", upload)
+	}
+	complete := <-f.images
+	if complete.fileID != "F123" || complete.channel != "D1" {
+		t.Fatalf("完成上传参数不符: %+v", complete)
 	}
 }

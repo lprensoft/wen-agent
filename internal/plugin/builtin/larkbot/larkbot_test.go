@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -32,15 +34,22 @@ type sentMsg struct {
 
 // fakeLark 是飞书开放平台的假服务端。
 type fakeLark struct {
-	srv    *httptest.Server
-	sent   chan sentMsg
-	tokens atomic.Int64 // 取 token 的次数，用来验证缓存
-	expire atomic.Int64 // 下发的 token 有效期（秒）
+	srv      *httptest.Server
+	sent     chan sentMsg
+	uploaded chan uploadedImage
+	tokens   atomic.Int64 // 取 token 的次数，用来验证缓存
+	expire   atomic.Int64 // 下发的 token 有效期（秒）
+}
+
+type uploadedImage struct {
+	filename  string
+	imageType string
+	data      []byte
 }
 
 func newFakeLark(t *testing.T) *fakeLark {
 	t.Helper()
-	f := &fakeLark{sent: make(chan sentMsg, 32)}
+	f := &fakeLark{sent: make(chan sentMsg, 32), uploaded: make(chan uploadedImage, 8)}
 	f.expire.Store(7200)
 	mux := http.NewServeMux()
 
@@ -57,6 +66,26 @@ func newFakeLark(t *testing.T) *fakeLark {
 		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(testLarkPNG)
+	})
+
+	mux.HandleFunc("POST /open-apis/im/v1/images", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "no auth", http.StatusUnauthorized)
+			return
+		}
+		file, hdr, err := r.FormFile("image")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		select {
+		case f.uploaded <- uploadedImage{filename: hdr.Filename, imageType: r.FormValue("image_type"), data: data}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":0,"msg":"ok","data":{"image_key":"img-key-1"}}`)
 	})
 
 	mux.HandleFunc("POST /open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -515,5 +544,22 @@ func TestInboundImageDownload(t *testing.T) {
 	}
 	if string(images[0].Data) != string(testLarkPNG) {
 		t.Fatal("downloaded image bytes differ")
+	}
+}
+
+func TestOutboundImageUploadsThenSends(t *testing.T) {
+	p, f := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
+	img := llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testLarkPNG}
+	if err := (sender{p}).SendImage(context.Background(), "ou_me", "", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	up := <-f.uploaded
+	if up.filename != "a.png" || up.imageType != "message" || string(up.data) != string(testLarkPNG) {
+		t.Fatalf("上传内容不符: %+v", up)
+	}
+	m := f.expectSend(t)
+	if m.ReceiveID != "ou_me" || m.MsgType != "image" || !strings.Contains(m.Content, "img-key-1") {
+		t.Fatalf("发送的图片消息不符: %+v", m)
 	}
 }

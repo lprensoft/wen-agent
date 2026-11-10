@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -33,6 +34,7 @@ type sentMsg struct {
 	msgKey    string
 	title     string
 	text      string
+	photoURL  string
 }
 
 type ackMsg struct {
@@ -41,13 +43,20 @@ type ackMsg struct {
 	data      string
 }
 
+type uploadedMedia struct {
+	filename string
+	kind     string
+	data     []byte
+}
+
 type fakeDingTalk struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	sends chan sentMsg
-	acks  chan ackMsg
-	ready chan struct{}
+	sends   chan sentMsg
+	uploads chan uploadedMedia
+	acks    chan ackMsg
+	ready   chan struct{}
 
 	writeMu sync.Mutex
 
@@ -62,10 +71,11 @@ type fakeDingTalk struct {
 
 func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 	f := &fakeDingTalk{
-		t:     t,
-		sends: make(chan sentMsg, 64),
-		acks:  make(chan ackMsg, 64),
-		ready: make(chan struct{}, 4),
+		t:       t,
+		sends:   make(chan sentMsg, 64),
+		uploads: make(chan uploadedMedia, 8),
+		acks:    make(chan ackMsg, 64),
+		ready:   make(chan struct{}, 4),
 	}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
@@ -125,9 +135,10 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		var param struct {
-			Title   string `json:"title"`
-			Text    string `json:"text"`
-			Content string `json:"content"`
+			Title    string `json:"title"`
+			Text     string `json:"text"`
+			Content  string `json:"content"`
+			PhotoURL string `json:"photoURL"`
 		}
 		_ = json.Unmarshal([]byte(body.MsgParam), &param)
 		content := param.Text
@@ -140,7 +151,7 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 		}
 		f.sends <- sentMsg{
 			userID: userID, robotCode: body.RobotCode, msgKey: body.MsgKey,
-			title: param.Title, text: content,
+			title: param.Title, text: content, photoURL: param.PhotoURL,
 		}
 
 		resp := map[string]any{"processQueryKey": "q1"}
@@ -181,6 +192,25 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 		default:
 			_, _ = w.Write(testPNG)
 		}
+	})
+
+	mux.HandleFunc("/media/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "token123" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"errcode": 40014, "errmsg": "invalid access_token"})
+			return
+		}
+		file, hdr, err := r.FormFile("media")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		select {
+		case f.uploads <- uploadedMedia{filename: hdr.Filename, kind: r.FormValue("type"), data: data}:
+		default:
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"errcode": 0, "errmsg": "ok", "media_id": "media-1", "type": "image"})
 	})
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -328,6 +358,7 @@ func newInitedTurn(t *testing.T, runTurn plugin.RunTurnFunc, runTurnImages plugi
 	for _, tweak := range tweaks {
 		tweak(p)
 	}
+	p.oapiBase = f.srv.URL
 	ictx := plugin.InitContext{
 		StateDir:      t.TempDir(),
 		Sessions:      store,
@@ -731,5 +762,22 @@ func TestRichTextImageTooManyKeepsFirstFour(t *testing.T) {
 	}
 	if got != 4 {
 		t.Fatalf("应只取前四张，实际 %d", got)
+	}
+}
+
+func TestOutboundImageUploadsThenSends(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil)
+	img := llm.ImagePart{Name: "a", MediaType: "image/png", Data: testPNG}
+	if err := (sender{p}).SendImage(context.Background(), "user1", "", img); err != nil {
+		t.Fatalf("SendImage: %v", err)
+	}
+
+	up := <-f.uploads
+	if up.filename != "a.png" || up.kind != "image" || string(up.data) != string(testPNG) {
+		t.Fatalf("上传内容不符: %+v", up)
+	}
+	m := f.expectSend(t)
+	if m.msgKey != "sampleImageMsg" || m.photoURL != "media-1" || m.userID != "user1" {
+		t.Fatalf("图片消息不符: %+v", m)
 	}
 }

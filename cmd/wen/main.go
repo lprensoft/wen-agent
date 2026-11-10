@@ -36,6 +36,7 @@ import (
 	"wen/internal/plugin/builtin/health"
 	"wen/internal/plugin/builtin/heartbeat"
 	"wen/internal/plugin/builtin/larkbot"
+	"wen/internal/plugin/builtin/media"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/mood"
 	"wen/internal/plugin/builtin/people"
@@ -359,7 +360,7 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
 	return []plugin.Plugin{
-		readfile.New(), execcmd.New(), webfetch.New(),
+		readfile.New(), execcmd.New(), webfetch.New(), media.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义；growth 紧跟两套人格设定：成长是长在设定之上的一层，
 		// 它的 [这些日子的变化] 读起来是「设定之后的补充」；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，

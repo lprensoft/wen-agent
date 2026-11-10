@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"path/filepath"
+	"strings"
 )
 
 // Role 常量与 OpenAI 协议一致。
@@ -45,6 +47,45 @@ type ImagePart struct {
 
 func imageDataURL(img ImagePart) string {
 	return "data:" + img.MediaType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
+}
+
+// FileName 给出上传时用的文件名：保留原名的可读部分，扩展名按实际 MediaType
+// 校正。各 IM 通道对文件名与扩展名的要求不同，但都不该由模型随手给的名字决定
+// 上传内容的类型。
+func (img ImagePart) FileName() string {
+	name := filepath.Base(strings.TrimSpace(img.Name))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "image"
+	}
+	origExt := filepath.Ext(name)
+	ext := strings.ToLower(origExt)
+	stem := strings.TrimSuffix(name, origExt)
+	if stem == "" {
+		stem = "image"
+	}
+	switch strings.ToLower(img.MediaType) {
+	case "image/png":
+		if ext == ".png" {
+			return stem + origExt
+		}
+		return stem + ".png"
+	case "image/jpeg":
+		if ext == ".jpg" || ext == ".jpeg" {
+			return stem + origExt
+		}
+		return stem + ".jpg"
+	case "image/gif":
+		if ext == ".gif" {
+			return stem + origExt
+		}
+		return stem + ".gif"
+	default:
+		switch ext {
+		case ".png", ".jpg", ".jpeg", ".gif":
+			return stem + origExt
+		}
+		return stem + ".jpg"
+	}
 }
 
 // ReasoningBlock 是一个原样保留的思考块。Anthropic 要求带签名原样回传，
