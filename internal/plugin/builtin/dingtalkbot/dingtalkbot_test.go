@@ -2,6 +2,7 @@ package dingtalkbot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,9 +14,16 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
+
+var testPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
 
 // ---------- 假钉钉：Stream 接入点 + WebSocket + OpenAPI ----------
 
@@ -143,6 +151,36 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 			resp["flowControlledStaffIdList"] = []string{userID}
 		}
 		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/v1.0/robot/messageFiles/download", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-acs-dingtalk-access-token") != "token123" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":"invalidParameter.token.invalid","message":"token"}`))
+			return
+		}
+		var body struct {
+			DownloadCode string `json:"downloadCode"`
+			RobotCode    string `json:"robotCode"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.RobotCode != "ding123" {
+			t.Errorf("下载请求 RobotCode 不符: %+v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"downloadUrl": f.srv.URL + "/file/" + body.DownloadCode,
+		})
+	})
+
+	mux.HandleFunc("GET /file/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "missing"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.Contains(r.URL.Path, "huge"):
+			_, _ = w.Write(make([]byte, imbot.MaxImageBytes+1))
+		default:
+			_, _ = w.Write(testPNG)
+		}
 	})
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -275,6 +313,12 @@ func textData(userID, content string) map[string]any {
 // newInited 起一个连着假钉钉的插件。默认关掉合并窗口，测试不必等 3 秒。
 func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, tweaks ...func(*Plugin)) (*Plugin, *fakeDingTalk, *session.Store) {
 	t.Helper()
+	return newInitedTurn(t, runTurn, nil, whitelist, extra, tweaks...)
+}
+
+// newInitedTurn 允许同时注入带图片的轮次入口。
+func newInitedTurn(t *testing.T, runTurn plugin.RunTurnFunc, runTurnImages plugin.RunTurnImagesFunc, whitelist string, extra map[string]any, tweaks ...func(*Plugin)) (*Plugin, *fakeDingTalk, *session.Store) {
+	t.Helper()
 	f := newFakeDingTalk(t)
 	store, err := session.NewStore(t.TempDir())
 	if err != nil {
@@ -285,9 +329,10 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra
 		tweak(p)
 	}
 	ictx := plugin.InitContext{
-		StateDir: t.TempDir(),
-		Sessions: store,
-		RunTurn:  runTurn,
+		StateDir:      t.TempDir(),
+		Sessions:      store,
+		RunTurn:       runTurn,
+		RunTurnImages: runTurnImages,
 		NewSession: func() (string, error) {
 			m, err := store.Create()
 			return m.ID, err
@@ -392,29 +437,34 @@ func TestAudioUsesRecognition(t *testing.T) {
 }
 
 func TestRichTextKeepsTextParts(t *testing.T) {
-	runTurn := func(_ context.Context, _, input string) (string, error) { return "收到：" + input, nil }
-	_, f, _ := newInited(t, runTurn, "user1", nil)
+	var gotText string
+	var gotImages int
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, len(images)
+		return "收到：" + input, nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
 	d := botData("1", "user1", "richText")
 	d["content"] = map[string]any{"richText": []map[string]any{
 		{"text": "这是文字"},
 		{"downloadCode": "abc"},
 	}}
 	f.pushCallback("stream-1", d)
-	if note := f.expectSend(t); !strings.Contains(note.text, "暂不支持") {
-		t.Fatalf("被忽略的图片应有一条提示: %+v", note)
-	}
 	if m := f.expectSend(t); m.text != "收到：这是文字" {
-		t.Fatalf("富文本应只取文字: %+v", m)
+		t.Fatalf("富文本应带上文字: %+v", m)
+	}
+	if gotText != "这是文字" || gotImages != 1 {
+		t.Fatalf("文字与图片都应交给模型: text=%q images=%d", gotText, gotImages)
 	}
 }
 
 func TestUnsupportedMessageGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "user1", nil)
-	d := botData("1", "user1", "picture")
+	d := botData("1", "user1", "video")
 	d["content"] = map[string]any{"downloadCode": "abc"}
 	f.pushCallback("stream-1", d)
 	if m := f.expectSend(t); !strings.Contains(m.text, "暂不支持该消息类型") {
-		t.Fatalf("图片消息应回一句提示: %+v", m)
+		t.Fatalf("视频消息应回一句提示: %+v", m)
 	}
 }
 
@@ -589,5 +639,97 @@ func TestInitRequiresCredentials(t *testing.T) {
 		map[string]any{"app_key": "123", "app_secret": "123"})
 	if err == nil {
 		t.Fatal("缺 RobotCode 时应拒绝启用")
+	}
+}
+
+// ---------- 入站图片 ----------
+
+func TestPictureReachesTurn(t *testing.T) {
+	var gotText string
+	var gotImages []llm.ImagePart
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, images
+		return "收到图片", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	d := botData("1", "user1", "picture")
+	d["content"] = map[string]any{"downloadCode": "pic-1"}
+	f.pushCallback("stream-1", d)
+	if m := f.expectSend(t); m.text != "收到图片" {
+		t.Fatalf("图片消息应跑一轮并回复: %+v", m)
+	}
+	if gotText != "" || len(gotImages) != 1 {
+		t.Fatalf("图片应交给模型: text=%q images=%d", gotText, len(gotImages))
+	}
+	if gotImages[0].MediaType != "image/png" || string(gotImages[0].Data) != string(testPNG) {
+		t.Fatalf("图片内容不符: %+v", gotImages[0])
+	}
+}
+
+func TestPictureDownloadFailureGetsNote(t *testing.T) {
+	var called bool
+	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
+		called = true
+		return "不应被调用", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	d := botData("1", "user1", "picture")
+	d["content"] = map[string]any{"downloadCode": "missing"}
+	f.pushCallback("stream-1", d)
+	if m := f.expectSend(t); !strings.Contains(m.text, "图片下载失败") {
+		t.Fatalf("下载失败应回提示: %+v", m)
+	}
+	if called {
+		t.Fatal("没有成功图片时不应跑对话轮次")
+	}
+}
+
+func TestPictureOverSizeLimitGetsNote(t *testing.T) {
+	var called bool
+	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
+		called = true
+		return "不应被调用", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	d := botData("1", "user1", "picture")
+	d["content"] = map[string]any{"downloadCode": "huge"}
+	f.pushCallback("stream-1", d)
+	if m := f.expectSend(t); !strings.Contains(m.text, "超过大小上限") {
+		t.Fatalf("超限图片应回大小提示: %+v", m)
+	}
+	if called {
+		t.Fatal("超限图片不应跑对话轮次")
+	}
+}
+
+func TestRichTextImageTooManyKeepsFirstFour(t *testing.T) {
+	var got int
+	runImages := func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+		got = len(images)
+		return "收到", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	items := make([]map[string]any, 0, 5)
+	for i := range 5 {
+		items = append(items, map[string]any{
+			"picture": map[string]any{"downloadCode": "pic-" + strconv.Itoa(i)},
+		})
+	}
+	d := botData("1", "user1", "richText")
+	d["content"] = map[string]any{"richText": items}
+	f.pushCallback("stream-1", d)
+	note := f.expectSend(t)
+	if !strings.Contains(note.text, "最多处理 4 张") {
+		t.Fatalf("超过四张应有提示: %+v", note)
+	}
+	if m := f.expectSend(t); m.text != "收到" {
+		t.Fatalf("回复不符: %+v", m)
+	}
+	if got != 4 {
+		t.Fatalf("应只取前四张，实际 %d", got)
 	}
 }

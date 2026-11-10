@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	tokenPath = "/v1.0/oauth2/accessToken"
-	sendPath  = "/v1.0/robot/oToMessages/batchSend"
+	tokenPath    = "/v1.0/oauth2/accessToken"
+	sendPath     = "/v1.0/robot/oToMessages/batchSend"
+	downloadPath = "/v1.0/robot/messageFiles/download"
 
 	// tokenRefreshMargin 提前刷新，避免卡在过期边界上。
 	tokenRefreshMargin = 5 * time.Minute

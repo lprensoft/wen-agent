@@ -1,7 +1,11 @@
 package wecombot
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,9 +17,39 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
+
+var testPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
+
+// testAESKey 是测试用的 32 字节密钥（Base64），IV 取前 16 字节。
+var testAESKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+
+// encryptImage 按企业微信的约定加密测试图片：AES-256-CBC + PKCS#7。
+func encryptImage(t *testing.T) []byte {
+	t.Helper()
+	return encryptBytes(testPNG)
+}
+
+// encryptBytes 按企业微信的约定加密：AES-256-CBC + PKCS#7，但按 32 字节块补齐
+// （与官方 SDK 的 crypto.ts 一致），填充长度可以超过 AES 的 16 字节块。
+func encryptBytes(plain []byte) []byte {
+	key, _ := base64.StdEncoding.DecodeString(testAESKey)
+	plain = append([]byte(nil), plain...)
+	const padBlock = 32
+	pad := padBlock - len(plain)%padBlock
+	plain = append(plain, bytes.Repeat([]byte{byte(pad)}, pad)...)
+	block, _ := aes.NewCipher(key)
+	out := make([]byte, len(plain))
+	cipher.NewCBCEncrypter(block, key[:aes.BlockSize]).CryptBlocks(out, plain)
+	return out
+}
 
 // ---------- 假企业微信长连接 ----------
 
@@ -56,7 +90,21 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 		ready: make(chan struct{}, 4),
 	}
 	up := websocket.Upgrader{}
+	encrypted := encryptImage(t)
+	largeEncrypted := encryptBytes(append(testPNG, make([]byte, imbot.MaxImageBytes)...))
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /file/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/file/missing":
+			w.WriteHeader(http.StatusNotFound)
+		case "/file/bad":
+			_, _ = w.Write([]byte("not an encrypted image"))
+		case "/file/huge":
+			_, _ = w.Write(largeEncrypted)
+		default:
+			_, _ = w.Write(encrypted)
+		}
+	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := up.Upgrade(w, r, nil)
 		if err != nil {
@@ -248,6 +296,12 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra
 
 func newInitedWith(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any, fakeSetup func(*fakeWeCom), tweaks ...func(*Plugin)) (*Plugin, *fakeWeCom, *session.Store) {
 	t.Helper()
+	return newInitedTurn(t, runTurn, nil, whitelist, extra, fakeSetup, tweaks...)
+}
+
+// newInitedTurn 允许同时注入带图片的轮次入口。
+func newInitedTurn(t *testing.T, runTurn plugin.RunTurnFunc, runTurnImages plugin.RunTurnImagesFunc, whitelist string, extra map[string]any, fakeSetup func(*fakeWeCom), tweaks ...func(*Plugin)) (*Plugin, *fakeWeCom, *session.Store) {
+	t.Helper()
 	f := newFakeWeCom(t)
 	if fakeSetup != nil {
 		fakeSetup(f)
@@ -261,9 +315,10 @@ func newInitedWith(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, e
 		tweak(p)
 	}
 	ictx := plugin.InitContext{
-		StateDir: t.TempDir(),
-		Sessions: store,
-		RunTurn:  runTurn,
+		StateDir:      t.TempDir(),
+		Sessions:      store,
+		RunTurn:       runTurn,
+		RunTurnImages: runTurnImages,
 		NewSession: func() (string, error) {
 			m, err := store.Create()
 			return m.ID, err
@@ -343,28 +398,150 @@ func TestVoiceUsesTranscription(t *testing.T) {
 
 func TestUnsupportedMessageGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "user1", nil)
-	f.pushCallback("msg-1", "cb-1", "single", "user1", "image", map[string]any{"url": "https://example.com/a.png"})
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "file", map[string]any{
+		"url": "https://example.com/a.pdf", "aeskey": testAESKey,
+	})
 	m := f.expectSend(t)
 	if !strings.Contains(m.content, "暂不支持该消息类型") {
-		t.Fatalf("图片消息应回一句提示: %+v", m)
+		t.Fatalf("文件消息应回一句提示: %+v", m)
 	}
 }
 
 func TestMixedKeepsTextPart(t *testing.T) {
-	runTurn := func(_ context.Context, _, input string) (string, error) { return "收到：" + input, nil }
-	_, f, _ := newInited(t, runTurn, "user1", nil)
+	var gotText string
+	var gotImages int
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, len(images)
+		return "收到：" + input, nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil, nil)
 	f.pushCallback("msg-1", "cb-1", "single", "user1", "mixed", map[string]any{
 		"msg_item": []map[string]any{
 			{"msgtype": "text", "text": map[string]any{"content": "这是文字"}},
-			{"msgtype": "image", "image": map[string]any{"url": "https://example.com/a.png"}},
+			{"msgtype": "image", "image": map[string]any{
+				"url": f.srv.URL + "/file/1.png", "aeskey": testAESKey,
+			}},
 		},
 	})
-	if note := f.expectSend(t); !strings.Contains(note.content, "暂不支持") {
-		t.Fatalf("被忽略的图片应有一条提示: %+v", note)
-	}
 	m := f.expectSend(t)
 	if m.content != "收到：这是文字" {
-		t.Fatalf("图文混排应只取文字: %+v", m)
+		t.Fatalf("图文混排应同时带上文字: %+v", m)
+	}
+	if gotText != "这是文字" || gotImages != 1 {
+		t.Fatalf("文字与图片都应交给模型: text=%q images=%d", gotText, gotImages)
+	}
+}
+
+// ---------- 入站图片 ----------
+
+// 企业微信的填充按 32 字节块算：73 字节的图片需要 23 字节填充，超过 AES
+// 的 16 字节块。按 16 字节块判定填充长度会把它当成损坏图片。
+func TestDecryptImageAccepts32BytePadding(t *testing.T) {
+	if len(testPNG)%32 == 0 {
+		t.Fatalf("测试图片长度 %d 应产生非零且超过 16 的填充", len(testPNG))
+	}
+	encrypted := encryptBytes(testPNG)
+	if pad := len(encrypted) - len(testPNG); pad != 23 {
+		t.Fatalf("填充长度应为 23，实际 %d", pad)
+	}
+	got, err := decryptImage(encrypted, testAESKey)
+	if err != nil {
+		t.Fatalf("32 字节块填充应能解密: %v", err)
+	}
+	if !bytes.Equal(got, testPNG) {
+		t.Fatal("解密结果与原图不一致")
+	}
+}
+
+func TestImageCallbackReachesTurn(t *testing.T) {
+	var gotText string
+	var gotImages []llm.ImagePart
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, images
+		return "收到图片", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil, nil)
+
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "image", map[string]any{
+		"url": f.srv.URL + "/file/1.png", "aeskey": testAESKey,
+	})
+	m := f.expectSend(t)
+	if m.content != "收到图片" || m.reqID != "cb-1" {
+		t.Fatalf("图片消息应跑一轮并覆盖原请求: %+v", m)
+	}
+	if gotText != "" || len(gotImages) != 1 {
+		t.Fatalf("图片应交给模型: text=%q images=%d", gotText, len(gotImages))
+	}
+	if gotImages[0].MediaType != "image/png" || !bytes.Equal(gotImages[0].Data, testPNG) {
+		t.Fatalf("解密后的图片内容不符: %+v", gotImages[0])
+	}
+}
+
+func TestImageDecryptFailureGetsNote(t *testing.T) {
+	var called bool
+	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
+		called = true
+		return "不应被调用", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil, nil)
+
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "image", map[string]any{
+		"url": f.srv.URL + "/file/bad", "aeskey": testAESKey,
+	})
+	m := f.expectSend(t)
+	if !strings.Contains(m.content, "图片下载失败") {
+		t.Fatalf("解密失败应回提示: %+v", m)
+	}
+	if called {
+		t.Fatal("没有成功图片时不应跑对话轮次")
+	}
+}
+
+func TestImageOverSizeLimitGetsNote(t *testing.T) {
+	var called bool
+	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
+		called = true
+		return "不应被调用", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil, nil)
+
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "image", map[string]any{
+		"url": f.srv.URL + "/file/huge", "aeskey": testAESKey,
+	})
+	m := f.expectSend(t)
+	if !strings.Contains(m.content, "超过大小上限") {
+		t.Fatalf("超限图片应回大小提示: %+v", m)
+	}
+	if called {
+		t.Fatal("超限图片不应跑对话轮次")
+	}
+}
+
+func TestMixedImageTooManyKeepsFirstFour(t *testing.T) {
+	var got int
+	runImages := func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+		got = len(images)
+		return "收到", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil, nil)
+
+	items := make([]map[string]any, 0, 5)
+	for range 5 {
+		items = append(items, map[string]any{
+			"msgtype": "image",
+			"image":   map[string]any{"url": f.srv.URL + "/file/1.png", "aeskey": testAESKey},
+		})
+	}
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "mixed", map[string]any{"msg_item": items})
+	note := f.expectSend(t)
+	if !strings.Contains(note.content, "最多处理 4 张") {
+		t.Fatalf("超过四张应有提示: %+v", note)
+	}
+	if m := f.expectSend(t); m.content != "收到" {
+		t.Fatalf("回复不符: %+v", m)
+	}
+	if got != 4 {
+		t.Fatalf("应只取前四张，实际 %d", got)
 	}
 }
 
@@ -569,8 +746,8 @@ func TestCallbackRightAfterSubscribeIsDispatched(t *testing.T) {
 		f.mu.Lock()
 		f.onAuth = func() {
 			// 紧跟着订阅成功回执到达：此时客户端可能还没把连接登记好
-			f.pushCallback("msg-early", "cb-early", "single", "user1", "image",
-				map[string]any{"url": "https://example.com/a.png"})
+			f.pushCallback("msg-early", "cb-early", "single", "user1", "file",
+				map[string]any{"url": "https://example.com/a.pdf", "aeskey": testAESKey})
 		}
 		f.mu.Unlock()
 	})

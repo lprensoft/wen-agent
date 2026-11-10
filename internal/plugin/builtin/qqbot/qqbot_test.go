@@ -2,6 +2,7 @@ package qqbot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,9 +16,15 @@ import (
 	"github.com/gorilla/websocket"
 
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
+
+var testPNG = func() []byte {
+	b, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg==")
+	return b
+}()
 
 // ---------- 假 QQ 开放平台：鉴权 + 网关 + 发消息 API 三合一 ----------
 
@@ -85,6 +92,18 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 			}
 		}
 	})
+	mux.HandleFunc("GET /file/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/file/missing":
+			w.WriteHeader(http.StatusNotFound)
+		case strings.Contains(r.URL.Path, "big"):
+			// 有效 PNG 后面补零：仍能解码，但实际字节远超事件里缺失的 size。
+			_, _ = w.Write(append(append([]byte(nil), testPNG...), make([]byte, 4<<20)...))
+		default:
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(testPNG)
+		}
+	})
 	mux.HandleFunc("POST /v2/users/{openid}/messages", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Content  string `json:"content"`
@@ -147,11 +166,20 @@ var msgCounter atomic.Int64
 
 // pushC2C 推一条私聊消息。
 func (f *fakeQQ) pushC2C(openid, content string) string {
+	return f.pushC2CAttachments(openid, content, nil)
+}
+
+// pushC2CAttachments 推一条带附件的私聊消息。
+func (f *fakeQQ) pushC2CAttachments(openid, content string, attachments []map[string]any) string {
 	id := fmt.Sprintf("msg-%d", msgCounter.Add(1))
-	f.push("C2C_MESSAGE_CREATE", map[string]any{
+	d := map[string]any{
 		"id": id, "content": content,
 		"author": map[string]string{"user_openid": openid},
-	})
+	}
+	if attachments != nil {
+		d["attachments"] = attachments
+	}
+	f.push("C2C_MESSAGE_CREATE", d)
 	return id
 }
 
@@ -185,6 +213,12 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plu
 // newInitedCfg 同 newInited，extra 覆盖默认配置项。
 func newInitedCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any) (*Plugin, *fakeQQ, *session.Store) {
 	t.Helper()
+	return newInitedTurn(t, runTurn, nil, whitelist, extra)
+}
+
+// newInitedTurn 允许同时注入带图片的轮次入口。
+func newInitedTurn(t *testing.T, runTurn plugin.RunTurnFunc, runTurnImages plugin.RunTurnImagesFunc, whitelist string, extra map[string]any) (*Plugin, *fakeQQ, *session.Store) {
+	t.Helper()
 	f := newFakeQQ(t)
 	sessDir := t.TempDir()
 	store, err := session.NewStore(sessDir)
@@ -194,10 +228,11 @@ func newInitedCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, ex
 	p := New()
 	p.tokenURLOverride = f.srv.URL + "/app/getAppAccessToken"
 	ictx := plugin.InitContext{
-		StateDir:   t.TempDir(),
-		Sessions:   store,
-		RunTurn:    runTurn,
-		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
+		StateDir:      t.TempDir(),
+		Sessions:      store,
+		RunTurn:       runTurn,
+		RunTurnImages: runTurnImages,
+		NewSession:    func() (string, error) { m, err := store.Create(); return m.ID, err },
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
 			return plugin.StatusInfo{
 				Provider: "testprov", Model: "m1", Thinking: "off", ContextLength: 131072,
@@ -723,5 +758,139 @@ func TestTypingSlotOncePerMessage(t *testing.T) {
 	l.next("m2")
 	if ok, _ := l.typingSlot("m2"); ok {
 		t.Error("剩余额度不够给正文留三条时不该发")
+	}
+}
+
+// ---------- 入站图片 ----------
+
+func imageAttachment(url string, size int) map[string]any {
+	return map[string]any{
+		"content_type": "image/png", "filename": "a.png", "size": size, "url": url,
+	}
+}
+
+func TestImageAttachmentReachesTurn(t *testing.T) {
+	var gotImages []llm.ImagePart
+	var gotText string
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, images
+		return "收到图片", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		imageAttachment(f.srv.URL+"/file/1.png", len(testPNG)),
+	})
+	m := f.expectSend(t)
+	if m.content != "收到图片" {
+		t.Fatalf("图片消息应跑一轮并回复: %+v", m)
+	}
+	if gotText != "" || len(gotImages) != 1 {
+		t.Fatalf("图片应随轮次交给模型: text=%q images=%d", gotText, len(gotImages))
+	}
+	if gotImages[0].MediaType != "image/png" || len(gotImages[0].Data) != len(testPNG) {
+		t.Fatalf("图片内容不符: %+v", gotImages[0])
+	}
+}
+
+func TestImageWithTextKeepsCaption(t *testing.T) {
+	var gotText string
+	var gotImages int
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, len(images)
+		return input, nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	f.pushC2CAttachments("user1", "这是什么", []map[string]any{
+		imageAttachment(f.srv.URL+"/file/1.png", len(testPNG)),
+	})
+	if m := f.expectSend(t); m.content != "这是什么" {
+		t.Fatalf("回复不符: %+v", m)
+	}
+	if gotText != "这是什么" || gotImages != 1 {
+		t.Fatalf("文字与图片都应交给模型: text=%q images=%d", gotText, gotImages)
+	}
+}
+
+func TestImageDownloadFailureGetsNote(t *testing.T) {
+	var called bool
+	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
+		called = true
+		return "不应被调用", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		imageAttachment(f.srv.URL+"/file/missing", 0),
+	})
+	m := f.expectSend(t)
+	if !strings.Contains(m.content, "图片下载失败") {
+		t.Fatalf("下载失败应回提示: %+v", m)
+	}
+	if called {
+		t.Fatal("没有成功图片时不应跑对话轮次")
+	}
+}
+
+func TestImageTooManyKeepsFirstFour(t *testing.T) {
+	var got int
+	runImages := func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+		got = len(images)
+		return "收到", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	var attachments []map[string]any
+	for i := range 5 {
+		attachments = append(attachments, imageAttachment(fmt.Sprintf("%s/file/%d.png", f.srv.URL, i), len(testPNG)))
+	}
+	f.pushC2CAttachments("user1", "", attachments)
+	note := f.expectSend(t)
+	if !strings.Contains(note.content, "最多处理 4 张") {
+		t.Fatalf("超过四张应有提示: %+v", note)
+	}
+	if m := f.expectSend(t); m.content != "收到" {
+		t.Fatalf("回复不符: %+v", m)
+	}
+	if got != 4 {
+		t.Fatalf("应只取前四张，实际 %d", got)
+	}
+}
+
+func TestActualBytesEnforceTotalLimit(t *testing.T) {
+	var got int
+	runImages := func(_ context.Context, _, _ string, images []llm.ImagePart) (string, error) {
+		got = len(images)
+		return "收到", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+
+	// size 缺失时下载前无法判断，必须按实际字节在追加前复核总量。
+	var attachments []map[string]any
+	for i := range 3 {
+		attachments = append(attachments, imageAttachment(fmt.Sprintf("%s/file/big?%d", f.srv.URL, i), 0))
+	}
+	f.pushC2CAttachments("user1", "", attachments)
+	note := f.expectSend(t)
+	if !strings.Contains(note.content, "大小上限") {
+		t.Fatalf("实际总量超限应回大小提示: %+v", note)
+	}
+	if m := f.expectSend(t); m.content != "收到" {
+		t.Fatalf("回复不符: %+v", m)
+	}
+	if got != 2 {
+		t.Fatalf("10 MB 内只应接受前两张，实际 %d", got)
+	}
+}
+
+func TestNonImageAttachmentGetsNote(t *testing.T) {
+	_, f, _ := newInited(t, noopTurn, "user1")
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		{"content_type": "file/pdf", "filename": "a.pdf", "size": 1024, "url": f.srv.URL + "/file/a.pdf"},
+	})
+	m := f.expectSend(t)
+	if !strings.Contains(m.content, "暂不支持该消息类型") {
+		t.Fatalf("非图片附件应回提示: %+v", m)
 	}
 }
