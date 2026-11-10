@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"wen/internal/i18n"
+	"wen/internal/imbot"
 
 	"github.com/gorilla/websocket"
 )
@@ -229,19 +231,51 @@ func (p *Plugin) handleDispatch(ctx context.Context, frame wsFrame, sessionID *s
 	case "RESUMED":
 		i18n.Logf(p.langOf(), "log.qq.gateway_restored", "qq_bot: 网关连接已恢复")
 	case "C2C_MESSAGE_CREATE":
-		var d struct {
-			ID      string `json:"id"`
-			Content string `json:"content"`
-			Author  struct {
-				UserOpenID string `json:"user_openid"`
-			} `json:"author"`
-		}
-		if err := json.Unmarshal(frame.D, &d); err != nil {
-			i18n.Logf(p.langOf(), "log.qq.event_parse_failed", "qq_bot: 消息事件解析失败: %v", err)
+		// 交给分发队列：附件下载可能跨过心跳等待窗口，读循环不能停在这里。
+		p.mu.Lock()
+		queue := p.queue
+		p.mu.Unlock()
+		if queue != nil {
+			queue.Push(frame)
 			return
 		}
-		p.handleInbound(ctx, inbound{openid: d.Author.UserOpenID, msgID: d.ID, content: d.Content})
+		p.handleC2CMessage(ctx, frame)
 	}
+}
+
+func (p *Plugin) dispatchLoop(ctx context.Context, q *imbot.OrderedQueue[wsFrame]) {
+	defer p.wg.Done()
+	for {
+		frame, ok := q.Pop(ctx)
+		if !ok {
+			return
+		}
+		p.handleC2CMessage(ctx, frame)
+	}
+}
+
+// handleC2CMessage 解析一条私聊事件，下载图片后交给公共骨架。
+func (p *Plugin) handleC2CMessage(ctx context.Context, frame wsFrame) {
+	var d struct {
+		ID      string `json:"id"`
+		Content string `json:"content"`
+		Author  struct {
+			UserOpenID string `json:"user_openid"`
+		} `json:"author"`
+		Attachments []qqAttachment `json:"attachments"`
+	}
+	if err := json.Unmarshal(frame.D, &d); err != nil {
+		i18n.Logf(p.langOf(), "log.qq.event_parse_failed", "qq_bot: 消息事件解析失败: %v", err)
+		return
+	}
+	text := strings.TrimSpace(d.Content)
+	images, note := p.inboundImages(ctx, d.Attachments)
+	if text == "" && len(images) == 0 && note == "" && len(d.Attachments) > 0 {
+		note = i18n.T(p.langOf(), "plugin.qq_bot.msg.unsupported", "暂不支持该消息类型，请发文字或图片。")
+	}
+	p.handleInbound(ctx, inbound{
+		openid: d.Author.UserOpenID, msgID: d.ID, content: text, images: images, note: note,
+	})
 }
 
 func readFrame(conn *websocket.Conn) (wsFrame, error) {

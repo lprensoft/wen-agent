@@ -21,6 +21,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/imbot"
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -53,6 +54,7 @@ type Plugin struct {
 	core    *imbot.Core // 通道无关的分发、命令、会话绑定与确认代理
 	tokens  *tokenSource
 	limiter *replyLimiter
+	queue   *imbot.OrderedQueue[wsFrame] // 入站事件 FIFO：图片下载不能卡住网关读循环
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -67,6 +69,8 @@ type inbound struct {
 	openid  string
 	msgID   string
 	content string
+	images  []llm.ImagePart
+	note    string
 }
 
 func New() *Plugin {
@@ -183,12 +187,15 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	p.core = core
+	p.queue = imbot.NewOrderedQueue[wsFrame]()
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	ctx := p.ctx
-	p.wg.Add(1)
+	queue := p.queue
+	p.wg.Add(2)
 	p.mu.Unlock()
 
 	core.Start(ctx)
+	go p.dispatchLoop(ctx, queue)
 	go p.gatewayLoop(ctx)
 	return nil
 }
@@ -229,6 +236,8 @@ func (p *Plugin) handleInbound(ctx context.Context, msg inbound) {
 		DedupID: msg.msgID,
 		ReplyTo: msg.msgID,
 		Text:    msg.content,
+		Images:  msg.images,
+		Note:    msg.note,
 	})
 }
 
