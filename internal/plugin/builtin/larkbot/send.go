@@ -130,6 +130,71 @@ func (p *Plugin) sendImage(ctx context.Context, openID, _ string, img llm.ImageP
 	return p.sendMessage(ctx, openID, "image", string(content))
 }
 
+// sendFile 先上传文件拿 file_key，再发一条 msg_type=file 的消息。普通附件用
+// file_type=stream；飞书的上限是 30 MB，统一限制已经更严。
+func (p *Plugin) sendFile(ctx context.Context, openID, _ string, f llm.FilePart) error {
+	p.mu.Lock()
+	base, tokens, client := p.apiBase, p.tokens, p.client
+	p.mu.Unlock()
+	if tokens == nil || client == nil {
+		return fmt.Errorf("尚未完成初始化")
+	}
+	token, err := tokens.Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("file_type", "stream"); err != nil {
+		return err
+	}
+	if err := mw.WriteField("file_name", f.FileName()); err != nil {
+		return err
+	}
+	fw, err := mw.CreateFormFile("file", f.FileName())
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(f.Data); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/open-apis/im/v1/files", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	var env struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			FileKey string `json:"file_key"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("上传文件响应无法解析（HTTP %d）: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if env.Code != 0 {
+		return fmt.Errorf("上传文件返回 code=%d: %s", env.Code, env.Msg)
+	}
+	if env.Data.FileKey == "" {
+		return fmt.Errorf("上传文件没有返回 file_key")
+	}
+	content, _ := json.Marshal(map[string]string{"file_key": env.Data.FileKey})
+	return p.sendMessage(ctx, openID, "file", string(content))
+}
+
 // sendMessage 发一条消息给指定 open_id。
 func (p *Plugin) sendMessage(ctx context.Context, openID, msgType, content string) error {
 	body := map[string]string{

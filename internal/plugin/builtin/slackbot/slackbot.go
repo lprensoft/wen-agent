@@ -251,6 +251,10 @@ func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.I
 	return s.p.sendImage(ctx, userID, replyTo, img)
 }
 
+func (s sender) SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
+	return s.p.sendFile(ctx, userID, replyTo, f)
+}
+
 // buildProxy 按代理配置造 Transport 与 WebSocket 用的代理 URL。
 // gorilla/websocket 只支持 http / socks5，配置这里就限死，免得运行到建连才报错。
 func buildProxy(lang, proxy string) (*url.URL, http.RoundTripper, error) {

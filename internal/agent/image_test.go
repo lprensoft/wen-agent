@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"wen/internal/llm"
@@ -59,4 +61,61 @@ func TestRunWithImagesPersistsAndReloads(t *testing.T) {
 	if !found {
 		t.Fatal("second request lost the image")
 	}
+}
+
+func TestRunWithFilesPersistsPathNote(t *testing.T) {
+	primary := &chainProvider{events: contentEvents("收到")}
+	ag, id := fallbackAgent(t, primary, &chainProvider{}, &translatorPlugin{})
+
+	if _, err := ag.RunTurnWithMedia(plugin.WithInteractive(context.Background()), id, "", nil, []llm.FilePart{
+		{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")},
+	}); err != nil {
+		t.Fatalf("RunTurnWithMedia: %v", err)
+	}
+
+	_, history, err := ag.store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var user llm.Message
+	for _, m := range history {
+		if m.Role == llm.RoleUser && len(m.Files) > 0 {
+			user = m.Message
+		}
+	}
+	if len(user.Files) != 1 || user.Files[0].Name != "报告.txt" || user.Files[0].Stored == "" {
+		t.Fatalf("user message did not keep a file reference: %+v", user.Files)
+	}
+	if strings.Contains(user.Content, "已保存到 ") {
+		t.Fatalf("absolute path must not be persisted in the message: %q", user.Content)
+	}
+	path, err := ag.store.FilePath(id, user.Files[0].Stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("stored file = %q, %v", got, err)
+	}
+
+	// 本轮请求必须带上按当前会话目录解析出的路径；后续轮次从历史里的引用重新生成。
+	if len(primary.reqs) != 1 {
+		t.Fatalf("requests = %d", len(primary.reqs))
+	}
+	assertFileNote := func(req llm.ChatRequest) {
+		t.Helper()
+		for _, m := range req.Messages {
+			if strings.Contains(m.Content, "报告.txt") && strings.Contains(m.Content, path) {
+				return
+			}
+		}
+		t.Fatalf("request did not carry the resolved file path %s", path)
+	}
+	assertFileNote(primary.reqs[0])
+
+	ag.Run(plugin.WithInteractive(context.Background()), id, "继续", func(Event) {})
+	if len(primary.reqs) < 2 {
+		t.Fatalf("requests = %d", len(primary.reqs))
+	}
+	assertFileNote(primary.reqs[1])
 }

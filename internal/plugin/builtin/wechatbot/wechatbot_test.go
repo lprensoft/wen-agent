@@ -1,6 +1,7 @@
 package wechatbot
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"encoding/base64"
@@ -32,13 +33,15 @@ type sentWx struct {
 	msgState     int
 	itemType     int
 	image        *imageItem
+	file         *fileItem
 }
 
 // wxUpload 记录一次 CDN 上传：getuploadurl 给出的密钥与收到的密文。
 type wxUpload struct {
-	keyHex  string
-	rawSize int
-	cipher  []byte
+	keyHex    string
+	rawSize   int
+	mediaType int
+	cipher    []byte
 }
 
 type fakeILink struct {
@@ -57,9 +60,10 @@ type fakeILink struct {
 	lastStatusHost atomic.Value // 最近一次查扫码状态打到的主机
 	lifecycle      chan string  // 收到的上线、下线通知（notifystart / notifystop）
 
-	uploadMu   sync.Mutex
-	pendingKey string
-	pendingRaw int
+	uploadMu    sync.Mutex
+	pendingKey  string
+	pendingRaw  int
+	pendingType int
 }
 
 func newFakeILink(t *testing.T) *fakeILink {
@@ -157,11 +161,11 @@ func newFakeILink(t *testing.T) *fakeILink {
 			AESKey      string `json:"aeskey"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.MediaType != 1 || req.ToUserID == "" || req.FileKey == "" || req.AESKey == "" || !req.NoNeedThumb {
+		if (req.MediaType != 1 && req.MediaType != 3) || req.ToUserID == "" || req.FileKey == "" || req.AESKey == "" || !req.NoNeedThumb {
 			t.Errorf("getuploadurl 参数不符: %+v", req)
 		}
 		f.uploadMu.Lock()
-		f.pendingKey, f.pendingRaw = req.AESKey, req.RawSize
+		f.pendingKey, f.pendingRaw, f.pendingType = req.AESKey, req.RawSize, req.MediaType
 		f.uploadMu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0, "upload_param": "up-param"})
 	})
@@ -169,10 +173,10 @@ func newFakeILink(t *testing.T) *fakeILink {
 	mux.HandleFunc("POST /cdn/upload", func(w http.ResponseWriter, r *http.Request) {
 		cipher, _ := io.ReadAll(r.Body)
 		f.uploadMu.Lock()
-		key, raw := f.pendingKey, f.pendingRaw
+		key, raw, mediaType := f.pendingKey, f.pendingRaw, f.pendingType
 		f.uploadMu.Unlock()
 		select {
-		case f.media <- wxUpload{keyHex: key, rawSize: raw, cipher: cipher}:
+		case f.media <- wxUpload{keyHex: key, rawSize: raw, mediaType: mediaType, cipher: cipher}:
 		default:
 		}
 		w.Header().Set("x-encrypted-param", "enc-param")
@@ -191,6 +195,7 @@ func newFakeILink(t *testing.T) *fakeILink {
 		text := ""
 		itemType := 0
 		var image *imageItem
+		var file *fileItem
 		if len(req.Msg.ItemList) > 0 {
 			item := req.Msg.ItemList[0]
 			itemType = item.Type
@@ -198,6 +203,7 @@ func newFakeILink(t *testing.T) *fakeILink {
 				text = item.TextItem.Text
 			}
 			image = item.ImageItem
+			file = item.FileItem
 		}
 		if req.Msg.ClientID == "" {
 			f.t.Error("sendmessage 缺少 client_id")
@@ -205,7 +211,7 @@ func newFakeILink(t *testing.T) *fakeILink {
 		f.sends <- sentWx{
 			to: req.Msg.ToUserID, text: text, contextToken: req.Msg.ContextToken,
 			msgType: req.Msg.MessageType, msgState: req.Msg.MessageState,
-			itemType: itemType, image: image,
+			itemType: itemType, image: image, file: file,
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	})
@@ -437,6 +443,31 @@ func TestWhitelist(t *testing.T) {
 	f.pushText(binderID, "在吗")
 	if m := f.expectSend(t); m.to != binderID {
 		t.Fatalf("绑定人应始终放行: %+v", m)
+	}
+}
+
+func TestWhitelistRejectsBeforeDownloadingAttachment(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+
+	_, f, _, _ := newBound(t, echoTurn, "friend@im.wechat")
+	f.inbox <- wxMessage{
+		MessageID: wxMsgCounter.Add(1), FromUserID: "stranger@im.wechat",
+		MessageType: msgTypeUser, ContextToken: "CTX",
+		ItemList: []messageItem{{
+			Type: 2,
+			ImageItem: &imageItem{
+				Media: cdnMedia{FullURL: srv.URL},
+			},
+		}},
+	}
+	f.expectNoSend(t, 600*time.Millisecond)
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("白名单外的附件不应被下载，实际请求 %d 次", n)
 	}
 }
 
@@ -794,6 +825,117 @@ func TestOutboundImageUploadsAndSends(t *testing.T) {
 	}
 	if m.image.MidSize != len(up.cipher) {
 		t.Fatalf("mid_size=%d，密文长度 %d", m.image.MidSize, len(up.cipher))
+	}
+}
+
+func TestOutboundFileUploadsAndSends(t *testing.T) {
+	p, f, _, _ := newBound(t, echoTurn, "user1")
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "user1", "CTX-user1", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	up := <-f.media
+	if up.mediaType != 3 || up.rawSize != len("hello") {
+		t.Fatalf("上传参数不符: %+v", up)
+	}
+	if got := decryptWxECB(t, up.keyHex, up.cipher); string(got) != "hello" {
+		t.Fatal("上传的密文解密后与原文件不一致")
+	}
+
+	m := f.expectSend(t)
+	if m.itemType != 4 || m.file == nil || m.contextToken != "CTX-user1" {
+		t.Fatalf("文件消息不符: %+v", m)
+	}
+	if m.file.FileName != "报告.txt" || m.file.Len != "5" {
+		t.Fatalf("file_item 字段不符: %+v", m.file)
+	}
+	if m.file.Media.EncryptQueryParam != "enc-param" || m.file.Media.EncryptType != 1 {
+		t.Fatalf("file_item 引用不符: %+v", m.file.Media)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte(up.keyHex)); m.file.Media.AESKey != want {
+		t.Fatalf("aes_key 应为 base64(hex)，得到 %q", m.file.Media.AESKey)
+	}
+}
+
+func TestInboundImagesPlainAndEncrypted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/plain.png":
+			_, _ = w.Write(testWxPNG)
+		default:
+			_, _ = w.Write(encryptECB(bytes.Repeat([]byte{3}, 16), testWxPNG))
+		}
+	}))
+	defer srv.Close()
+
+	p := New()
+	keyHex := hex.EncodeToString(bytes.Repeat([]byte{3}, 16))
+	_, images, _, note, unsupported := p.inboundContent(context.Background(), []messageItem{
+		{Type: 2, ImageItem: &imageItem{Media: cdnMedia{FullURL: srv.URL + "/plain.png"}}},
+		{Type: 2, ImageItem: &imageItem{AESKey: keyHex, Media: cdnMedia{FullURL: srv.URL + "/enc.png"}}},
+	})
+	if note != "" || unsupported || len(images) != 2 {
+		t.Fatalf("images=%d note=%q unsupported=%v", len(images), note, unsupported)
+	}
+	for i, img := range images {
+		if img.MediaType != "image/png" || !bytes.Equal(img.Data, testWxPNG) {
+			t.Fatalf("第 %d 张图片内容不符: %+v", i, img)
+		}
+	}
+}
+
+func TestInboundFileDecryptsAndKeepsName(t *testing.T) {
+	key := bytes.Repeat([]byte{5}, 16)
+	keyHex := hex.EncodeToString(key)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(encryptECB(key, []byte("hello")))
+	}))
+	defer srv.Close()
+
+	p := New()
+	_, _, files, note, unsupported := p.inboundContent(context.Background(), []messageItem{{
+		Type: 4,
+		FileItem: &fileItem{
+			Media: cdnMedia{
+				FullURL: srv.URL + "/ignored.bin",
+				AESKey:  base64.StdEncoding.EncodeToString([]byte(keyHex)),
+			},
+			FileName: "报告.txt",
+			Len:      "5",
+		},
+	}})
+	if note != "" || unsupported || len(files) != 1 {
+		t.Fatalf("files=%d note=%q unsupported=%v", len(files), note, unsupported)
+	}
+	if files[0].Name != "报告.txt" || string(files[0].Data) != "hello" {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+	if files[0].MediaType != "text/plain; charset=utf-8" {
+		t.Fatalf("MediaType = %q", files[0].MediaType)
+	}
+}
+
+func TestInboundMediaUsesQueryParamFallback(t *testing.T) {
+	p := New()
+	keyHex := hex.EncodeToString(bytes.Repeat([]byte{9}, 16))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("encrypted_query_param") != "qp" {
+			t.Errorf("下载参数不符: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write(encryptECB(bytes.Repeat([]byte{9}, 16), testWxPNG))
+	}))
+	defer srv.Close()
+	p.cdnBase = srv.URL
+
+	_, images, _, note, _ := p.inboundContent(context.Background(), []messageItem{{
+		Type: 2,
+		ImageItem: &imageItem{
+			Media: cdnMedia{EncryptQueryParam: "qp", AESKey: base64.StdEncoding.EncodeToString([]byte(keyHex))},
+		},
+	}})
+	if note != "" || len(images) != 1 || !bytes.Equal(images[0].Data, testWxPNG) {
+		t.Fatalf("images=%d note=%q", len(images), note)
 	}
 }
 

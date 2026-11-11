@@ -89,6 +89,9 @@ type inbound struct {
 	userID       string // from_user_id（xxx@im.wechat）
 	contextToken string // 回复时必须回带
 	text         string
+	images       []llm.ImagePart
+	files        []llm.FilePart
+	note         string
 }
 
 func New() *Plugin {
@@ -287,23 +290,21 @@ func (p *Plugin) Stop() {
 }
 
 // handleInbound 把一条微信消息交给公共骨架。unsupported 表示消息里有暂不支持的媒体类型。
-func (p *Plugin) handleInbound(ctx context.Context, msg inbound, dedupKey string, unsupported bool) {
+func (p *Plugin) handleInbound(ctx context.Context, msg inbound, dedupKey string) {
 	p.mu.Lock()
 	core := p.core
 	p.mu.Unlock()
 	if core == nil {
 		return
 	}
-	note := ""
-	if unsupported {
-		note = "暂不支持该消息类型，请发文字或语音。"
-	}
 	core.Handle(ctx, imbot.Message{
 		UserID:  msg.userID,
 		DedupID: dedupKey,
 		ReplyTo: msg.contextToken,
 		Text:    msg.text,
-		Note:    note,
+		Images:  msg.images,
+		Files:   msg.files,
+		Note:    msg.note,
 	})
 }
 
@@ -316,4 +317,8 @@ func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 
 func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
 	return s.p.sendImage(ctx, userID, replyTo, img)
+}
+
+func (s sender) SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
+	return s.p.sendFile(ctx, userID, replyTo, f)
 }

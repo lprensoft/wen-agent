@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"wen/internal/i18n"
+	"wen/internal/imbot"
 	"wen/internal/llm"
 )
 
@@ -35,6 +36,13 @@ func (p *Plugin) sendImage(ctx context.Context, openid, replyTo string, img llm.
 		"msg_type": 7,
 		"media":    map[string]any{"file_info": fileInfo},
 	}, mode)
+}
+
+// sendFile 明确报不支持：QQ 官方富媒体接口的 file_type=4（文件）目前仍标注为
+// 暂不开放。等平台开放后把这里换成与 sendImage 相同的上传 + msg_type=7 即可。
+func (p *Plugin) sendFile(_ context.Context, _, _ string, _ llm.FilePart) error {
+	return fmt.Errorf("%w: %s", imbot.ErrMediaUnsupported,
+		i18n.T(p.langOf(), "plugin.qq_bot.err.file_unsupported", "QQ 暂不支持发送文件"))
 }
 
 func (p *Plugin) uploadImage(ctx context.Context, openid string, img llm.ImagePart) (string, error) {

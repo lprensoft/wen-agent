@@ -32,9 +32,12 @@ type Message struct {
 	ResponsesOrigin string `json:"responses_origin,omitempty"`
 	// Images 是随消息一起发送的图片。Data 只在进程内使用，落盘时由会话层换成
 	// Name 引用；后续轮次从会话附件目录按需读回。
-	Images     []ImagePart `json:"images,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
-	ToolCallID string      `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
+	Images []ImagePart `json:"images,omitempty"`
+	// Files 是随用户消息收到的普通文件引用。只在会话层使用（落盘、生成路径
+	// 说明），不进入模型请求体；Data 不落盘。
+	Files      []FilePart `json:"files,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
+	ToolCallID string     `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
 }
 
 // ImagePart 是一张随消息发送的图片。
@@ -43,6 +46,64 @@ type ImagePart struct {
 	MediaType string `json:"media_type,omitempty"` // image/png、image/jpeg、image/gif、image/webp
 	Size      int    `json:"size,omitempty"`       // 原始字节数，供界面展示
 	Data      []byte `json:"-"`                    // 只在进程内保留
+}
+
+// FilePart 是一个随消息收发的普通文件。文件不进入模型请求体：入站时由会话层
+// 落盘并在正文里留一行路径说明，出站时由通道上传。Data 只在进程内保留。
+type FilePart struct {
+	Name      string `json:"name,omitempty"`       // 原始文件名（不含路径）
+	Stored    string `json:"stored,omitempty"`     // 会话附件里的落盘名；入站文件由会话层填写
+	MediaType string `json:"media_type,omitempty"` // MIME；未知时为 application/octet-stream
+	Size      int    `json:"size,omitempty"`       // 原始字节数
+	Data      []byte `json:"-"`                    // 只在进程内保留
+}
+
+// FileName 给出上传时用的文件名：去掉路径与不安全的字符，保留扩展名。
+// 普通文件的类型由文件名与 MIME 共同决定，这里不改扩展名。
+func (f FilePart) FileName() string {
+	return safeFileName(f.Name, "file")
+}
+
+func safeFileName(raw, fallback string) string {
+	name := filepath.Base(strings.TrimSpace(raw))
+	if name == "" || name == "." || name == string(filepath.Separator) || name == ".." {
+		name = fallback
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			continue
+		case r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' ||
+			r == '"' || r == '<' || r == '>' || r == '|':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	name = strings.TrimSpace(b.String())
+	if name == "" || name == "." || name == ".." {
+		name = fallback
+	}
+	// 保留扩展名，截断过长的正文部分。按字节限制，避免多字节文件名超过
+	// 各平台的文件名长度上限。
+	const maxBytes = 180
+	if len(name) > maxBytes {
+		ext := filepath.Ext(name)
+		if len(ext) > 16 {
+			ext = ext[:16]
+		}
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		var b strings.Builder
+		for _, r := range stem {
+			if b.Len()+len(string(r))+len(ext) > maxBytes {
+				break
+			}
+			b.WriteRune(r)
+		}
+		name = b.String() + ext
+	}
+	return name
 }
 
 func imageDataURL(img ImagePart) string {

@@ -389,11 +389,11 @@ func TestIgnoresNonDirectMessages(t *testing.T) {
 	f.expectNoSend(t, 300*time.Millisecond)
 }
 
-func TestFileShareGetsNote(t *testing.T) {
+func TestFileShareWithoutURLGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "D1", nil)
 	f.pushEnvelope("env-1", messagePayload("Ev1", "D1", "U1", "", "im", "file_share", "", true))
-	if m := f.expectSend(t); !strings.Contains(m.text, "暂不支持该消息类型") {
-		t.Fatalf("文件消息应回一句提示: %+v", m)
+	if m := f.expectSend(t); !strings.Contains(m.text, "文件下载失败") {
+		t.Fatalf("没有下载地址的文件消息应回一句提示: %+v", m)
 	}
 }
 
@@ -710,6 +710,32 @@ func TestInboundImageDownload(t *testing.T) {
 	}
 }
 
+func TestInboundFileDownload(t *testing.T) {
+	p := New()
+	p.botToken = "xoxb-test"
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			t.Fatalf("missing auth: %v", r.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader("hello")),
+			Request:    r,
+		}, nil
+	})}
+	files, note := p.inboundFiles(context.Background(), []slackFile{{
+		Name: "报告.txt", Mimetype: "text/plain", Size: 5,
+		URLPrivate: "https://files.slack.com/files-pri/T1/F1/a.txt",
+	}})
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.txt" || files[0].MediaType != "text/plain" || string(files[0].Data) != "hello" {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+}
+
 func TestInboundExternalFileIsSkipped(t *testing.T) {
 	p := New()
 	images, note := p.inboundImages(context.Background(), []slackFile{{
@@ -733,6 +759,23 @@ func TestSlackFileURLTrusted(t *testing.T) {
 		if got := slackFileURLTrusted(raw); got != want {
 			t.Errorf("slackFileURLTrusted(%q) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+func TestOutboundFileUsesExternalUpload(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "D1", nil)
+	file := llm.FilePart{Name: "报告", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "D1", "", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	upload := <-f.images
+	if upload.filename != "报告" || string(upload.data) != "hello" {
+		t.Fatalf("上传内容不符: %+v", upload)
+	}
+	complete := <-f.images
+	if complete.fileID != "F123" || complete.channel != "D1" {
+		t.Fatalf("完成上传参数不符: %+v", complete)
 	}
 }
 

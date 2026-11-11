@@ -70,6 +70,7 @@ type inbound struct {
 	msgID   string
 	content string
 	images  []llm.ImagePart
+	files   []llm.FilePart
 	note    string
 }
 
@@ -237,6 +238,7 @@ func (p *Plugin) handleInbound(ctx context.Context, msg inbound) {
 		ReplyTo: msg.msgID,
 		Text:    msg.content,
 		Images:  msg.images,
+		Files:   msg.files,
 		Note:    msg.note,
 	})
 }
@@ -251,4 +253,8 @@ func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
 
 func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
 	return s.p.sendImage(ctx, userID, replyTo, img)
+}
+
+func (s sender) SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
+	return s.p.sendFile(ctx, userID, replyTo, f)
 }

@@ -371,8 +371,10 @@ func (p *Plugin) handleMessageCreate(ctx context.Context, frame gatewayFrame) {
 	}
 
 	text := strings.TrimSpace(d.Content)
-	images, note := p.inboundImages(ctx, d.Attachments)
-	if text == "" && len(images) == 0 && note == "" {
+	images, imageNote := p.inboundImages(ctx, d.Attachments)
+	files, fileNote := p.inboundFiles(ctx, d.Attachments)
+	note := joinNotes(imageNote, fileNote)
+	if text == "" && len(images) == 0 && len(files) == 0 && note == "" {
 		note = i18n.T(p.langOf(), "plugin.discord_bot.msg.unsupported",
 			"暂不支持该消息类型，请发文字。")
 	}
@@ -389,6 +391,7 @@ func (p *Plugin) handleMessageCreate(ctx context.Context, frame gatewayFrame) {
 		ReplyTo: d.ID,
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -435,6 +438,58 @@ func (p *Plugin) inboundImages(ctx context.Context, attachments []discordAttachm
 			"一次最多处理 4 张图片，其余图片未发送给模型。")
 	}
 	return out, ""
+}
+
+// inboundFiles 下载非图片附件。Discord 单请求上限 25 MiB，统一限制更严。
+func (p *Plugin) inboundFiles(ctx context.Context, attachments []discordAttachment) ([]llm.FilePart, string) {
+	var out []llm.FilePart
+	total := 0
+	tooMany := false
+	for _, a := range attachments {
+		if strings.HasPrefix(a.ContentType, "image/") || a.URL == "" {
+			continue
+		}
+		if len(out) >= imbot.MaxFiles {
+			tooMany = true
+			continue
+		}
+		if a.Size > int64(imbot.MaxFileBytes) || total+int(a.Size) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		data, err := p.download(ctx, a.URL, int64(imbot.MaxFileBytes))
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.discord.file_failed", "discord_bot: 下载文件失败: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		if total+len(data) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		f, err := imbot.FileFromBytes(data, a.Filename, a.ContentType)
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.discord.file_invalid", "discord_bot: 文件无效（已跳过）: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		out = append(out, f)
+		total += len(data)
+	}
+	if tooMany {
+		return out, i18n.T(p.langOf(), "plugin.discord_bot.msg.file_too_many",
+			"一次最多处理 4 个文件，其余文件未发送给模型。")
+	}
+	return out, ""
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 // download 取 Discord 附件。附件 URL 本身带签名，不需要 Bot 鉴权。

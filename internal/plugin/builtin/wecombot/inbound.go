@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -20,13 +23,16 @@ import (
 
 var downloadClient = &http.Client{Timeout: 30 * time.Second}
 
-var errImageTooLarge = errors.New("图片超过大小上限")
+var errMediaTooLarge = errors.New("媒体超过大小上限")
 
-// callbackImage 是图片回调里的下载地址与解密密钥（地址 5 分钟内有效）。
-type callbackImage struct {
+// callbackMedia 是图片/文件回调里的下载地址与解密密钥（地址 5 分钟内有效）。
+type callbackMedia struct {
 	URL    string `json:"url"`
 	AESKey string `json:"aeskey"`
 }
+
+// callbackImage 保留旧名字，图文混排里的图片项仍用它。
+type callbackImage = callbackMedia
 
 // callbackBody 只取分发需要的字段。各消息类型的正文结构见官方「接收消息」文档：
 // 文本在 text.content，语音转写文本在 voice.content，图文混排在 mixed.msg_item。
@@ -44,6 +50,7 @@ type callbackBody struct {
 		Content string `json:"content"`
 	} `json:"voice"`
 	Image callbackImage `json:"image"`
+	File  callbackMedia `json:"file"`
 	Mixed struct {
 		MsgItem []struct {
 			MsgType string `json:"msgtype"`
@@ -82,7 +89,9 @@ func (p *Plugin) handleCallback(ctx context.Context, f wsFrame) {
 
 	lang := p.langOf()
 	text, unsupported := extractText(lang, body)
-	images, note := p.inboundImages(ctx, body)
+	images, imageNote := p.inboundImages(ctx, body)
+	files, fileNote := p.inboundFiles(ctx, body)
+	note := joinNotes(imageNote, fileNote)
 	if unsupported && note == "" {
 		note = i18n.T(lang, "plugin.wecom_bot.msg.unsupported", "暂不支持该消息类型，请发文字或语音。")
 	}
@@ -99,6 +108,7 @@ func (p *Plugin) handleCallback(ctx context.Context, f wsFrame) {
 		ReplyTo: f.Headers.ReqID,
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -115,7 +125,7 @@ func extractText(lang string, body callbackBody) (string, bool) {
 			return i18n.T(lang, "plugin.wecom_bot.voice_prefix", "【语音】") + s, false
 		}
 		return "", true
-	case "image":
+	case "image", "file":
 		return "", false
 	case "mixed":
 		var parts []string
@@ -167,7 +177,7 @@ func (p *Plugin) inboundImages(ctx context.Context, body callbackBody) ([]llm.Im
 		}
 		data, err := downloadImage(ctx, im.URL, im.AESKey)
 		if err != nil {
-			if errors.Is(err, errImageTooLarge) {
+			if errors.Is(err, errMediaTooLarge) {
 				return out, i18n.T(p.langOf(), "plugin.wecom_bot.msg.image_too_large",
 					"图片超过大小上限，请压缩后再发。")
 			}
@@ -193,36 +203,91 @@ func (p *Plugin) inboundImages(ctx context.Context, body callbackBody) ([]llm.Im
 	return out, ""
 }
 
+// inboundFiles 下载并解密回调里的文件。回调只给 url + aeskey，文件名从
+// Content-Disposition 或 URL 末段推断。
+func (p *Plugin) inboundFiles(ctx context.Context, body callbackBody) ([]llm.FilePart, string) {
+	if body.MsgType != "file" || body.File.URL == "" {
+		return nil, ""
+	}
+	data, name, err := downloadMedia(ctx, body.File.URL, body.File.AESKey, imbot.MaxFileBytes)
+	if err != nil {
+		if errors.Is(err, errMediaTooLarge) {
+			return nil, i18n.T(p.langOf(), "plugin.wecom_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		i18n.Logf(p.langOf(), "log.wecom.file_failed", "wecom_bot: 下载或解密文件失败: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.wecom_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	f, err := imbot.FileFromBytes(data, name, "")
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.wecom.file_invalid", "wecom_bot: 文件无效（已跳过）: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.wecom_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	return []llm.FilePart{f}, ""
+}
+
 func downloadImage(ctx context.Context, rawURL, aesKey string) ([]byte, error) {
+	data, _, err := downloadMedia(ctx, rawURL, aesKey, imbot.MaxImageBytes)
+	return data, err
+}
+
+func downloadMedia(ctx context.Context, rawURL, aesKey string, max int) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	resp, err := downloadClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	// 密文比明文多最多一个填充块；超过这个长度就不必再解密了。
-	limit := int64(imbot.MaxImageBytes + 2*aes.BlockSize)
+	limit := int64(max + 2*aes.BlockSize)
 	ciphertext, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if int64(len(ciphertext)) > limit {
-		return nil, errImageTooLarge
+		return nil, "", errMediaTooLarge
 	}
 	plain, err := decryptImage(ciphertext, aesKey)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if len(plain) > imbot.MaxImageBytes {
-		return nil, errImageTooLarge
+	if len(plain) > max {
+		return nil, "", errMediaTooLarge
 	}
-	return plain, nil
+	return plain, responseFileName(resp, rawURL), nil
+}
+
+func responseFileName(resp *http.Response, rawURL string) string {
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if _, params, err := mime.ParseMediaType(cd); err == nil {
+			if name := strings.TrimSpace(params["filename"]); name != "" {
+				return name
+			}
+		}
+	}
+	if u, err := url.Parse(rawURL); err == nil {
+		if base := path.Base(u.Path); base != "" && base != "." && base != "/" {
+			return base
+		}
+	}
+	return "file"
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 // decryptImage 按官方约定解密：aeskey 是 Base64 的 32 字节密钥，AES-256-CBC，

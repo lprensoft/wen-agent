@@ -214,6 +214,40 @@ func TestMergeMessagesKeepsImages(t *testing.T) {
 	}
 }
 
+func TestMergeMessagesKeepsNotes(t *testing.T) {
+	got := mergeMessages([]Message{
+		{UserID: "u", Text: "看图", Note: "图片下载失败"},
+		{UserID: "u", Text: "还有这个", Note: "文件超过大小上限"},
+	})
+	if got.Note != "图片下载失败\n文件超过大小上限" {
+		t.Fatalf("note = %q", got.Note)
+	}
+}
+
+func TestMergeMessagesKeepsFiles(t *testing.T) {
+	got := mergeMessages([]Message{
+		{UserID: "u", Text: "一", Files: []llm.FilePart{{Name: "a.txt"}}},
+		{UserID: "u", Text: "二", Files: []llm.FilePart{{Name: "b.txt"}}},
+	})
+	if len(got.Files) != 2 || got.Files[0].Name != "a.txt" || got.Files[1].Name != "b.txt" {
+		t.Fatalf("files = %+v", got.Files)
+	}
+}
+
+func TestSplitByMediaBudgetSplitsFiles(t *testing.T) {
+	file := func(name string) llm.FilePart {
+		return llm.FilePart{Name: name, MediaType: "text/plain", Data: []byte("x")}
+	}
+	var msgs []Message
+	for i := 0; i < 5; i++ {
+		msgs = append(msgs, Message{UserID: "u", Text: fmt.Sprintf("第%d个", i), Files: []llm.FilePart{file(fmt.Sprint(i))}})
+	}
+	groups := splitByMediaBudget(msgs)
+	if len(groups) != 2 || len(groups[0]) != 4 || len(groups[1]) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+}
+
 func TestSplitByImageBudgetKeepsTextWithImages(t *testing.T) {
 	img := func(name string) llm.ImagePart {
 		return llm.ImagePart{Name: name, MediaType: "image/png", Data: []byte("x")}
@@ -222,7 +256,7 @@ func TestSplitByImageBudgetKeepsTextWithImages(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		msgs = append(msgs, Message{UserID: "u", Text: fmt.Sprintf("第%d张", i), Images: []llm.ImagePart{img(fmt.Sprint(i))}})
 	}
-	groups := splitByImageBudget(msgs)
+	groups := splitByMediaBudget(msgs)
 	if len(groups) != 2 || len(groups[0]) != 4 || len(groups[1]) != 1 {
 		t.Fatalf("groups = %d/%d", len(groups), func() int { return len(groups[0]) }())
 	}

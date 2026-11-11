@@ -15,9 +15,19 @@ import (
 	"wen/internal/llm"
 )
 
-// sendImage 走 Slack 的外部上传三步：申请上传地址 → 上传文件 → 完成并投递到
-// DM。Bot Token 需要 files:write；文件地址是 Slack 返回的签名地址，不附 Bot Token。
+// sendImage 走 Slack 的外部上传三步发一张图片。
 func (p *Plugin) sendImage(ctx context.Context, channelID, _ string, img llm.ImagePart) error {
+	return p.sendAttachment(ctx, channelID, img.FileName(), img.Data)
+}
+
+// sendFile 走 Slack 的外部上传三步发一个普通文件。
+func (p *Plugin) sendFile(ctx context.Context, channelID, _ string, f llm.FilePart) error {
+	return p.sendAttachment(ctx, channelID, f.FileName(), f.Data)
+}
+
+// sendAttachment 走 Slack 的外部上传三步：申请上传地址 → 上传文件 → 完成并投递到
+// DM。Bot Token 需要 files:write；文件地址是 Slack 返回的签名地址，不附 Bot Token。
+func (p *Plugin) sendAttachment(ctx context.Context, channelID, name string, data []byte) error {
 	p.mu.Lock()
 	token, base, client := p.botToken, p.apiBase, p.client
 	p.mu.Unlock()
@@ -25,12 +35,11 @@ func (p *Plugin) sendImage(ctx context.Context, channelID, _ string, img llm.Ima
 		return fmt.Errorf("slack_bot: 尚未初始化")
 	}
 
-	name := img.FileName()
-	uploadURL, fileID, err := p.requestUploadURL(ctx, client, base, token, name, len(img.Data))
+	uploadURL, fileID, err := p.requestUploadURL(ctx, client, base, token, name, len(data))
 	if err != nil {
 		return err
 	}
-	if err := uploadFile(ctx, client, uploadURL, name, img.Data); err != nil {
+	if err := uploadFile(ctx, client, uploadURL, name, data); err != nil {
 		return err
 	}
 

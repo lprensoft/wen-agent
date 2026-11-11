@@ -53,6 +53,9 @@ type InitContext struct {
 	// RunTurnImages 与 RunTurn 相同，只是本轮用户消息额外携带图片。为 nil 时
 	// 需要发图的通道只能退化为纯文本。
 	RunTurnImages RunTurnImagesFunc
+	// RunTurnMedia 与 RunTurnImages 相同，并额外携带普通文件。为 nil 时带文件的
+	// 消息只能退化为纯文本。
+	RunTurnMedia RunTurnMediaFunc
 	// NewSession 新建一个会话并返回其 ID。为 nil 表示不可用。
 	NewSession NewSessionFunc
 	// Compact 压缩指定会话的历史。会话忙时返回 ErrSessionBusy。为 nil 表示不可用。

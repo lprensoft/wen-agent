@@ -14,7 +14,7 @@ import (
 	"wen/internal/llm"
 )
 
-var errImageTooLarge = errors.New("图片超过大小上限")
+var errMediaTooLarge = errors.New("媒体超过大小上限")
 
 // botMessage 是机器人回调 data 里分发需要的字段。文本在 text.content，
 // 语音转写文本在 content.recognition，富文本在 content.richText。
@@ -52,7 +52,9 @@ func (p *Plugin) handleCallback(ctx context.Context, job callbackJob) {
 	}
 
 	text, unsupported := extractText(p.langOf(), msg)
-	images, note := p.inboundImages(ctx, msg)
+	images, imageNote := p.inboundImages(ctx, msg)
+	files, fileNote := p.inboundFiles(ctx, msg)
+	note := joinNotes(imageNote, fileNote)
 	if unsupported && note == "" {
 		note = i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.unsupported", "暂不支持该消息类型，请发文字或语音。")
 	}
@@ -73,6 +75,7 @@ func (p *Plugin) handleCallback(ctx context.Context, job callbackJob) {
 		DedupID: dedup,
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -93,7 +96,7 @@ func extractText(lang string, msg botMessage) (string, bool) {
 			}
 		}
 		return "", true
-	case "picture":
+	case "picture", "file":
 		return "", false
 	case "richText":
 		var c struct {
@@ -177,7 +180,7 @@ func (p *Plugin) inboundImages(ctx context.Context, msg botMessage) ([]llm.Image
 		}
 		data, err := p.downloadImage(ctx, code)
 		if err != nil {
-			if errors.Is(err, errImageTooLarge) {
+			if errors.Is(err, errMediaTooLarge) {
 				return out, i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.image_too_large",
 					"图片超过大小上限，请压缩后再发。")
 			}
@@ -203,7 +206,41 @@ func (p *Plugin) inboundImages(ctx context.Context, msg botMessage) ([]llm.Image
 	return out, ""
 }
 
+// inboundFiles 用回调里的 downloadCode 换下载链接，取普通文件。文件名由回调
+// 给出，缺失时用下载地址末段。
+func (p *Plugin) inboundFiles(ctx context.Context, msg botMessage) ([]llm.FilePart, string) {
+	if msg.MsgType != "file" {
+		return nil, ""
+	}
+	var c struct {
+		DownloadCode string `json:"downloadCode"`
+		FileName     string `json:"fileName"`
+	}
+	if err := json.Unmarshal(msg.Content, &c); err != nil || c.DownloadCode == "" {
+		return nil, i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	data, err := p.downloadMedia(ctx, c.DownloadCode, imbot.MaxFileBytes)
+	if err != nil {
+		if errors.Is(err, errMediaTooLarge) {
+			return nil, i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		i18n.Logf(p.langOf(), "log.dingtalk.file_failed", "dingtalk_bot: 下载文件失败: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	f, err := imbot.FileFromBytes(data, c.FileName, "")
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.dingtalk.file_invalid", "dingtalk_bot: 文件无效（已跳过）: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.dingtalk_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	return []llm.FilePart{f}, ""
+}
+
 func (p *Plugin) downloadImage(ctx context.Context, downloadCode string) ([]byte, error) {
+	return p.downloadMedia(ctx, downloadCode, imbot.MaxImageBytes)
+}
+
+func (p *Plugin) downloadMedia(ctx context.Context, downloadCode string, max int) ([]byte, error) {
 	url, err := p.messageFileURL(ctx, downloadCode)
 	if err != nil {
 		return nil, err
@@ -223,14 +260,25 @@ func (p *Plugin) downloadImage(ctx context.Context, downloadCode string) ([]byte
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, imbot.MaxImageBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > imbot.MaxImageBytes {
-		return nil, errImageTooLarge
+	if len(data) > max {
+		return nil, errMediaTooLarge
 	}
 	return data, nil
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 // messageFileURL 把回调里的 downloadCode 换成临时下载链接。链接带时效，所以

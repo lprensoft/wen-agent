@@ -9,17 +9,17 @@ import (
 )
 
 var (
-	// ErrNoImageChannel 表示本轮不是从一条运行中的 IM 通道发起的（Web UI、
+	// ErrNoMediaChannel 表示本轮不是从一条运行中的 IM 通道发起的（Web UI、
 	// 后台轮次或已停用的通道），没有可用的收件人与回复凭据。
-	ErrNoImageChannel = errors.New("当前对话不是从 IM 通道发起的")
-	// ErrImageUnsupported 表示这条通道实现了文本发送，但还没实现图片发送。
-	ErrImageUnsupported = errors.New("该通道不支持发送图片")
-	// ErrImageTargetUnavailable 表示分通道路由指定的出口当前不可用或没有收件人。
-	// 图片不会回落到来源通道，而是明确失败。
-	ErrImageTargetUnavailable = errors.New("图片投递通道不可用")
-	// ErrImageDeliveryUnknown 表示图片可能已经送达，但平台没有确认。调用方不得
-	// 自动重发，模型也应被告知不要重试，否则对方会收到两张。
-	ErrImageDeliveryUnknown = errors.New("图片送达状态未知")
+	ErrNoMediaChannel = errors.New("当前对话不是从 IM 通道发起的")
+	// ErrMediaUnsupported 表示这条通道实现了文本发送，但还没实现该媒体的发送。
+	ErrMediaUnsupported = errors.New("该通道不支持发送该媒体")
+	// ErrMediaTargetUnavailable 表示分通道路由指定的出口当前不可用或没有收件人。
+	// 媒体不会回落到来源通道，而是明确失败。
+	ErrMediaTargetUnavailable = errors.New("媒体投递通道不可用")
+	// ErrMediaDeliveryUnknown 表示媒体可能已经送达，但平台没有确认。调用方不得
+	// 自动重发，模型也应被告知不要重试，否则对方会收到两份。
+	ErrMediaDeliveryUnknown = errors.New("媒体送达状态未知")
 )
 
 // turnMessageKey 把本轮入站消息带进轮次 ctx，供轮次中的工具发图时取收件人与
@@ -54,14 +54,14 @@ func turnSessionFrom(ctx context.Context) string {
 func SendTurnImage(ctx context.Context, img llm.ImagePart) error {
 	origin := plugin.TurnOriginFrom(ctx)
 	if origin == "" || !IsChannel(origin) {
-		return ErrNoImageChannel
+		return ErrNoMediaChannel
 	}
 	if _, ok := turnMessageFrom(ctx); !ok {
-		return ErrNoImageChannel
+		return ErrNoMediaChannel
 	}
 	sessionID := turnSessionFrom(ctx)
 	if sessionID == "" {
-		return ErrNoImageChannel
+		return ErrNoMediaChannel
 	}
 
 	target := Target(sessionID)
@@ -72,7 +72,7 @@ func SendTurnImage(ctx context.Context, img llm.ImagePart) error {
 	core := liveCores[target]
 	regMu.RUnlock()
 	if core == nil {
-		return ErrImageTargetUnavailable
+		return ErrMediaTargetUnavailable
 	}
 	if target == origin {
 		return core.sendTurnImage(ctx, img)
@@ -83,14 +83,14 @@ func SendTurnImage(ctx context.Context, img llm.ImagePart) error {
 func (c *Core) sendTurnImage(ctx context.Context, img llm.ImagePart) error {
 	msg, ok := turnMessageFrom(ctx)
 	if !ok {
-		return ErrNoImageChannel
+		return ErrNoMediaChannel
 	}
 	sender, ok := c.cfg.Sender.(ImageSender)
 	if !ok {
-		return ErrImageUnsupported
+		return ErrMediaUnsupported
 	}
 	if !c.Running() {
-		return ErrNoImageChannel
+		return ErrNoMediaChannel
 	}
 	return sender.SendImage(ctx, msg.UserID, msg.ReplyTo, img)
 }
@@ -100,16 +100,16 @@ func (c *Core) sendTurnImage(ctx context.Context, img llm.ImagePart) error {
 func (c *Core) pushImageTo(ctx context.Context, sessionID string, img llm.ImagePart) error {
 	sender, ok := c.cfg.Sender.(ImageSender)
 	if !ok {
-		return ErrImageUnsupported
+		return ErrMediaUnsupported
 	}
 	if !c.Running() {
-		return ErrImageTargetUnavailable
+		return ErrMediaTargetUnavailable
 	}
 	users, ok := c.recipientsFor(ctx, sessionID)
 	if !ok {
-		return ErrImageTargetUnavailable
+		return ErrMediaTargetUnavailable
 	}
-	pctx, cancel := c.imageCtx(ctx)
+	pctx, cancel := c.mediaCtx(ctx)
 	defer cancel()
 	var lastErr error
 	sent := false
@@ -126,13 +126,13 @@ func (c *Core) pushImageTo(ctx context.Context, sessionID string, img llm.ImageP
 	if lastErr != nil {
 		return lastErr
 	}
-	return ErrImageTargetUnavailable
+	return ErrMediaTargetUnavailable
 }
 
-// imageCtx 保留本轮的工具 ctx（含截止时间与取消信号），同时在本通道停止时取消。
-// 图片工具是同步调用，不能像文本转投那样脱离轮次继续跑：用户取消或轮次超时后，
+// mediaCtx 保留本轮的工具 ctx（含截止时间与取消信号），同时在本通道停止时取消。
+// 媒体工具是同步调用，不能像文本转投那样脱离轮次继续跑：用户取消或轮次超时后，
 // 上传与发送都该停下来。
-func (c *Core) imageCtx(parent context.Context) (context.Context, context.CancelFunc) {
+func (c *Core) mediaCtx(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	c.mu.Lock()
 	life := c.ctx

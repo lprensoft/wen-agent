@@ -164,36 +164,32 @@ func (p *Plugin) dispatch(ctx context.Context, msg wxMessage) {
 	if msg.FromUserID == "" || msg.ContextToken == "" {
 		return
 	}
+	// 白名单在这里先查一次：Core.Handle 也会查，但那时附件已经下载、解密、
+	// 解码完了。陌生人发来的大图会把同步的收信循环卡住最长 60 秒。
+	if !p.allowed(msg.FromUserID) {
+		i18n.Logf(p.langOf(), "log.imbot.rejected", "%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）",
+			p.Name(), msg.FromUserID)
+		return
+	}
 
-	var parts []string
-	unsupported := false
-	for _, item := range msg.ItemList {
-		switch item.Type {
-		case 1:
-			if item.TextItem != nil && strings.TrimSpace(item.TextItem.Text) != "" {
-				parts = append(parts, item.TextItem.Text)
-			}
-		case 3:
-			if item.VoiceItem != nil && strings.TrimSpace(item.VoiceItem.Text) != "" {
-				parts = append(parts, "【语音】"+item.VoiceItem.Text)
-			} else {
-				unsupported = true
-			}
-		default:
-			unsupported = true
-		}
+	text, images, files, note, unsupported := p.inboundContent(ctx, msg.ItemList)
+	if unsupported && note == "" {
+		note = i18n.T(p.langOf(), "plugin.wechat_bot.msg.unsupported", "暂不支持该消息类型，请发文字或图片。")
 	}
 
 	in := inbound{
 		userID:       msg.FromUserID,
 		contextToken: msg.ContextToken,
-		text:         strings.TrimSpace(strings.Join(parts, "\n")),
+		text:         text,
+		images:       images,
+		files:        files,
+		note:         note,
 	}
 	dedupKey := msg.ClientID
 	if msg.MessageID != 0 {
 		dedupKey = strconv.FormatUint(msg.MessageID, 10)
 	}
-	p.handleInbound(ctx, in, dedupKey, unsupported)
+	p.handleInbound(ctx, in, dedupKey)
 }
 
 // sleepCtx 可被 ctx 打断的休眠。

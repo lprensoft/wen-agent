@@ -65,15 +65,38 @@ type voiceItem struct {
 }
 
 // cdnMedia 是 CDN 资源的引用：下载参数 + Base64(hex) 的 AES 密钥。
+// FullURL 是服务端直接给完整下载地址时用的；官方 SDK 会优先用它。
 type cdnMedia struct {
 	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
 	AESKey            string `json:"aes_key,omitempty"`
 	EncryptType       int    `json:"encrypt_type,omitempty"`
+	FullURL           string `json:"full_url,omitempty"`
 }
 
 type imageItem struct {
 	Media   cdnMedia `json:"media"`
 	MidSize int      `json:"mid_size,omitempty"` // 密文字节数
+	// AESKey 是图片单独的十六进制密钥；官方 SDK 优先用它，其次才是 media.aes_key。
+	AESKey string `json:"aeskey,omitempty"`
+}
+
+type fileItem struct {
+	Media    cdnMedia `json:"media"`
+	FileName string   `json:"file_name,omitempty"`
+	Len      fileLen  `json:"len,omitempty"` // 明文字节数；官方出站用字符串，入站可能是数字
+}
+
+// fileLen 兼容字符串与数字两种写法。入站若把 len 写成数字，用 string 接收会
+// 让整个 getupdates 响应解析失败，进而卡住收信。
+type fileLen string
+
+func (l *fileLen) UnmarshalJSON(raw []byte) error {
+	*l = fileLen(strings.Trim(string(raw), `"`))
+	return nil
+}
+
+func (l fileLen) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(l))
 }
 
 type messageItem struct {
@@ -81,6 +104,7 @@ type messageItem struct {
 	TextItem  *textItem  `json:"text_item,omitempty"`
 	VoiceItem *voiceItem `json:"voice_item,omitempty"`
 	ImageItem *imageItem `json:"image_item,omitempty"`
+	FileItem  *fileItem  `json:"file_item,omitempty"`
 }
 
 // 消息发起方与状态。

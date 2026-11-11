@@ -69,6 +69,7 @@ type sentFrame struct {
 // uploadEvent 记录一次分片上传的关键参数。
 type uploadEvent struct {
 	cmd      string
+	kind     string
 	filename string
 	chunk    []byte
 }
@@ -172,10 +173,11 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 			switch frame.Cmd {
 			case cmdUploadInit:
 				var body struct {
+					Type     string `json:"type"`
 					Filename string `json:"filename"`
 				}
 				_ = json.Unmarshal(frame.Body, &body)
-				f.uploads <- uploadEvent{cmd: cmdUploadInit, filename: body.Filename}
+				f.uploads <- uploadEvent{cmd: cmdUploadInit, kind: body.Type, filename: body.Filename}
 				f.ackBody(frame.Headers.ReqID, 0, map[string]any{"upload_id": "up-1"})
 			case cmdUploadChunk:
 				var body struct {
@@ -216,8 +218,15 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 					Image struct {
 						MediaID string `json:"media_id"`
 					} `json:"image"`
+					File struct {
+						MediaID string `json:"media_id"`
+					} `json:"file"`
 				}
 				_ = json.Unmarshal(frame.Body, &body)
+				mediaID := body.Image.MediaID
+				if mediaID == "" {
+					mediaID = body.File.MediaID
+				}
 				kind, content := "reply", body.Stream.Content
 				if frame.Cmd == cmdSend {
 					kind, content = "push", body.Markdown.Content
@@ -226,7 +235,7 @@ func newFakeWeCom(t *testing.T) *fakeWeCom {
 					kind: kind, reqID: frame.Headers.ReqID,
 					chatID: body.ChatID, chatType: body.ChatType, content: content,
 					streamID: body.Stream.ID, finish: body.Stream.Finish,
-					msgType: body.MsgType, mediaID: body.Image.MediaID,
+					msgType: body.MsgType, mediaID: mediaID,
 				}
 				f.mu.Lock()
 				fail := f.failSends
@@ -442,12 +451,26 @@ func TestVoiceUsesTranscription(t *testing.T) {
 
 func TestUnsupportedMessageGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "user1", nil)
-	f.pushCallback("msg-1", "cb-1", "single", "user1", "file", map[string]any{
-		"url": "https://example.com/a.pdf", "aeskey": testAESKey,
+	f.pushCallback("msg-1", "cb-1", "single", "user1", "video", map[string]any{
+		"url": "https://example.com/a.mp4", "aeskey": testAESKey,
 	})
 	m := f.expectSend(t)
 	if !strings.Contains(m.content, "暂不支持该消息类型") {
-		t.Fatalf("文件消息应回一句提示: %+v", m)
+		t.Fatalf("视频消息应回一句提示: %+v", m)
+	}
+}
+
+func TestInboundFileDownload(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil)
+	files, note := p.inboundFiles(context.Background(), callbackBody{
+		MsgType: "file",
+		File:    callbackMedia{URL: f.srv.URL + "/file/report.pdf", AESKey: testAESKey},
+	})
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "report.pdf" || files[0].MediaType != "application/pdf" || !bytes.Equal(files[0].Data, testPNG) {
+		t.Fatalf("文件内容不符: %+v", files[0])
 	}
 }
 
@@ -790,8 +813,8 @@ func TestCallbackRightAfterSubscribeIsDispatched(t *testing.T) {
 		f.mu.Lock()
 		f.onAuth = func() {
 			// 紧跟着订阅成功回执到达：此时客户端可能还没把连接登记好
-			f.pushCallback("msg-early", "cb-early", "single", "user1", "file",
-				map[string]any{"url": "https://example.com/a.pdf", "aeskey": testAESKey})
+			f.pushCallback("msg-early", "cb-early", "single", "user1", "video",
+				map[string]any{"url": "https://example.com/a.mp4", "aeskey": testAESKey})
 		}
 		f.mu.Unlock()
 	})
@@ -881,7 +904,7 @@ func TestOutboundImageTimeoutReportsUnconfirmed(t *testing.T) {
 
 	err := (sender{p}).SendImage(context.Background(), "user1", "cb-1",
 		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
-	if err == nil || !strings.Contains(err.Error(), "没有确认") || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+	if err == nil || !strings.Contains(err.Error(), "没有确认") || !errors.Is(err, imbot.ErrMediaDeliveryUnknown) {
 		t.Fatalf("回执超时应报告送达未知，得到 %v", err)
 	}
 }
@@ -896,7 +919,7 @@ func TestOutboundImageActiveTimeoutReportsUnconfirmed(t *testing.T) {
 
 	err := (sender{p}).SendImage(context.Background(), "user1", "",
 		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
-	if err == nil || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+	if err == nil || !errors.Is(err, imbot.ErrMediaDeliveryUnknown) {
 		t.Fatalf("主动发送回执超时应报告送达未知，得到 %v", err)
 	}
 }
@@ -919,8 +942,42 @@ func TestOutboundImageStaleFallbackTimeoutReportsUnconfirmed(t *testing.T) {
 
 	err := (sender{p}).SendImage(context.Background(), "user1", "cb-1",
 		llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testPNG})
-	if err == nil || !errors.Is(err, imbot.ErrImageDeliveryUnknown) {
+	if err == nil || !errors.Is(err, imbot.ErrMediaDeliveryUnknown) {
 		t.Fatalf("回退主动推送后回执超时也应报告送达未知，得到 %v", err)
+	}
+}
+
+func TestOutboundFileUploadsChunksThenReplies(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil)
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "user1", "cb-1", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	for _, want := range []string{cmdUploadInit, cmdUploadChunk, cmdUploadFinish} {
+		select {
+		case ev := <-f.uploads:
+			if ev.cmd != want {
+				t.Fatalf("上传顺序不对：先收到 %s，期望 %s", ev.cmd, want)
+			}
+			switch ev.cmd {
+			case cmdUploadInit:
+				if ev.kind != "file" || ev.filename != "报告.txt" {
+					t.Fatalf("上传参数不符: %+v", ev)
+				}
+			case cmdUploadChunk:
+				if string(ev.chunk) != "hello" {
+					t.Fatal("上传的分片内容不一致")
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("等待 %s 超时", want)
+		}
+	}
+
+	m := f.expectSend(t)
+	if m.kind != "reply" || m.reqID != "cb-1" || m.msgType != "file" || m.mediaID != "media-1" {
+		t.Fatalf("文件回复不符: %+v", m)
 	}
 }
 

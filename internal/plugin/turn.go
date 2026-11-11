@@ -21,6 +21,10 @@ type RunTurnFunc func(ctx context.Context, sessionID, input string) (string, err
 // 见 InitContext.RunTurnImages。
 type RunTurnImagesFunc func(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error)
 
+// RunTurnMediaFunc 与 RunTurnImagesFunc 相同，并额外携带普通文件。
+// 见 InitContext.RunTurnMedia。
+type RunTurnMediaFunc func(ctx context.Context, sessionID, input string, images []llm.ImagePart, files []llm.FilePart) (string, error)
+
 // NewSessionFunc 新建一个会话并返回其 ID。见 InitContext.NewSession。
 type NewSessionFunc func() (string, error)
 

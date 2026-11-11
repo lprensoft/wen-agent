@@ -123,6 +123,7 @@ func NewCore(opts CoreOptions) (*Core, error) {
 		Preview:        opts.Preview,
 		RunTurn:        opts.Ctx.RunTurn,
 		RunTurnImages:  opts.Ctx.RunTurnImages,
+		RunTurnMedia:   opts.Ctx.RunTurnMedia,
 		NewSession:     opts.Ctx.NewSession,
 		Compact:        opts.Ctx.Compact,
 		Status:         opts.Ctx.Status,

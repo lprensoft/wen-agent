@@ -9,6 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"strings"
 
 	"wen/internal/llm"
 )
@@ -16,14 +18,32 @@ import (
 // sendImage 先上传图片拿 media_id，再用 sampleImageMsg 发出去。钉钉的
 // photoURL 允许直接填 media_id，不需要公网地址。
 func (p *Plugin) sendImage(ctx context.Context, userID, _ string, img llm.ImagePart) error {
-	mediaID, err := p.uploadImage(ctx, img)
+	mediaID, err := p.uploadMedia(ctx, "image", img.FileName(), img.Data)
 	if err != nil {
 		return err
 	}
 	return p.sendRobot(ctx, userID, "sampleImageMsg", map[string]string{"photoURL": mediaID})
 }
 
-func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, error) {
+// sendFile 用 sampleFile 发一个普通文件。fileType 取扩展名，钉钉按它决定
+// 客户端里的打开方式。
+func (p *Plugin) sendFile(ctx context.Context, userID, _ string, f llm.FilePart) error {
+	mediaID, err := p.uploadMedia(ctx, "file", f.FileName(), f.Data)
+	if err != nil {
+		return err
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(f.FileName())), ".")
+	if ext == "" {
+		ext = "file"
+	}
+	return p.sendRobot(ctx, userID, "sampleFile", map[string]string{
+		"mediaId":  mediaID,
+		"fileName": f.FileName(),
+		"fileType": ext,
+	})
+}
+
+func (p *Plugin) uploadMedia(ctx context.Context, kind, filename string, data []byte) (string, error) {
 	p.mu.Lock()
 	tokens, client, base := p.tokens, p.client, p.oapiBase
 	p.mu.Unlock()
@@ -38,14 +58,14 @@ func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, er
 		}
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
-		if err := mw.WriteField("type", "image"); err != nil {
+		if err := mw.WriteField("type", kind); err != nil {
 			return "", err
 		}
-		fw, err := mw.CreateFormFile("media", img.FileName())
+		fw, err := mw.CreateFormFile("media", filename)
 		if err != nil {
 			return "", err
 		}
-		if _, err := fw.Write(img.Data); err != nil {
+		if _, err := fw.Write(data); err != nil {
 			return "", err
 		}
 		if err := mw.Close(); err != nil {
@@ -71,11 +91,11 @@ func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, er
 			MediaID string `json:"media_id"`
 		}
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return "", fmt.Errorf("上传图片响应无法解析（HTTP %d）: %s", resp.StatusCode, truncate(string(raw), 200))
+			return "", fmt.Errorf("上传媒体响应无法解析（HTTP %d）: %s", resp.StatusCode, truncate(string(raw), 200))
 		}
 		if resp.StatusCode == http.StatusOK && out.Errcode == 0 {
 			if out.MediaID == "" {
-				return "", fmt.Errorf("上传图片没有返回 media_id")
+				return "", fmt.Errorf("上传媒体没有返回 media_id")
 			}
 			return out.MediaID, nil
 		}
@@ -83,7 +103,7 @@ func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, er
 			tokens.invalidate()
 			continue
 		}
-		return "", fmt.Errorf("上传图片失败: HTTP %d errcode=%d %s", resp.StatusCode, out.Errcode, out.Errmsg)
+		return "", fmt.Errorf("上传媒体失败: HTTP %d errcode=%d %s", resp.StatusCode, out.Errcode, out.Errmsg)
 	}
 	return "", fmt.Errorf("刷新 AccessToken 后上传仍然失败")
 }

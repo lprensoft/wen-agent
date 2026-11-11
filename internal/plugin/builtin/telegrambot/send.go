@@ -92,16 +92,40 @@ func (p *Plugin) sendImage(ctx context.Context, chatID, replyTo string, img llm.
 	p.mu.Unlock()
 
 	fields := map[string]string{"chat_id": chatID}
-	if replyTo != "" {
-		if id, err := strconv.ParseInt(replyTo, 10, 64); err == nil {
-			raw, _ := json.Marshal(map[string]any{
-				"message_id":                  id,
-				"allow_sending_without_reply": true,
-			})
-			fields["reply_parameters"] = string(raw)
-		}
+	if rp := replyParameters(replyTo); rp != "" {
+		fields["reply_parameters"] = rp
 	}
 	return p.apiCallMultipart(ctx, client, "sendPhoto", fields, "photo", img.FileName(), img.Data, nil)
+}
+
+// sendFile 用 sendDocument 发一个普通文件。Telegram 上传上限 50 MB，统一限制
+// 已经更严，不会触发分片上传。
+func (p *Plugin) sendFile(ctx context.Context, chatID, replyTo string, f llm.FilePart) error {
+	p.mu.Lock()
+	client := p.client
+	p.mu.Unlock()
+
+	fields := map[string]string{"chat_id": chatID}
+	if rp := replyParameters(replyTo); rp != "" {
+		fields["reply_parameters"] = rp
+	}
+	return p.apiCallMultipart(ctx, client, "sendDocument", fields, "document", f.FileName(), f.Data, nil)
+}
+
+// replyParameters 把回复凭据转成 Bot API 的 reply_parameters；凭据不是数字时忽略。
+func replyParameters(replyTo string) string {
+	if replyTo == "" {
+		return ""
+	}
+	id, err := strconv.ParseInt(replyTo, 10, 64)
+	if err != nil {
+		return ""
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"message_id":                  id,
+		"allow_sending_without_reply": true,
+	})
+	return string(raw)
 }
 
 // sendMessage 发一条消息。parseMode 为空表示纯文本。

@@ -83,8 +83,8 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	tctx = plugin.WithInteractive(tctx)
 	tctx = plugin.WithConfirmer(tctx, c.confirmerFor(msg))
 	tctx = withHeld(tctx, msg)        // 被扣过的话，让这一轮知道自己回晚了
-	tctx = withTurnMessage(tctx, msg) // 轮次中的工具发图时要取收件人与回复凭据
-	tctx = withTurnSession(tctx, sid) // 分通道路由按会话裁决图片出口
+	tctx = withTurnMessage(tctx, msg) // 轮次中的工具发媒体时要取收件人与回复凭据
+	tctx = withTurnSession(tctx, sid) // 分通道路由按会话裁决媒体出口
 	// 按配置转发过程通知：思考链、工具调用（仅名字）。同步发送保证与最终回复的顺序
 	if c.cfg.ShowThinking || c.cfg.ShowTools {
 		// 过程通知与最终回复走同一条出口：装了分通道路由时，思考链跟着回复一起
@@ -117,9 +117,12 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 
 	c.typing(ctx, msg, true)
 	var final string
-	if len(msg.Images) > 0 && c.cfg.RunTurnImages != nil {
+	switch {
+	case len(msg.Files) > 0 && c.cfg.RunTurnMedia != nil:
+		final, err = c.cfg.RunTurnMedia(tctx, sid, msg.Text, msg.Images, msg.Files)
+	case len(msg.Images) > 0 && c.cfg.RunTurnImages != nil:
 		final, err = c.cfg.RunTurnImages(tctx, sid, msg.Text, msg.Images)
-	} else {
+	default:
 		final, err = c.cfg.RunTurn(tctx, sid, msg.Text)
 	}
 	stopPreview() // 必须在正式回复之前：最后一次预览不能落在回复后面

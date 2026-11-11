@@ -117,9 +117,18 @@ func (p *Plugin) sendTyping(ctx context.Context, channelID string) error {
 	return err
 }
 
-// sendImage 用 multipart 发一条带附件的消息。Discord 单请求上限 25 MiB，
-// 图片只有 5 MB，不需要分片。
+// sendImage 用 multipart 发一条带图片附件的消息。
 func (p *Plugin) sendImage(ctx context.Context, channelID, replyTo string, img llm.ImagePart) error {
+	return p.sendAttachment(ctx, channelID, replyTo, img.FileName(), img.Data)
+}
+
+// sendFile 用 multipart 发一条带文件附件的消息。单请求上限 25 MiB，统一限制
+// 已经更严，不需要分片。
+func (p *Plugin) sendFile(ctx context.Context, channelID, replyTo string, f llm.FilePart) error {
+	return p.sendAttachment(ctx, channelID, replyTo, f.FileName(), f.Data)
+}
+
+func (p *Plugin) sendAttachment(ctx context.Context, channelID, replyTo, name string, data []byte) error {
 	p.mu.Lock()
 	client, base, token := p.client, p.apiBase, p.token
 	p.mu.Unlock()
@@ -127,7 +136,6 @@ func (p *Plugin) sendImage(ctx context.Context, channelID, replyTo string, img l
 		return fmt.Errorf("discord_bot: 尚未初始化")
 	}
 
-	name := img.FileName()
 	payload := map[string]any{
 		"allowed_mentions": map[string]any{"parse": []string{}},
 		"attachments":      []map[string]any{{"id": 0, "filename": name}},
@@ -153,7 +161,7 @@ func (p *Plugin) sendImage(ctx context.Context, channelID, replyTo string, img l
 	if err != nil {
 		return err
 	}
-	if _, err := fw.Write(img.Data); err != nil {
+	if _, err := fw.Write(data); err != nil {
 		return err
 	}
 	if err := mw.Close(); err != nil {

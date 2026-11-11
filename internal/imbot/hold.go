@@ -51,27 +51,42 @@ type heldImage struct {
 	Data      []byte `json:"data,omitempty"`
 }
 
+// heldFile 是扣留期间文件的落盘形式，理由与 heldImage 相同。
+type heldFile struct {
+	Name      string `json:"name,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+}
+
 func (h heldMsg) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Msg      Message     `json:"msg"`
 		Images   []heldImage `json:"images,omitempty"`
+		Files    []heldFile  `json:"files,omitempty"`
 		Arrived  time.Time   `json:"arrived"`
 		Activity string      `json:"activity,omitempty"`
 		Sleeping bool        `json:"sleeping,omitempty"`
 	}
 	msg := h.Msg
 	msg.Images = nil
+	msg.Files = nil
 	images := make([]heldImage, 0, len(h.Msg.Images))
 	for _, img := range h.Msg.Images {
 		images = append(images, heldImage{Name: img.Name, MediaType: img.MediaType, Size: img.Size, Data: img.Data})
 	}
-	return json.Marshal(wire{Msg: msg, Images: images, Arrived: h.Arrived, Activity: h.Activity, Sleeping: h.Sleeping})
+	files := make([]heldFile, 0, len(h.Msg.Files))
+	for _, f := range h.Msg.Files {
+		files = append(files, heldFile{Name: f.Name, MediaType: f.MediaType, Size: f.Size, Data: f.Data})
+	}
+	return json.Marshal(wire{Msg: msg, Images: images, Files: files, Arrived: h.Arrived, Activity: h.Activity, Sleeping: h.Sleeping})
 }
 
 func (h *heldMsg) UnmarshalJSON(raw []byte) error {
 	var w struct {
 		Msg      Message     `json:"msg"`
 		Images   []heldImage `json:"images,omitempty"`
+		Files    []heldFile  `json:"files,omitempty"`
 		Arrived  time.Time   `json:"arrived"`
 		Activity string      `json:"activity,omitempty"`
 		Sleeping bool        `json:"sleeping,omitempty"`
@@ -83,6 +98,12 @@ func (h *heldMsg) UnmarshalJSON(raw []byte) error {
 	for _, img := range w.Images {
 		w.Msg.Images = append(w.Msg.Images, llm.ImagePart{
 			Name: img.Name, MediaType: img.MediaType, Size: img.Size, Data: img.Data,
+		})
+	}
+	w.Msg.Files = make([]llm.FilePart, 0, len(w.Files))
+	for _, f := range w.Files {
+		w.Msg.Files = append(w.Msg.Files, llm.FilePart{
+			Name: f.Name, MediaType: f.MediaType, Size: f.Size, Data: f.Data,
 		})
 	}
 	*h = heldMsg{Msg: w.Msg, Arrived: w.Arrived, Activity: w.Activity, Sleeping: w.Sleeping}
@@ -251,7 +272,7 @@ func (c *Core) releaseDue(now time.Time) time.Time {
 		}
 		// 拆出的每一轮都可能撞上满队列。入不了队的不能丢：它们已经离开 held.json，
 		// 手头这些是唯一副本，必须原样扣回去等下一拍。
-		groups := splitByImageBudget(heldMessages(batch))
+		groups := splitByMediaBudget(heldMessages(batch))
 		var unsent []Message
 		for i, group := range groups {
 			msg := mergeMessages(group)

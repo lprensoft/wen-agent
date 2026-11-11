@@ -136,7 +136,7 @@ func TestSendTurnImageRejectsNonChannelTurn(t *testing.T) {
 
 	c.Handle(context.Background(), Message{UserID: "u1", Text: "发张图"})
 	sender.expect(t)
-	if !errors.Is(gotErr, ErrNoImageChannel) {
+	if !errors.Is(gotErr, ErrNoMediaChannel) {
 		t.Fatalf("Web UI 轮次应拒绝发图，得到 %v", gotErr)
 	}
 }
@@ -153,7 +153,7 @@ func TestSendTurnImageRejectsBackgroundTurn(t *testing.T) {
 
 	c.Handle(context.Background(), Message{UserID: "u1", Text: "发张图"})
 	sender.expect(t)
-	if !errors.Is(gotErr, ErrNoImageChannel) {
+	if !errors.Is(gotErr, ErrNoMediaChannel) {
 		t.Fatalf("后台轮次应拒绝发图，得到 %v", gotErr)
 	}
 }
@@ -170,7 +170,7 @@ func TestSendTurnImageRequiresChannelSupport(t *testing.T) {
 
 	c.Handle(context.Background(), Message{UserID: "u1", Text: "发张图"})
 	sender.expect(t)
-	if !errors.Is(gotErr, ErrImageUnsupported) {
+	if !errors.Is(gotErr, ErrMediaUnsupported) {
 		t.Fatalf("未实现图片发送的通道应报不支持，得到 %v", gotErr)
 	}
 }
@@ -227,7 +227,7 @@ func TestSendTurnImageDoesNotFallBackWhenTargetMissing(t *testing.T) {
 		t.Fatal("等待轮次结束超时")
 	}
 
-	if !errors.Is(gotErr, ErrImageTargetUnavailable) {
+	if !errors.Is(gotErr, ErrMediaTargetUnavailable) {
 		t.Fatalf("目标通道不存在应报投递不可用，得到 %v", gotErr)
 	}
 	if n := sender.count(); n != 0 {
