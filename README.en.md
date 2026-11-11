@@ -25,8 +25,9 @@ The goal is **someone you can keep company with**, not a window that only exists
 - **[Memory that remembers, and forgets](docs/en/plugins/memory.md)** — a cross-session store of facts whose index is injected every turn, with relevant entries surfacing on their own when you touch on them; distilled periodically during a conversation and once more before the history is compacted; a new conclusion that contradicts an old memory revises it in place; each day's conversation is folded into a one-line timeline the next day; gradual forgetting is available. The raw conversations stay searchable by keyword and date through [history search](docs/en/plugins/memory.md), archives of pre-compaction transcripts included
 - **[It speaks first — and knows when not to](docs/en/plugins/background.md)** — a heartbeat wakes the model up on the most recently active session, and the character sets the timing of its next opening itself: closer when the conversation is lively, paused until morning when you say you are going to bed. Things like rain that has just started become a reason to speak. Scheduled tasks can be created mid-conversation and run in the background, writing their results back into the session
 - **[Remote channels](docs/en/plugins/im.md)** — QQ, WeChat, WeCom, DingTalk, Feishu, Lark, Telegram, Discord and Slack, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
-- **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; thirty-six built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
-- **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; adding a provider starts from a list of presets (DeepSeek, Zhipu, Kimi, Qwen, Doubao, MiniMax, SiliconFlow, OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, with separate China and international entries) that fills in the endpoint and the common models, leaving only an API key to add; OpenAI-compatible and Anthropic Messages API are both supported
+- **[Images, files and voice](docs/en/plugins/im.md)** — all nine channels receive images and files in direct messages: images go to the model, files land in the session attachment directory for `read_file`; with the `media` plugin the model can also send images and files back into the chat. QQ, WeCom, DingTalk and WeChat understand voice through the platform's own transcription, at no extra cost
+- **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; thirty-seven built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
+- **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; adding a provider starts from a list of presets (DeepSeek, Zhipu, Kimi, Qwen, Doubao, MiniMax, SiliconFlow, OpenAI, Anthropic, Gemini, xAI, OpenRouter, Ollama, with separate China and international entries) that fills in the endpoint and the common models, leaving only an API key to add; OpenAI-compatible and Anthropic Messages API are both supported, with an optional Responses API for better reasoning-model support and a fallback chain that takes over when the primary model hits a transient failure
 - **[A human in the loop for commands](docs/en/plugins/tools.md)** — `exec_command` intercepts before execution and asks you; the most destructive commands are refused outright. No path sandbox that could be trivially bypassed
 - **Web UI** — a single-page chat interface embedded with `go:embed`, SSE streaming, visible thinking and tool calls, and images sent alongside a message; background activity shows up in the session in real time
 - **[It updates itself](docs/en/plugins/self-update.md)** — checks GitHub for a new release once a day; one click on the settings page downloads, verifies (SHA256), test-runs, replaces and restarts. No package manager needed on Windows, macOS or Linux. It only checks — installing is always your click
@@ -50,7 +51,7 @@ go run ./cmd/wen
 
 The wizard's providers come from a preset list with the endpoint, thinking-parameter dialect and common models already filled in, so all you add is an API key. To switch models or add providers later, use the settings page or `wen config models`. To go through the wizard again, run `wen onboard`.
 
-There is nothing to configure first: twenty of the thirty-six plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The sixteen that are off either need something filled in (trigger phrases, a city, bot credentials, books on the shelf, feeds) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
+There is nothing to configure first: twenty-one of the thirty-seven plugins are on by default — the character, memory, agenda, mood and heartbeat among them — so the other side is someone with a personality, a life, and the habit of speaking first. The sixteen that are off either need something filled in (trigger phrases, a city, bot credentials, books on the shelf, feeds) or carry too much power: `read_file` can read any file and `exec_command` can run any command, which is what you want when you are using this as an agent that does work for you. Turn those on from the settings page.
 
 The browser interface's language is chosen at the top right of the settings page. **The prompts sent to the model, the log and the command-line output follow `lang:` in config.yaml**, which falls back to the system locale when unset. If you pick a language in the wizard that differs from the system locale, the wizard writes it into `config.yaml` for you (see [Configuration and models](docs/en/configuration.md#language)).
 
@@ -85,13 +86,13 @@ Before deploying to a remote server, read [Deployment and access control](docs/e
 
 ## Plugins
 
-Thirty-three built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/en/plugins/README.md).
+Thirty-seven built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/en/plugins/README.md).
 
 | Group | Plugins |
 |---|---|
-| [Basic tools](docs/en/plugins/tools.md) | `read_file` `web_fetch` `exec_command` |
+| [Basic tools](docs/en/plugins/tools.md) | `read_file` `media` `web_fetch` `exec_command` |
 | [Memory and search](docs/en/plugins/memory.md) | `memory` `session_search` `skills` |
-| [Roleplay](docs/en/plugins/roleplay.md) | `roleplay` `dual_persona` |
+| [Roleplay](docs/en/plugins/roleplay.md) | `roleplay` `dual_persona` `growth` |
 | [The character's life](docs/en/plugins/life.md) | `scene` `weather` `belongings` `people` `agenda` `relationship` `unspoken` `bookshelf` `phone` `body_sense` `mood` `health` `presence` `style_watch` |
 | [Background work](docs/en/plugins/background.md) | `heartbeat` `scheduler` |
 | [Chat channels](docs/en/plugins/im.md) | `qq_bot` `wechat_bot` `wecom_bot` `dingtalk_bot` `feishu_bot` `lark_bot` `telegram_bot` `discord_bot` `slack_bot` |
@@ -102,7 +103,7 @@ Thirty-three built-in plugins, grouped by function, all toggleable and configura
 
 - [CLI](docs/en/cli.md) — the subcommands, and how to change plugin settings on a headless machine
 - [Configuration and models](docs/en/configuration.md) — the setup wizard, every option in config.yaml, and provider/model management
-- [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-six plugins does, with its settings, and which are on out of the box
+- [Plugin overview](docs/en/plugins/README.md) — what each of the thirty-seven plugins does, with its settings, and which are on out of the box
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Docker deployment](docs/en/docker.md) — building the image, compose variables, data volumes and upgrades
 - [Backup and restore](docs/en/backup.md) — what `wen export` / `wen import` include, and their safety boundaries

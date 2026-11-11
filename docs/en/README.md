@@ -6,7 +6,7 @@
 
 - [CLI](cli.md) — the `wen serve` / `wen config` / `wen status` / `wen update` subcommands
 - [Configuration and models](configuration.md) — every option in config.yaml, and provider/model management on the settings page
-- [Plugin overview](plugins/README.md) — what each of the thirty-six built-in plugins does, with its settings
+- [Plugin overview](plugins/README.md) — what each of the thirty-seven built-in plugins does, with its settings
 - [Deployment and access control](deployment.md) — the authentication model for remote access, a start/stop script, and systemd
 - [Docker deployment](docker.md) — the image, compose, data volumes and upgrades
 - [Backup and restore](backup.md) — packing and restoring the configuration directory, and its safety boundaries
