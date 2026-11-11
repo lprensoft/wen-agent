@@ -254,7 +254,7 @@ func (p *Plugin) dispatchLoop(ctx context.Context, q *imbot.OrderedQueue[wsFrame
 	}
 }
 
-// handleC2CMessage 解析一条私聊事件，下载图片后交给公共骨架。
+// handleC2CMessage 解析一条私聊事件，下载图片与文件、提取语音转写后交给公共骨架。
 func (p *Plugin) handleC2CMessage(ctx context.Context, frame wsFrame) {
 	var d struct {
 		ID      string `json:"id"`
@@ -269,6 +269,9 @@ func (p *Plugin) handleC2CMessage(ctx context.Context, frame wsFrame) {
 		return
 	}
 	text := strings.TrimSpace(d.Content)
+	if voice := p.inboundVoice(d.Attachments); voice != "" {
+		text = joinNotes(text, voice)
+	}
 	images, imageNote := p.inboundImages(ctx, d.Attachments)
 	files, fileNote := p.inboundFiles(ctx, d.Attachments)
 	note := joinNotes(imageNote, fileNote)

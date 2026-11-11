@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"wen/internal/i18n"
@@ -13,12 +14,48 @@ import (
 )
 
 // qqAttachment 是 C2C 事件里的附件元数据。图片的地址带签名，直接 GET 即可，
-// 不需要也不应该附上机器人 Token。
+// 不需要也不应该附上机器人 Token。语音附件带平台转写 asr_refer_text，
+// 官方不保证每条都有，缺失时按不支持处理。
 type qqAttachment struct {
-	ContentType string `json:"content_type"`
-	Filename    string `json:"filename"`
-	Size        int64  `json:"size"`
-	URL         string `json:"url"`
+	ContentType  string `json:"content_type"`
+	Filename     string `json:"filename"`
+	Size         int64  `json:"size"`
+	URL          string `json:"url"`
+	AsrReferText string `json:"asr_refer_text"`
+}
+
+// isVoiceAttachment 判定附件是否为语音。content_type 为 "voice" 或 audio/* 时一定是
+// 语音；其余情况下，仅当类型缺失或是不明确的 octet-stream 时才按语音录制扩展名兜底。
+// 明确的 file / image / video 等类型优先于扩展名：官方 SDK 靠付费 STT 兜底，敢把
+// recording.amr 一律当语音，但我们只做原生转写，误判会让普通文件既无转写也不下载。
+// inboundVoice 与 inboundFiles 共用这一判定。
+func isVoiceAttachment(a qqAttachment) bool {
+	if a.ContentType == "voice" || strings.HasPrefix(a.ContentType, "audio/") {
+		return true
+	}
+	if a.ContentType != "" && a.ContentType != "application/octet-stream" {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(a.Filename)) {
+	case ".amr", ".silk", ".slk", ".slac":
+		return true
+	}
+	return false
+}
+
+// inboundVoice 提取语音附件的平台转写文本。只读事件里现成的 asr_refer_text，
+// 不下载音频、不调模型，零额外成本；没有转写的语音返回空，由调用方回不支持提示。
+func (p *Plugin) inboundVoice(attachments []qqAttachment) string {
+	var parts []string
+	for _, a := range attachments {
+		if !isVoiceAttachment(a) {
+			continue
+		}
+		if s := strings.TrimSpace(a.AsrReferText); s != "" {
+			parts = append(parts, i18n.T(p.langOf(), "plugin.qq_bot.voice_prefix", "【语音】")+s)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (p *Plugin) inboundImages(ctx context.Context, attachments []qqAttachment) ([]llm.ImagePart, string) {
@@ -62,14 +99,15 @@ func (p *Plugin) inboundImages(ctx context.Context, attachments []qqAttachment) 
 	return out, ""
 }
 
-// inboundFiles 下载非图片附件。语音与视频留给 P1-4，不在这里当普通文件处理。
+// inboundFiles 下载非图片附件。语音走 inboundVoice 的平台转写，视频仍留到后续版本，
+// 都不在这里当普通文件处理。
 func (p *Plugin) inboundFiles(ctx context.Context, attachments []qqAttachment) ([]llm.FilePart, string) {
 	var out []llm.FilePart
 	total := 0
 	tooMany := false
 	for _, a := range attachments {
 		if strings.HasPrefix(a.ContentType, "image/") ||
-			strings.HasPrefix(a.ContentType, "audio/") ||
+			isVoiceAttachment(a) ||
 			strings.HasPrefix(a.ContentType, "video/") ||
 			a.URL == "" {
 			continue

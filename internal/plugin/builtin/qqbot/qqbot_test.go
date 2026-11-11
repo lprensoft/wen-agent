@@ -916,14 +916,148 @@ func TestActualBytesEnforceTotalLimit(t *testing.T) {
 	}
 }
 
-func TestVoiceAttachmentGetsNote(t *testing.T) {
+func TestVoiceUsesPlatformTranscription(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		return "收到：" + input, nil
+	}
+	_, f, _ := newInited(t, runTurn, "user1")
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		{"content_type": "voice", "filename": "a.silk", "size": 1024,
+			"url": f.srv.URL + "/file/a.silk", "asr_refer_text": "今天天气不错"},
+	})
+	m := f.expectSend(t)
+	if m.content != "收到：【语音】今天天气不错" {
+		t.Fatalf("content_type=voice 的语音应使用平台转写: %+v", m)
+	}
+}
+
+func TestVoiceAudioMimeUsesTranscription(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		return "收到：" + input, nil
+	}
+	_, f, _ := newInited(t, runTurn, "user1")
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		{"content_type": "audio/silk", "filename": "a.silk", "size": 1024,
+			"url": f.srv.URL + "/file/a.silk", "asr_refer_text": "今天天气不错"},
+	})
+	m := f.expectSend(t)
+	if m.content != "收到：【语音】今天天气不错" {
+		t.Fatalf("audio/* 的语音应使用平台转写: %+v", m)
+	}
+}
+
+func TestVoiceByExtensionUsesTranscription(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		return "收到：" + input, nil
+	}
+	_, f, _ := newInited(t, runTurn, "user1")
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		{"content_type": "application/octet-stream", "filename": "a.silk", "size": 1024,
+			"url": f.srv.URL + "/file/a.silk", "asr_refer_text": "今天天气不错"},
+	})
+	m := f.expectSend(t)
+	if m.content != "收到：【语音】今天天气不错" {
+		t.Fatalf("按扩展名识别的语音应使用平台转写: %+v", m)
+	}
+}
+
+func TestVoiceWithoutTranscriptionGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "user1")
 	f.pushC2CAttachments("user1", "", []map[string]any{
-		{"content_type": "audio/silk", "filename": "a.silk", "size": 1024, "url": f.srv.URL + "/file/a.silk"},
+		{"content_type": "voice", "filename": "a.silk", "size": 1024, "url": f.srv.URL + "/file/a.silk"},
 	})
 	m := f.expectSend(t)
 	if !strings.Contains(m.content, "暂不支持该消息类型") {
-		t.Fatalf("语音附件应回提示: %+v", m)
+		t.Fatalf("无转写的语音应回提示: %+v", m)
+	}
+}
+
+func TestVoiceAppendedToText(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		return input, nil
+	}
+	_, f, _ := newInited(t, runTurn, "user1")
+	f.pushC2CAttachments("user1", "帮我看看", []map[string]any{
+		{"content_type": "voice", "filename": "a.silk", "size": 1024,
+			"url": f.srv.URL + "/file/a.silk", "asr_refer_text": "今天天气不错"},
+	})
+	m := f.expectSend(t)
+	if m.content != "帮我看看\n【语音】今天天气不错" {
+		t.Fatalf("文字与语音转写应拼接: %+v", m)
+	}
+}
+
+func TestVoiceWithImage(t *testing.T) {
+	var gotText string
+	var gotImages int
+	runImages := func(_ context.Context, _, input string, images []llm.ImagePart) (string, error) {
+		gotText, gotImages = input, len(images)
+		return "收到", nil
+	}
+	_, f, _ := newInitedTurn(t, noopTurn, runImages, "user1", nil)
+	f.pushC2CAttachments("user1", "", []map[string]any{
+		{"content_type": "voice", "filename": "a.silk", "size": 1024,
+			"url": f.srv.URL + "/file/a.silk", "asr_refer_text": "今天天气不错"},
+		imageAttachment(f.srv.URL+"/file/1.png", len(testPNG)),
+	})
+	m := f.expectSend(t)
+	if m.content != "收到" {
+		t.Fatalf("语音+图片应跑一轮: %+v", m)
+	}
+	if gotText != "【语音】今天天气不错" || gotImages != 1 {
+		t.Fatalf("语音转写与图片应一并交给模型: text=%q images=%d", gotText, gotImages)
+	}
+}
+
+func TestIsVoiceAttachment(t *testing.T) {
+	cases := []struct {
+		name string
+		att  qqAttachment
+		want bool
+	}{
+		{"voice 类型", qqAttachment{ContentType: "voice"}, true},
+		{"audio/silk", qqAttachment{ContentType: "audio/silk"}, true},
+		{"audio/mpeg", qqAttachment{ContentType: "audio/mpeg"}, true},
+		{"扩展名 silk", qqAttachment{ContentType: "application/octet-stream", Filename: "a.silk"}, true},
+		{"扩展名 amr 大写", qqAttachment{ContentType: "application/octet-stream", Filename: "a.AMR"}, true},
+		{"扩展名 slk", qqAttachment{Filename: "a.slk"}, true},
+		{"扩展名 slac", qqAttachment{Filename: "a.slac"}, true},
+		{"类型缺失按扩展名兜底", qqAttachment{Filename: "a.silk"}, true},
+		{"明确 file 类型优先于扩展名", qqAttachment{ContentType: "file", Filename: "recording.amr"}, false},
+		{"明确 pdf 类型优先于扩展名", qqAttachment{ContentType: "application/pdf", Filename: "a.amr"}, false},
+		{"图片", qqAttachment{ContentType: "image/png", Filename: "a.png"}, false},
+		{"pdf", qqAttachment{ContentType: "application/pdf", Filename: "a.pdf"}, false},
+		{"视频", qqAttachment{ContentType: "video/mp4", Filename: "a.mp4"}, false},
+		{"mp3 不算语音录制格式", qqAttachment{ContentType: "application/octet-stream", Filename: "a.mp3"}, false},
+		{"纯文本", qqAttachment{ContentType: "text/plain", Filename: "a.txt"}, false},
+	}
+	for _, c := range cases {
+		if got := isVoiceAttachment(c.att); got != c.want {
+			t.Errorf("%s: isVoiceAttachment=%v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestVoiceNotDownloadedAsFile(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	files, note := p.inboundFiles(context.Background(), []qqAttachment{
+		{ContentType: "voice", Filename: "v.silk", Size: 1024, URL: f.srv.URL + "/file/v.silk"},
+		{ContentType: "audio/silk", Filename: "a.silk", Size: 1024, URL: f.srv.URL + "/file/a.silk"},
+		{ContentType: "application/octet-stream", Filename: "e.silk", Size: 1024, URL: f.srv.URL + "/file/e.silk"},
+		{ContentType: "application/pdf", Filename: "报告.pdf", Size: int64(len(testPNG)), URL: f.srv.URL + "/file/1.pdf"},
+	})
+	if note != "" || len(files) != 1 || files[0].Name != "报告.pdf" {
+		t.Fatalf("语音不应被当普通文件下载: files=%+v note=%q", files, note)
+	}
+}
+
+func TestExplicitFileWithVoiceExtensionDownloaded(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	files, note := p.inboundFiles(context.Background(), []qqAttachment{{
+		ContentType: "file", Filename: "recording.amr", Size: int64(len(testPNG)), URL: f.srv.URL + "/file/recording.amr",
+	}})
+	if note != "" || len(files) != 1 || files[0].Name != "recording.amr" || string(files[0].Data) != string(testPNG) {
+		t.Fatalf("明确 file 类型即使扩展名像语音也应下载: files=%+v note=%q", files, note)
 	}
 }
 
