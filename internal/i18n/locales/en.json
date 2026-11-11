@@ -1429,6 +1429,7 @@
   "plugin.qq_bot.msg.image_too_large": "The image is over the size limit; please compress it and send again.",
   "plugin.qq_bot.msg.image_too_many": "At most 4 images are handled at a time; the rest were not sent to the model.",
   "plugin.qq_bot.msg.unsupported": "This message type is not supported yet; please send text or images.",
+  "plugin.qq_bot.voice_prefix": "[Voice] ",
   "plugin.read_file.desc": "Reads the contents of a local text file",
   "plugin.read_file.field.max_bytes.desc": "Most bytes returned by one read; anything past this is truncated.",
   "plugin.read_file.field.max_bytes.label": "Maximum bytes read",
