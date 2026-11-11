@@ -1351,5 +1351,25 @@ body {
   margin: 2px 0 4px;
 }
 .msg.user .bubble .chat-image { border: 1px solid rgba(255,255,255,.25); }
+.chat-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(320px, 100%);
+  margin: 2px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(128,128,128,.35);
+  border-radius: 10px;
+  background: rgba(128,128,128,.08);
+}
+.chat-file-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.chat-file-size {
+  font-size: 12px;
+  opacity: .7;
+  white-space: nowrap;
+}
 .chip-icon { padding: 6px; }
 .chip-icon svg { width: 16px; height: 16px; }

@@ -35,6 +35,9 @@ type sentMsg struct {
 	title     string
 	text      string
 	photoURL  string
+	mediaID   string
+	fileName  string
+	fileType  string
 }
 
 type ackMsg struct {
@@ -139,6 +142,9 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 			Text     string `json:"text"`
 			Content  string `json:"content"`
 			PhotoURL string `json:"photoURL"`
+			MediaID  string `json:"mediaId"`
+			FileName string `json:"fileName"`
+			FileType string `json:"fileType"`
 		}
 		_ = json.Unmarshal([]byte(body.MsgParam), &param)
 		content := param.Text
@@ -152,6 +158,7 @@ func newFakeDingTalk(t *testing.T) *fakeDingTalk {
 		f.sends <- sentMsg{
 			userID: userID, robotCode: body.RobotCode, msgKey: body.MsgKey,
 			title: param.Title, text: content, photoURL: param.PhotoURL,
+			mediaID: param.MediaID, fileName: param.FileName, fileType: param.FileType,
 		}
 
 		resp := map[string]any{"processQueryKey": "q1"}
@@ -698,6 +705,18 @@ func TestPictureReachesTurn(t *testing.T) {
 	}
 }
 
+func TestInboundFileDownload(t *testing.T) {
+	p, _, _ := newInited(t, noopTurn, "user1", nil)
+	content, _ := json.Marshal(map[string]any{"downloadCode": "file-1", "fileName": "报告.pdf"})
+	files, note := p.inboundFiles(context.Background(), botMessage{MsgType: "file", Content: content})
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.pdf" || files[0].MediaType != "application/pdf" || string(files[0].Data) != string(testPNG) {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+}
+
 func TestPictureDownloadFailureGetsNote(t *testing.T) {
 	var called bool
 	runImages := func(_ context.Context, _, _ string, _ []llm.ImagePart) (string, error) {
@@ -762,6 +781,23 @@ func TestRichTextImageTooManyKeepsFirstFour(t *testing.T) {
 	}
 	if got != 4 {
 		t.Fatalf("应只取前四张，实际 %d", got)
+	}
+}
+
+func TestOutboundFileUploadsThenSends(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1", nil)
+	file := llm.FilePart{Name: "报告.pdf", MediaType: "application/pdf", Data: []byte("%PDF")}
+	if err := (sender{p}).SendFile(context.Background(), "user1", "", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	up := <-f.uploads
+	if up.filename != "报告.pdf" || up.kind != "file" || string(up.data) != "%PDF" {
+		t.Fatalf("上传内容不符: %+v", up)
+	}
+	m := f.expectSend(t)
+	if m.msgKey != "sampleFile" || m.mediaID != "media-1" || m.fileName != "报告.pdf" || m.fileType != "pdf" || m.userID != "user1" {
+		t.Fatalf("文件消息不符: %+v", m)
 	}
 }
 

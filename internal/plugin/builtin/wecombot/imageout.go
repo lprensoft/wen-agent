@@ -28,27 +28,46 @@ const (
 	uploadWait = 15 * time.Second
 )
 
-// sendImage 先分片上传拿 media_id，再发一条图片消息。有回调用过的 req_id 就
-// 被动回复，否则主动推送。回执超时视为可能已送达，不再重发。
+// sendImage 先分片上传拿 media_id，再发一条图片消息。
 func (p *Plugin) sendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error {
-	mediaID, err := p.uploadImage(ctx, img)
+	mediaID, err := p.uploadMedia(ctx, "image", img.FileName(), img.Data)
 	if err != nil {
 		return err
 	}
+	return p.sendMedia(ctx, userID, replyTo, map[string]any{
+		"msgtype": "image",
+		"image":   map[string]any{"media_id": mediaID},
+	}, func() error {
+		return fmt.Errorf("%w: %s", imbot.ErrMediaDeliveryUnknown,
+			i18n.Tf(p.langOf(), "plugin.wecom_bot.err.image_unconfirmed",
+				"%s可能已送达，但平台没有确认（等待回执超时），请勿重复发送",
+				i18n.T(p.langOf(), "plugin.wecom_bot.media.image", "图片")))
+	})
+}
+
+// sendFile 与 sendImage 走同一条分片上传链路，msgtype 换成 file。
+func (p *Plugin) sendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
+	mediaID, err := p.uploadMedia(ctx, "file", f.FileName(), f.Data)
+	if err != nil {
+		return err
+	}
+	return p.sendMedia(ctx, userID, replyTo, map[string]any{
+		"msgtype": "file",
+		"file":    map[string]any{"media_id": mediaID},
+	}, func() error {
+		return fmt.Errorf("%w: %s", imbot.ErrMediaDeliveryUnknown,
+			i18n.Tf(p.langOf(), "plugin.wecom_bot.err.file_unconfirmed",
+				"%s可能已送达，但平台没有确认（等待回执超时），请勿重复发送",
+				i18n.T(p.langOf(), "plugin.wecom_bot.media.file", "文件")))
+	})
+}
+
+// sendMedia 有回调用过的 req_id 就被动回复，否则主动推送。回执超时视为可能
+// 已送达，不再重发；三条路径都要报成「送达状态未知」。
+func (p *Plugin) sendMedia(ctx context.Context, userID, replyTo string, body map[string]any, unconfirmed func() error) error {
 	w := p.connSnapshot()
 	if w == nil {
 		return errNoConn
-	}
-	body := map[string]any{
-		"msgtype": "image",
-		"image":   map[string]any{"media_id": mediaID},
-	}
-	// 三条发送路径（主动、被动、req_id 失效后回退主动）都要把回执超时报成
-	// 「送达状态未知」：可能已送达，不能让上层当成确定失败再重试。
-	unconfirmed := func() error {
-		return fmt.Errorf("%w: %s", imbot.ErrImageDeliveryUnknown,
-			i18n.T(p.langOf(), "plugin.wecom_bot.err.image_unconfirmed",
-				"图片可能已送达，但平台没有确认（等待回执超时），请勿重复发送"))
 	}
 	pushActive := func() error {
 		body["chatid"] = userID
@@ -64,7 +83,7 @@ func (p *Plugin) sendImage(ctx context.Context, userID, replyTo string, img llm.
 		return pushActive()
 	}
 
-	err = w.call(ctx, replyTo, outboundFrame{Cmd: cmdRespond, Headers: frameHeaders{ReqID: replyTo}, Body: body}, p.replyWait())
+	err := w.call(ctx, replyTo, outboundFrame{Cmd: cmdRespond, Headers: frameHeaders{ReqID: replyTo}, Body: body}, p.replyWait())
 	switch {
 	case errors.Is(err, errReqIDStale):
 		// req_id 上有没确认的旧回执，改走主动推送
@@ -75,19 +94,18 @@ func (p *Plugin) sendImage(ctx context.Context, userID, replyTo string, img llm.
 	return err
 }
 
-func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, error) {
+func (p *Plugin) uploadMedia(ctx context.Context, kind, filename string, data []byte) (string, error) {
 	w := p.connSnapshot()
 	if w == nil {
 		return "", errNoConn
 	}
-	data := img.Data
 	sum := md5.Sum(data)
 	totalChunks := (len(data) + uploadChunkSize - 1) / uploadChunkSize
 	if totalChunks == 0 {
 		totalChunks = 1
 	}
 	if totalChunks > 100 {
-		return "", fmt.Errorf("图片过大，无法上传")
+		return "", fmt.Errorf("文件过大，无法上传")
 	}
 
 	initID := newReqID(cmdUploadInit)
@@ -95,8 +113,8 @@ func (p *Plugin) uploadImage(ctx context.Context, img llm.ImagePart) (string, er
 		Cmd:     cmdUploadInit,
 		Headers: frameHeaders{ReqID: initID},
 		Body: map[string]any{
-			"type":         "image",
-			"filename":     img.FileName(),
+			"type":         kind,
+			"filename":     filename,
 			"total_size":   len(data),
 			"total_chunks": totalChunks,
 			"md5":          hex.EncodeToString(sum[:]),

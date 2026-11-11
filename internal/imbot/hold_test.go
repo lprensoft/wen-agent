@@ -220,18 +220,22 @@ func TestHeldMessagePersistsImages(t *testing.T) {
 	path := filepath.Join(dir, "held.json")
 	h := &holder{path: path, users: map[string][]heldMsg{}, kick: make(chan struct{}, 1)}
 	img := llm.ImagePart{MediaType: "image/png", Size: 3, Data: []byte("png")}
-	h.users["u1"] = []heldMsg{{Msg: Message{UserID: "u1", Text: "看图", Images: []llm.ImagePart{img}}}}
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Size: 5, Data: []byte("hello")}
+	h.users["u1"] = []heldMsg{{Msg: Message{UserID: "u1", Text: "看图", Images: []llm.ImagePart{img}, Files: []llm.FilePart{file}}}}
 	if err := h.saveLocked(); err != nil {
 		t.Fatal(err)
 	}
 
 	loaded := newHolder(dir)
 	batch := loaded.users["u1"]
-	if len(batch) != 1 || len(batch[0].Msg.Images) != 1 {
+	if len(batch) != 1 || len(batch[0].Msg.Images) != 1 || len(batch[0].Msg.Files) != 1 {
 		t.Fatalf("held batch = %+v", batch)
 	}
 	if string(batch[0].Msg.Images[0].Data) != "png" || batch[0].Msg.Images[0].MediaType != "image/png" {
 		t.Fatalf("held image = %+v", batch[0].Msg.Images[0])
+	}
+	if string(batch[0].Msg.Files[0].Data) != "hello" || batch[0].Msg.Files[0].Name != "报告.txt" {
+		t.Fatalf("held file = %+v", batch[0].Msg.Files[0])
 	}
 }
 

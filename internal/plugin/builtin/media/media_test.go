@@ -214,7 +214,7 @@ func TestSendImageDeliveryUnknownKeepsHint(t *testing.T) {
 	sender := &imageSender{
 		ch:    make(chan imageRecord, 1),
 		texts: make(chan string, 4),
-		err:   imbot.ErrImageDeliveryUnknown,
+		err:   imbot.ErrMediaDeliveryUnknown,
 	}
 	core, err := imbot.New(imbot.Config{
 		PluginName: "media_unknown",

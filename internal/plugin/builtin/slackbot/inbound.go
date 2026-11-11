@@ -188,8 +188,10 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage, envelopeI
 		return
 	}
 	text := strings.TrimSpace(decodeSlackText(payload.Event.Text))
-	images, note := p.inboundImages(ctx, payload.Event.Files)
-	if len(payload.Event.Files) > 0 && text == "" && len(images) == 0 && note == "" {
+	images, imageNote := p.inboundImages(ctx, payload.Event.Files)
+	files, fileNote := p.inboundFiles(ctx, payload.Event.Files)
+	note := joinNotes(imageNote, fileNote)
+	if len(payload.Event.Files) > 0 && text == "" && len(images) == 0 && len(files) == 0 && note == "" {
 		note = i18n.T(p.langOf(), "plugin.slack_bot.msg.unsupported", "暂不支持该消息类型，请发文字。")
 	}
 
@@ -212,6 +214,7 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage, envelopeI
 		DedupID: dedup,
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -259,6 +262,67 @@ func (p *Plugin) inboundImages(ctx context.Context, files []slackFile) ([]llm.Im
 			"一次最多处理 4 张图片，其余图片未发送给模型。")
 	}
 	return out, ""
+}
+
+// inboundFiles 下载非图片文件。外部文件的地址不能附 Bot Token，与图片一样跳过。
+func (p *Plugin) inboundFiles(ctx context.Context, files []slackFile) ([]llm.FilePart, string) {
+	var out []llm.FilePart
+	total := 0
+	tooMany := false
+	external := false
+	for _, f := range files {
+		if strings.HasPrefix(f.Mimetype, "image/") {
+			continue
+		}
+		if f.IsExternal || f.Mode == "external" {
+			external = true
+			continue
+		}
+		if len(out) >= imbot.MaxFiles {
+			tooMany = true
+			continue
+		}
+		if f.Size > int64(imbot.MaxFileBytes) || total+int(f.Size) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		data, err := p.downloadFile(ctx, f.URLPrivateDownload, f.URLPrivate, int64(imbot.MaxFileBytes))
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.slack.file_failed", "slack_bot: 下载文件失败: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		if total+len(data) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		part, err := imbot.FileFromBytes(data, f.Name, f.Mimetype)
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.slack.file_invalid", "slack_bot: 文件无效（已跳过）: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		out = append(out, part)
+		total += len(data)
+	}
+	if external {
+		return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.external_file",
+			"外部文件暂不支持下载，请直接上传到 Slack 或粘贴图片。")
+	}
+	if tooMany {
+		return out, i18n.T(p.langOf(), "plugin.slack_bot.msg.file_too_many",
+			"一次最多处理 4 个文件，其余文件未发送给模型。")
+	}
+	return out, ""
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 // downloadFile 取 Slack 私有文件。url_private 需要 bot token，缺 token 时

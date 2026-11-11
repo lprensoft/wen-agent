@@ -517,7 +517,7 @@ function scrollBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function addBubble(role, text, images = []) {
+function addBubble(role, text, images = [], files = []) {
   hideHint();
   const wrap = document.createElement("div");
   wrap.className = `msg ${role}`;
@@ -535,6 +535,7 @@ function addBubble(role, text, images = []) {
       img.loading = "lazy";
       bubble.appendChild(img);
     }
+    addFileCards(bubble, files);
     if (text) {
       const line = document.createElement("div");
       line.textContent = text;
@@ -545,6 +546,28 @@ function addBubble(role, text, images = []) {
   messagesEl.appendChild(wrap);
   scrollBottom();
   return bubble;
+}
+
+function formatFileSize(n) {
+  const size = Number(n) || 0;
+  if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(1) + " MB";
+  if (size >= 1024) return (size / 1024).toFixed(1) + " KB";
+  return size > 0 ? size + " B" : "";
+}
+
+function addFileCards(container, files) {
+  for (const file of files || []) {
+    const card = document.createElement("div");
+    card.className = "chat-file";
+    const name = document.createElement("span");
+    name.className = "chat-file-name";
+    name.textContent = file.name || t("chat.fileFallback");
+    const size = document.createElement("span");
+    size.className = "chat-file-size";
+    size.textContent = formatFileSize(file.size);
+    card.append(name, size);
+    container.appendChild(card);
+  }
 }
 
 // kind 供显示内容筛选按块过滤；不传表示不受筛选影响（如「已停止生成」这类提示）
@@ -559,7 +582,7 @@ function addSysBlock(text, kind) {
   return div;
 }
 
-function addSummaryBlock(text) {
+function addSummaryBlock(text, files = []) {
   hideHint();
   const details = document.createElement("details");
   details.className = "thinking-block";
@@ -569,6 +592,7 @@ function addSummaryBlock(text) {
   const div = document.createElement("div");
   div.className = "thinking-content";
   div.textContent = text;
+  addFileCards(div, files);
   details.appendChild(div);
   messagesEl.appendChild(details);
   scrollBottom();
@@ -776,7 +800,8 @@ function renderHistory(messages) {
   const toolBlocks = {}; // tool_call id -> {el, args}
   for (const m of messages) {
     if (m.kind === "summary") {
-      addSummaryBlock(m.content);
+      const files = (m.files || []).filter((file) => file.name || file.stored);
+      addSummaryBlock(m.content, files);
     } else if (m.kind === "notice") {
       // 会话注记：只给人看的一行，模型从来看不到它
       addSysBlock(m.content, "notice");
@@ -792,7 +817,8 @@ function renderHistory(messages) {
       const images = (m.images || [])
         .filter((img) => img.name)
         .map((img) => `/api/sessions/${encodeURIComponent(currentSession)}/images/${encodeURIComponent(img.name)}`);
-      addBubble("user", m.content, images);
+      const files = (m.files || []).filter((file) => file.name || file.stored);
+      addBubble("user", m.content, images, files);
     } else if (m.role === "assistant") {
       if (m.reasoning_content) addThinkingBlock(m.reasoning_content, false);
       if (m.content) addBubble("assistant", m.content);

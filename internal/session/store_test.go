@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -270,5 +272,35 @@ func TestSessionImagesLifecycle(t *testing.T) {
 	}
 	if _, err := s.ReadImage(meta.ID, name); err == nil {
 		t.Fatal("image should be removed together with its session")
+	}
+}
+
+func TestPutFileAndFilePath(t *testing.T) {
+	s := newTestStore(t)
+	meta, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("hello")
+	name, err := s.PutFile(meta.ID, "报告.txt", data)
+	if err != nil {
+		t.Fatalf("PutFile: %v", err)
+	}
+	if name == "" || filepath.IsAbs(name) {
+		t.Fatalf("落盘名不合法: %q", name)
+	}
+	path, err := s.FilePath(meta.ID, name)
+	if err != nil || !filepath.IsAbs(path) {
+		t.Fatalf("FilePath = %q, %v", path, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(data) {
+		t.Fatalf("读回文件 = %q, %v", got, err)
+	}
+	if _, err := s.FilePath(meta.ID, "../escape"); err == nil {
+		t.Fatal("path traversal should be rejected")
+	}
+	if _, err := s.PutFile(meta.ID, "a.txt", data); err != nil {
+		t.Fatalf("PutFile second: %v", err)
 	}
 }

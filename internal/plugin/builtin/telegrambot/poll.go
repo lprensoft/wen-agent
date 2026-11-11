@@ -139,8 +139,10 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 	if text == "" {
 		text = strings.TrimSpace(m.Caption)
 	}
-	images, note := p.inboundImages(ctx, m)
-	if text == "" && len(images) == 0 && note == "" {
+	images, imageNote := p.inboundImages(ctx, m)
+	files, fileNote := p.inboundFiles(ctx, m)
+	note := joinNotes(imageNote, fileNote)
+	if text == "" && len(images) == 0 && len(files) == 0 && note == "" {
 		note = i18n.T(p.langOf(), "plugin.telegram_bot.msg.unsupported",
 			"暂不支持该消息类型，请发文字。")
 	}
@@ -157,6 +159,7 @@ func (p *Plugin) dispatch(ctx context.Context, u update) {
 		ReplyTo: strconv.FormatInt(m.MessageID, 10),
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -198,6 +201,41 @@ func (p *Plugin) inboundImages(ctx context.Context, m *updateMessage) ([]llm.Ima
 		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.image_failed", "图片下载失败，请重发。")
 	}
 	return []llm.ImagePart{img}, ""
+}
+
+// inboundFiles 下载非图片文档。图片走 inboundImages；Telegram 的 getFile 下载
+// 上限是 20 MB，与统一限制一致。
+func (p *Plugin) inboundFiles(ctx context.Context, m *updateMessage) ([]llm.FilePart, string) {
+	if m == nil || m.Document == nil || strings.HasPrefix(m.Document.MimeType, "image/") {
+		return nil, ""
+	}
+	d := m.Document
+	if d.FileSize > int64(imbot.MaxFileBytes) {
+		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.file_too_large",
+			"文件超过大小上限，请压缩后再发。")
+	}
+	data, err := p.downloadFile(ctx, d.FileID, int64(imbot.MaxFileBytes))
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.telegram.file_failed", "telegram_bot: 下载文件失败: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	f, err := imbot.FileFromBytes(data, d.FileName, d.MimeType)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.telegram.file_invalid", "telegram_bot: 文件无效（已跳过）: %v", err)
+		return nil, i18n.T(p.langOf(), "plugin.telegram_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	return []llm.FilePart{f}, ""
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 // isTimeout 判定「等待窗口内没有新消息」这类超时，它不算失败。

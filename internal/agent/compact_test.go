@@ -144,6 +144,178 @@ func TestCompactSendsImagesToSummarizer(t *testing.T) {
 	}
 }
 
+func TestCompactRetainsFileReferences(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	stored, err := store.PutFile(meta.ID, "报告.txt", []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := bulk(llm.RoleUser, "a")
+	user.Files = []llm.FilePart{{Name: "报告.txt", Stored: stored, MediaType: "text/plain", Size: 5}}
+	if err := store.Append(meta.ID, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(meta.ID, bulk(llm.RoleAssistant, "a")); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	if len(provider.reqs) != 1 {
+		t.Fatalf("summary requests = %d", len(provider.reqs))
+	}
+	if content := provider.reqs[0].Messages[0].Content; !strings.Contains(content, "报告.txt") {
+		t.Fatalf("transcript did not name the file: %s", content)
+	}
+	_, msgs, err := store.Get(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []llm.FilePart
+	contentLen := 0
+	summaryWithFile := false
+	for _, m := range msgs {
+		contentLen += len(m.Content)
+		kept = append(kept, m.Files...)
+		if m.Kind == session.KindSummary && len(m.Files) > 0 {
+			summaryWithFile = true
+		}
+	}
+	if len(kept) != 1 || kept[0].Stored != stored {
+		t.Fatalf("file reference must survive compaction: %+v", kept)
+	}
+	if !summaryWithFile {
+		t.Fatal("the surviving reference should live on the summary message")
+	}
+	// 正文必须真的被摘要吸收，不能为了保住引用而留下整段原文。
+	if contentLen >= len(user.Content) {
+		t.Fatalf("file text was not compacted: %d bytes left", contentLen)
+	}
+}
+
+func TestHistoryFileNotesAreSeparateMessages(t *testing.T) {
+	primary := &chainProvider{events: contentEvents("收到")}
+	ag, id := fallbackAgent(t, primary, &chainProvider{}, &translatorPlugin{})
+	stored, err := ag.store.PutFile(id, "报告.txt", []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ag.store.Append(id, session.StoredMessage{
+		Message: llm.Message{
+			Role: llm.RoleUser, Content: "摘要正文",
+			Files: []llm.FilePart{{Name: "报告.txt", Stored: stored, MediaType: "text/plain", Size: 5}},
+		},
+		Kind: session.KindSummary,
+		TS:   time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ag.Run(plugin.WithInteractive(context.Background()), id, "继续", func(Event) {})
+	if len(primary.reqs) == 0 {
+		t.Fatal("no request")
+	}
+	var summary, note string
+	for _, m := range primary.reqs[0].Messages {
+		if strings.Contains(m.Content, "摘要正文") {
+			summary = m.Content
+		}
+		if strings.Contains(m.Content, "已保存到 ") {
+			note = m.Content
+		}
+	}
+	if summary == "" || note == "" {
+		t.Fatalf("summary/note messages missing: %q / %q", summary, note)
+	}
+	if strings.Contains(summary, "已保存到 ") {
+		t.Fatalf("file note must not be baked into the pinned summary: %q", summary)
+	}
+}
+
+func TestTrimDropsFileNoteBeforePinnedSummary(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleSystem, Content: "sys"},
+		{Role: llm.RoleUser, Content: "用户发来文件「报告.txt」……已保存到 C:/very/long/path/report.txt。"},
+		{Role: llm.RoleUser, Content: "摘要正文"},
+		{Role: llm.RoleAssistant, Content: strings.Repeat("x", 5000)},
+		{Role: llm.RoleUser, Content: "当前消息"},
+	}
+	pinned := []bool{true, false, true, false, false}
+	out := trimToBudget(Options{ContextLength: 3000}, msgs, pinned)
+
+	var keptNote, keptSummary bool
+	for _, m := range out {
+		if strings.Contains(m.Content, "已保存到 ") {
+			keptNote = true
+		}
+		if strings.Contains(m.Content, "摘要正文") {
+			keptSummary = true
+		}
+	}
+	if keptNote {
+		t.Fatal("file note should be trimmable on its own")
+	}
+	if !keptSummary {
+		t.Fatal("pinned summary must survive")
+	}
+}
+
+func TestCompactShrinksLongAttachmentMessages(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	body := strings.Repeat("说明", 500) // 约 1000 字
+	var storedNames []string
+	for i := 0; i < 4; i++ {
+		stored, err := store.PutFile(meta.ID, "附件.txt", []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		storedNames = append(storedNames, stored)
+		m := tagged(msg(llm.RoleUser, body), "a")
+		m.Files = []llm.FilePart{{Name: "附件.txt", Stored: stored, MediaType: "text/plain", Size: len(body)}}
+		if err := store.Append(meta.ID, m); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Append(meta.ID, bulk(llm.RoleAssistant, "a")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+	if len(provider.reqs) != 1 {
+		t.Fatalf("summary requests = %d", len(provider.reqs))
+	}
+
+	_, msgs, err := store.Get(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentLen := 0
+	var kept []string
+	for _, m := range msgs {
+		contentLen += len(m.Content)
+		for _, f := range m.Files {
+			kept = append(kept, f.Stored)
+		}
+	}
+	if contentLen >= 4*len(body) {
+		t.Fatalf("attachment text was retained instead of summarized: %d bytes", contentLen)
+	}
+	if len(kept) != len(storedNames) {
+		t.Fatalf("file references = %d, want %d (%v)", len(kept), len(storedNames), kept)
+	}
+	for i, name := range storedNames {
+		if kept[i] != name {
+			t.Fatalf("file reference %d = %q, want %q", i, kept[i], name)
+		}
+	}
+}
+
 func TestCompactRetainsImagesBeyondSummaryBudget(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()

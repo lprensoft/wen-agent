@@ -44,6 +44,12 @@ type ImageSender interface {
 	SendImage(ctx context.Context, userID, replyTo string, img llm.ImagePart) error
 }
 
+// FileSender 是 Sender 的可选能力：把一个普通文件发给指定用户。replyTo 的
+// 含义与 ImageSender 相同。返回错误是因为发送失败时模型需要知道。
+type FileSender interface {
+	SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error
+}
+
 // Message 是一条已归一化的入站消息。
 type Message struct {
 	UserID  string // 通道内的用户标识（QQ openid / 微信 xxx@im.wechat / Telegram chat_id / 飞书 open_id）
@@ -55,6 +61,9 @@ type Message struct {
 	// Images 是随消息下载好的图片。通道负责鉴权、大小限制与 MIME 判断，
 	// 骨架只把它们交给模型；为空表示没有图片。
 	Images []llm.ImagePart
+	// Files 是随消息下载好的普通文件。与图片一样由通道负责鉴权与大小限制，
+	// 骨架交给会话层落盘并在正文里留下路径说明。
+	Files []llm.FilePart
 	// Note 是收到了正文之外的东西时给用户的提示（如「暂不支持该消息类型」）。
 	// Text 为空且 Note 非空时，骨架把 Note 回过去就结束，不进队列。
 	Note string
@@ -132,10 +141,13 @@ type Config struct {
 
 	RunTurn       plugin.RunTurnFunc
 	RunTurnImages plugin.RunTurnImagesFunc
-	NewSession    plugin.NewSessionFunc
-	Compact       plugin.CompactFunc
-	Status        plugin.StatusFunc
-	Sessions      plugin.SessionQuery
+	// RunTurnMedia 与 RunTurnImages 相同，并额外携带普通文件。为 nil 时带文件的
+	// 消息退化为纯文本。
+	RunTurnMedia plugin.RunTurnMediaFunc
+	NewSession   plugin.NewSessionFunc
+	Compact      plugin.CompactFunc
+	Status       plugin.StatusFunc
+	Sessions     plugin.SessionQuery
 }
 
 // Core 是通道无关的那一半：分发、命令、会话绑定、确认代理、串行 worker。
@@ -193,7 +205,7 @@ func New(cfg Config) (*Core, error) {
 	if cfg.MergeWindow > 0 {
 		// 到期冲刷发生在计时器 goroutine 上，没有入站的 ctx 可用，拿 Core 自己的生命周期 ctx
 		c.merge = newMerger(cfg.MergeWindow, func(msgs []Message) {
-			for _, group := range splitByImageBudget(msgs) {
+			for _, group := range splitByMediaBudget(msgs) {
 				c.enqueue(c.lifeCtx(context.Background()), mergeMessages(group))
 			}
 		})
@@ -293,7 +305,7 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 	}
 
 	text := strings.TrimSpace(msg.Text)
-	if text == "" && len(msg.Images) == 0 {
+	if text == "" && len(msg.Images) == 0 && len(msg.Files) == 0 {
 		if msg.Note != "" {
 			c.send(ctx, msg, msg.Note)
 		}

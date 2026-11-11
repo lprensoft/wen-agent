@@ -158,6 +158,16 @@ func TestLocaleCoverage(t *testing.T) {
 //     而它们不在内置清单里——外源插件的名字要装了才知道，那些字段与操作因此
 //     共用一个与包名无关的名字（见 plugin.ExternalKeyName）。
 var derivedElsewhere = map[string]bool{
+	// media 的路径校验在图片与文件之间共用一个函数，键从结构体表里取而不是
+	// 直接写在 i18n.T 调用上，源码扫描看不到；它们确实有调用点。
+	"plugin.media.err.empty_path":                      true,
+	"plugin.media.err.no_workdir":                      true,
+	"plugin.media.err.not_found":                       true,
+	"plugin.media.err.outside_workdir":                 true,
+	"plugin.media.file.err.empty_path":                 true,
+	"plugin.media.file.err.no_workdir":                 true,
+	"plugin.media.file.err.not_found":                  true,
+	"plugin.media.file.err.outside_workdir":            true,
 	plugin.UnavailableKey:                              true,
 	plugin.CategoryTextKey(plugin.CategoryKeyOther):    true,
 	plugin.CategoryTextKey(plugin.CategoryKeyExternal): true,

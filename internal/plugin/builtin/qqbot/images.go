@@ -62,6 +62,62 @@ func (p *Plugin) inboundImages(ctx context.Context, attachments []qqAttachment) 
 	return out, ""
 }
 
+// inboundFiles 下载非图片附件。语音与视频留给 P1-4，不在这里当普通文件处理。
+func (p *Plugin) inboundFiles(ctx context.Context, attachments []qqAttachment) ([]llm.FilePart, string) {
+	var out []llm.FilePart
+	total := 0
+	tooMany := false
+	for _, a := range attachments {
+		if strings.HasPrefix(a.ContentType, "image/") ||
+			strings.HasPrefix(a.ContentType, "audio/") ||
+			strings.HasPrefix(a.ContentType, "video/") ||
+			a.URL == "" {
+			continue
+		}
+		if len(out) >= imbot.MaxFiles {
+			tooMany = true
+			continue
+		}
+		if a.Size > int64(imbot.MaxFileBytes) || total+int(a.Size) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.qq_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		data, err := downloadAttachment(ctx, a.URL, int64(imbot.MaxFileBytes))
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.qq.file_failed", "qq_bot: 下载文件失败: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.qq_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		// 事件里的 size 可能缺失或偏小，下载后按实际字节再复核一次。
+		if total+len(data) > imbot.MaxFileTotal {
+			return out, i18n.T(p.langOf(), "plugin.qq_bot.msg.file_too_large",
+				"文件超过大小上限，请压缩后再发。")
+		}
+		f, err := imbot.FileFromBytes(data, a.Filename, a.ContentType)
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.qq.file_invalid", "qq_bot: 文件无效（已跳过）: %v", err)
+			return out, i18n.T(p.langOf(), "plugin.qq_bot.msg.file_failed", "文件下载失败，请重发。")
+		}
+		out = append(out, f)
+		total += len(data)
+	}
+	if tooMany {
+		return out, i18n.T(p.langOf(), "plugin.qq_bot.msg.file_too_many",
+			"一次最多处理 4 个文件，其余文件未发送给模型。")
+	}
+	return out, ""
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
+}
+
 func downloadAttachment(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

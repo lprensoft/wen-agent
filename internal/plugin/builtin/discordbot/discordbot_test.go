@@ -578,6 +578,45 @@ func TestInboundImagesReportsTooMany(t *testing.T) {
 	}
 }
 
+func TestInboundFileDownload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF"))
+	}))
+	defer srv.Close()
+
+	p := New()
+	p.client = srv.Client()
+	files, note := p.inboundFiles(context.Background(), []discordAttachment{{
+		Filename: "报告.pdf", ContentType: "application/pdf", Size: 4, URL: srv.URL,
+	}})
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.pdf" || files[0].MediaType != "application/pdf" || string(files[0].Data) != "%PDF" {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+}
+
+func TestOutboundFileUsesMultipart(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "chan1", nil)
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "chan1", "msg-3", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+	select {
+	case got := <-f.images:
+		if got.channelID != "chan1" || got.replyTo != "msg-3" || got.filename != "报告.txt" {
+			t.Fatalf("multipart 内容不符: %+v", got)
+		}
+		if string(got.data) != "hello" {
+			t.Fatal("上传的文件字节不一致")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待带附件消息超时")
+	}
+}
+
 func TestOutboundImageUsesMultipart(t *testing.T) {
 	p, f, _ := newInited(t, noopTurn, "chan1", nil)
 	img := llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: testDiscordPNG}

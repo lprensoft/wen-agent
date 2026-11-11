@@ -37,6 +37,7 @@ type fakeLark struct {
 	srv      *httptest.Server
 	sent     chan sentMsg
 	uploaded chan uploadedImage
+	files    chan uploadedFile
 	tokens   atomic.Int64 // 取 token 的次数，用来验证缓存
 	expire   atomic.Int64 // 下发的 token 有效期（秒）
 }
@@ -47,9 +48,16 @@ type uploadedImage struct {
 	data      []byte
 }
 
+type uploadedFile struct {
+	filename string
+	fileType string
+	fileName string
+	data     []byte
+}
+
 func newFakeLark(t *testing.T) *fakeLark {
 	t.Helper()
-	f := &fakeLark{sent: make(chan sentMsg, 32), uploaded: make(chan uploadedImage, 8)}
+	f := &fakeLark{sent: make(chan sentMsg, 32), uploaded: make(chan uploadedImage, 8), files: make(chan uploadedFile, 8)}
 	f.expire.Store(7200)
 	mux := http.NewServeMux()
 
@@ -86,6 +94,26 @@ func newFakeLark(t *testing.T) *fakeLark {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"code":0,"msg":"ok","data":{"image_key":"img-key-1"}}`)
+	})
+
+	mux.HandleFunc("POST /open-apis/im/v1/files", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "no auth", http.StatusUnauthorized)
+			return
+		}
+		file, hdr, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		select {
+		case f.files <- uploadedFile{filename: hdr.Filename, fileType: r.FormValue("file_type"), fileName: r.FormValue("file_name"), data: data}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":0,"msg":"ok","data":{"file_key":"file-key-1"}}`)
 	})
 
 	mux.HandleFunc("POST /open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -409,7 +437,7 @@ func TestWhitelistAndP2POnly(t *testing.T) {
 
 func TestUnsupportedTypeGetsNote(t *testing.T) {
 	p, f := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
-	p.onMessage(event("ou_me", "user", "p2p", "file", `{}`, "om_f"))
+	p.onMessage(event("ou_me", "user", "p2p", "audio", `{}`, "om_f"))
 	if m := f.expectSend(t); !strings.Contains(m.Content, "暂不支持") {
 		t.Fatalf("应回一句暂不支持: %+v", m)
 	}
@@ -544,6 +572,34 @@ func TestInboundImageDownload(t *testing.T) {
 	}
 	if string(images[0].Data) != string(testLarkPNG) {
 		t.Fatal("downloaded image bytes differ")
+	}
+}
+
+func TestInboundFileDownload(t *testing.T) {
+	p, _ := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
+	files, note := p.inboundFiles(context.Background(), "om_1", "file_1", "报告.txt")
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.txt" || files[0].MediaType != "text/plain; charset=utf-8" || string(files[0].Data) != string(testLarkPNG) {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+}
+
+func TestOutboundFileUploadsThenSends(t *testing.T) {
+	p, f := newInited(t, NewFeishu, noopTurn, "ou_me", nil)
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "ou_me", "", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	up := <-f.files
+	if up.filename != "报告.txt" || up.fileType != "stream" || up.fileName != "报告.txt" || string(up.data) != "hello" {
+		t.Fatalf("上传内容不符: %+v", up)
+	}
+	m := f.expectSend(t)
+	if m.ReceiveID != "ou_me" || m.MsgType != "file" || !strings.Contains(m.Content, "file-key-1") {
+		t.Fatalf("发送的文件消息不符: %+v", m)
 	}
 }
 

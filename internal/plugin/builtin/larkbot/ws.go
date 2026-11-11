@@ -3,6 +3,7 @@ package larkbot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -83,7 +84,21 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 	}
 
 	messageID := deref(msg.MessageId)
-	text, note, imageKey := parseContent(p.langOf(), deref(msg.MessageType), deref(msg.Content))
+	msgType := deref(msg.MessageType)
+	text, note, imageKey := parseContent(p.langOf(), msgType, deref(msg.Content))
+	fileKey, fileName := "", ""
+	if msgType == "file" {
+		note = ""
+		var c struct {
+			FileKey  string `json:"file_key"`
+			FileName string `json:"file_name"`
+		}
+		if err := json.Unmarshal([]byte(deref(msg.Content)), &c); err != nil || c.FileKey == "" {
+			note = i18n.T(p.langOf(), "plugin.lark_bot.msg.parse_failed", "消息内容解析失败，请重发。")
+		} else {
+			fileKey, fileName = c.FileKey, c.FileName
+		}
+	}
 
 	p.mu.Lock()
 	core, runCtx := p.core, p.ctx
@@ -92,8 +107,9 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		return
 	}
 	images, imageNote := p.inboundImages(runCtx, messageID, imageKey)
+	files, fileNote := p.inboundFiles(runCtx, messageID, fileKey, fileName)
 	if note == "" {
-		note = imageNote
+		note = joinNotes(imageNote, fileNote)
 	}
 	core.Handle(runCtx, imbot.Message{
 		UserID:  openID,
@@ -101,6 +117,7 @@ func (p *Plugin) onMessage(ev *larkim.P2MessageReceiveV1) {
 		ReplyTo: messageID,
 		Text:    text,
 		Images:  images,
+		Files:   files,
 		Note:    note,
 	})
 }
@@ -134,44 +151,20 @@ func parseContent(lang, msgType, content string) (text, note, imageKey string) {
 	}
 }
 
+var errResourceTooLarge = errors.New("消息资源超过大小上限")
+
 // inboundImages 按消息资源接口下载图片；飞书的下载地址需要 tenant token。
 func (p *Plugin) inboundImages(ctx context.Context, messageID, imageKey string) ([]llm.ImagePart, string) {
 	if imageKey == "" {
 		return nil, ""
 	}
-	if messageID == "" {
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
+	data, err := p.fetchResource(ctx, messageID, imageKey, "image", int64(imbot.MaxImageBytes))
+	if errors.Is(err, errResourceTooLarge) {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_too_large", "图片超过大小上限，请压缩后再发。")
 	}
-	p.mu.Lock()
-	base, tokens, client := p.apiBase, p.tokens, p.client
-	p.mu.Unlock()
-	if tokens == nil || client == nil {
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
-	}
-	token, err := tokens.Get(ctx)
-	if err != nil {
-		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 获取 token 失败: %v", p.Name(), err)
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
-	}
-	url := base + "/open-apis/im/v1/messages/" + messageID + "/resources/" + imageKey + "?type=image"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
 	if err != nil {
 		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 下载图片失败: %v", p.Name(), err)
 		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		i18n.Logf(p.langOf(), "log.lark.image_failed", "%s: 下载图片失败（HTTP %d）", p.Name(), resp.StatusCode)
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, imbot.MaxImageBytes+1))
-	if err != nil || int64(len(data)) > imbot.MaxImageBytes {
-		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_too_large", "图片超过大小上限，请压缩后再发。")
 	}
 	img, err := imbot.ImageFromBytes(data)
 	if err != nil {
@@ -179,6 +172,77 @@ func (p *Plugin) inboundImages(ctx context.Context, messageID, imageKey string) 
 		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.image_failed", "图片下载失败，请重发。")
 	}
 	return []llm.ImagePart{img}, ""
+}
+
+// inboundFiles 按消息资源接口下载文件。飞书的资源下载上限是 100 MB，
+// 这里统一按 20 MB 卡。
+func (p *Plugin) inboundFiles(ctx context.Context, messageID, fileKey, fileName string) ([]llm.FilePart, string) {
+	if fileKey == "" {
+		return nil, ""
+	}
+	data, err := p.fetchResource(ctx, messageID, fileKey, "file", int64(imbot.MaxFileBytes))
+	if errors.Is(err, errResourceTooLarge) {
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.file_too_large", "文件超过大小上限，请压缩后再发。")
+	}
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.lark.file_failed", "%s: 下载文件失败: %v", p.Name(), err)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	f, err := imbot.FileFromBytes(data, fileName, "")
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.lark.file_invalid", "%s: 文件无效（已跳过）: %v", p.Name(), err)
+		return nil, i18n.T(p.langOf(), "plugin.lark_bot.msg.file_failed", "文件下载失败，请重发。")
+	}
+	return []llm.FilePart{f}, ""
+}
+
+func (p *Plugin) fetchResource(ctx context.Context, messageID, key, kind string, limit int64) ([]byte, error) {
+	if messageID == "" || key == "" {
+		return nil, errors.New("缺少消息 ID 或资源 key")
+	}
+	p.mu.Lock()
+	base, tokens, client := p.apiBase, p.tokens, p.client
+	p.mu.Unlock()
+	if tokens == nil || client == nil {
+		return nil, errors.New("尚未完成初始化")
+	}
+	token, err := tokens.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	url := base + "/open-apis/im/v1/messages/" + messageID + "/resources/" + key + "?type=" + kind
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("资源下载返回 HTTP " + resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, errResourceTooLarge
+	}
+	return data, nil
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "\n" + b
+	}
 }
 
 func deref(s *string) string {

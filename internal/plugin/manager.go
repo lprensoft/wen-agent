@@ -203,6 +203,11 @@ func (m *Manager) initCtxFor(name string) InitContext {
 			return base(WithTurnOrigin(ctx, name), sessionID, input, images)
 		}
 	}
+	if base := m.ictx.RunTurnMedia; base != nil {
+		ictx.RunTurnMedia = func(ctx context.Context, sessionID, input string, images []llm.ImagePart, files []llm.FilePart) (string, error) {
+			return base(WithTurnOrigin(ctx, name), sessionID, input, images, files)
+		}
+	}
 	if base := m.ictx.Notice; base != nil {
 		ictx.Notice = func(ctx context.Context, sessionID, text string) error {
 			return base(WithTurnOrigin(ctx, name), sessionID, text)

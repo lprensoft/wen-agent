@@ -58,6 +58,7 @@ type fakeTG struct {
 	sent chan sentMsg
 
 	photos chan sentPhoto
+	docs   chan sentPhoto
 
 	// 下一次 sendMessage 的强制结果（用完即弃）
 	failNext atomic.Value // func() (int, string, int) -> code, description, retryAfter
@@ -73,7 +74,7 @@ type draftMsg struct {
 
 func newFakeTG(t *testing.T) *fakeTG {
 	t.Helper()
-	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64), photos: make(chan sentPhoto, 8)}
+	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64), photos: make(chan sentPhoto, 8), docs: make(chan sentPhoto, 8)}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /bot"+testToken+"/getUpdates", func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +143,29 @@ func newFakeTG(t *testing.T) *fakeTG {
 		default:
 		}
 		writeOK(w, map[string]any{"message_id": 2})
+	})
+
+	mux.HandleFunc("POST /bot"+testToken+"/sendDocument", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, hdr, err := r.FormFile("document")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, _ := io.ReadAll(file)
+		var rp struct {
+			MessageID int64 `json:"message_id"`
+		}
+		_ = json.Unmarshal([]byte(r.FormValue("reply_parameters")), &rp)
+		select {
+		case f.docs <- sentPhoto{chatID: r.FormValue("chat_id"), replyTo: rp.MessageID, filename: hdr.Filename, data: data}:
+		default:
+		}
+		writeOK(w, map[string]any{"message_id": 3})
 	})
 
 	mux.HandleFunc("POST /bot"+testToken+"/sendMessageDraft", func(w http.ResponseWriter, r *http.Request) {
@@ -543,6 +567,46 @@ func TestInboundImageDownload(t *testing.T) {
 	}
 	if string(images[0].Data) != string(testPNG) {
 		t.Fatal("downloaded image bytes differ")
+	}
+}
+
+func TestInboundFileDownload(t *testing.T) {
+	p, _ := newInited(t, noopTurn, "42", nil)
+	m := &updateMessage{}
+	m.Document = &struct {
+		FileID   string `json:"file_id"`
+		FileName string `json:"file_name"`
+		MimeType string `json:"mime_type"`
+		FileSize int64  `json:"file_size"`
+	}{FileID: "doc-1", FileName: "报告.txt", MimeType: "text/plain", FileSize: 4}
+	files, note := p.inboundFiles(context.Background(), m)
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.txt" || files[0].MediaType != "text/plain" || string(files[0].Data) != string(testPNG) {
+		t.Fatalf("文件内容不符: %+v", files[0])
+	}
+}
+
+func TestOutboundFileUsesSendDocument(t *testing.T) {
+	p, f := newInited(t, noopTurn, "42", nil)
+	file := llm.FilePart{Name: "报告.txt", MediaType: "text/plain", Data: []byte("hello")}
+	if err := (sender{p}).SendFile(context.Background(), "42", "77", file); err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+	select {
+	case got := <-f.docs:
+		if got.chatID != "42" || got.replyTo != 77 {
+			t.Fatalf("chat_id / reply_to 不符: %+v", got)
+		}
+		if got.filename != "报告.txt" {
+			t.Fatalf("文件名不符: %q", got.filename)
+		}
+		if string(got.data) != "hello" {
+			t.Fatal("上传的文件字节不一致")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 sendDocument 超时")
 	}
 }
 

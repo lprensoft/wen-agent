@@ -221,7 +221,7 @@ func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(
 	l := a.turnLock(sessionID)
 	l.Lock()
 	defer l.Unlock()
-	if _, err := a.run(ctx, sessionID, userInput, nil, emit); err != nil {
+	if _, err := a.run(ctx, sessionID, userInput, nil, nil, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
@@ -234,7 +234,7 @@ func (a *Agent) RunWithImages(ctx context.Context, sessionID, userInput string, 
 	l := a.turnLock(sessionID)
 	l.Lock()
 	defer l.Unlock()
-	if _, err := a.run(ctx, sessionID, userInput, images, emit); err != nil {
+	if _, err := a.run(ctx, sessionID, userInput, images, nil, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
@@ -250,7 +250,7 @@ func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, e
 		return "", plugin.ErrSessionBusy
 	}
 	defer l.Unlock()
-	return a.run(ctx, sessionID, input, nil, func(Event) {})
+	return a.run(ctx, sessionID, input, nil, nil, func(Event) {})
 }
 
 // RunTurnWithImages 与 RunTurn 相同，但本轮用户消息额外携带图片。供 IM 通道
@@ -261,10 +261,21 @@ func (a *Agent) RunTurnWithImages(ctx context.Context, sessionID, input string, 
 		return "", plugin.ErrSessionBusy
 	}
 	defer l.Unlock()
-	return a.run(ctx, sessionID, input, images, func(Event) {})
+	return a.run(ctx, sessionID, input, images, nil, func(Event) {})
 }
 
-func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, emit func(Event)) (string, error) {
+// RunTurnWithMedia 与 RunTurnWithImages 相同，并额外携带普通文件。文件先写进
+// 会话附件目录，正文里只留一行路径说明，后续轮次按需读取。
+func (a *Agent) RunTurnWithMedia(ctx context.Context, sessionID, input string, images []llm.ImagePart, files []llm.FilePart) (string, error) {
+	l := a.turnLock(sessionID)
+	if !l.TryLock() {
+		return "", plugin.ErrSessionBusy
+	}
+	defer l.Unlock()
+	return a.run(ctx, sessionID, input, images, files, func(Event) {})
+}
+
+func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, files []llm.FilePart, emit func(Event)) (string, error) {
 	startedAt := time.Now()
 	targets, opts := a.snapshot()
 
@@ -289,6 +300,9 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 		if len(title) == 0 && len(images) > 0 {
 			title = []rune(i18n.T(opts.Lang, "agent.title.image", "图片"))
 		}
+		if len(title) == 0 && len(files) > 0 {
+			title = []rune(i18n.T(opts.Lang, "agent.title.file", "文件"))
+		}
 		if len(title) > titleMaxRunes {
 			title = title[:titleMaxRunes]
 		}
@@ -305,7 +319,13 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 		}
 		refs = append(refs, llm.ImagePart{Name: name, MediaType: img.MediaType, Size: len(img.Data)})
 	}
-	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput, Images: refs}
+	// 文件同样先落盘，消息里只留引用。路径不落盘：每次组装上下文时按当前
+	// 会话目录解析，导出/导入或搬机器后仍然指向正确位置。
+	fileRefs, err := a.saveFiles(sessionID, files, opts.Lang)
+	if err != nil {
+		return "", err
+	}
+	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput, Images: refs, Files: fileRefs}
 	userKind := ""
 	if ephemeral {
 		userKind = session.KindEphemeral
@@ -352,6 +372,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 	for _, h := range visibleHistory(history, scope) {
 		m := h.Message
 		a.hydrateImages(sessionID, &m, opts.Lang)
+		// 文件说明单独成一条消息，不拼进用户消息或摘要正文：它只是访问线索，
+		// 预算不够时应当能先被裁掉。磁盘上的 Files 引用不受影响。
+		if m.Role == llm.RoleUser && len(m.Files) > 0 {
+			if fnote := a.fileNote(sessionID, m.Files, opts.Lang); fnote != "" {
+				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: fnote})
+				pinned = append(pinned, false)
+			}
+		}
 		note := pending
 		pending = ""
 		if !h.TS.IsZero() {
@@ -397,8 +425,12 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 	if !lastTS.IsZero() {
 		sinceLast = startedAt.Sub(lastTS)
 	}
+	filePrefix := ""
+	if note := a.fileNote(sessionID, fileRefs, opts.Lang); note != "" {
+		filePrefix = note + "\n\n"
+	}
 	wireUser.Content = turnStateBlock(opts.Lang, startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
-		"\n\n" + userMsg.Content
+		"\n\n" + filePrefix + userMsg.Content
 	msgs = append(msgs, wireUser)
 	pinned = append(pinned, false)
 
@@ -738,6 +770,62 @@ func (a *Agent) hydrateImages(sessionID string, m *llm.Message, lang string) {
 		kept = append(kept, img)
 	}
 	m.Images = kept
+}
+
+// saveFiles 把本轮文件写进会话附件目录，返回只含落盘引用的副本。落盘名是
+// 相对会话的，路径在组装上下文时才解析，导出/导入或换机器后仍然有效。
+func (a *Agent) saveFiles(sessionID string, files []llm.FilePart, lang string) ([]llm.FilePart, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	refs := make([]llm.FilePart, 0, len(files))
+	for _, f := range files {
+		stored, err := a.store.PutFile(sessionID, f.Name, f.Data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", i18n.T(lang, "agent.err.save_file", "保存聊天文件失败"), err)
+		}
+		refs = append(refs, llm.FilePart{
+			Name:      f.FileName(),
+			Stored:    stored,
+			MediaType: f.MediaType,
+			Size:      len(f.Data),
+		})
+	}
+	return refs, nil
+}
+
+// fileNote 按当前会话目录把文件引用解析成绝对路径，生成给模型看的说明。
+// 读不到路径只记日志并跳过该文件，不让一条坏引用拖垮整轮上下文。
+func (a *Agent) fileNote(sessionID string, files []llm.FilePart, lang string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.Stored == "" {
+			continue
+		}
+		path, err := a.store.FilePath(sessionID, f.Stored)
+		if err != nil {
+			i18n.Logf(lang, "log.agent.file_path_failed", "agent: 解析聊天文件路径失败（已跳过）: %v", err)
+			continue
+		}
+		lines = append(lines, i18n.Tf(lang, "agent.file.received",
+			"用户发来文件「%s」（%s，%s），已保存到 %s。",
+			f.FileName(), f.MediaType, humanFileSize(f.Size), path))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func humanFileSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // trimToBudget 在超出上下文预算时，从最旧的对话轮次（以 user 消息开头）开始整轮丢弃，

@@ -204,7 +204,7 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 		}
 		// 本组的可见域进 ctx：插件据此决定归档落哪个目录、记忆写哪个库、摘要该守哪些要求
 		gctx := plugin.WithScope(ctx, scopeForTag(g.tag))
-		summary, retained, err := a.summarize(ctx, targets, opts, sessionID, g.msgs, a.plugins.CompactPrompts(gctx), emit)
+		summary, retained, files, err := a.summarize(ctx, targets, opts, sessionID, g.msgs, a.plugins.CompactPrompts(gctx), emit)
 		if err != nil {
 			return err
 		}
@@ -225,8 +225,10 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 		if len(notes) > 0 {
 			content += "\n\n" + strings.Join(notes, "\n")
 		}
+		// 文件正文已经被摘要吸收，只把引用留在摘要消息上；否则每轮都会为了
+		// 保住路径而留下整段原文，压缩越跑越不降。
 		out = append(out, session.StoredMessage{
-			Message: llm.Message{Role: llm.RoleUser, Content: content},
+			Message: llm.Message{Role: llm.RoleUser, Content: content, Files: files},
 			Kind:    session.KindSummary,
 			Tag:     g.tag,
 			TS:      now,
@@ -247,19 +249,19 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 // summarize 让模型把一组消息压成一段摘要，过程以 delta 事件流式发布。
 // extras 是插件追加的摘要要求（见 plugin.CompactPrompter），可为空。
 // 与对话轮次相同：只有尚未输出摘要增量时才切换到备用模型。
-func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, error) {
+func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, []llm.FilePart, error) {
 	var lastErr error
 	for i, t := range targets {
 		if t.Provider == nil {
 			continue
 		}
-		summary, retained, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), sessionID, msgs, extras, emit)
+		summary, retained, files, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), sessionID, msgs, extras, emit)
 		if err == nil {
-			return summary, retained, nil
+			return summary, retained, files, nil
 		}
 		lastErr = err
 		if !llm.IsTransientError(err) || ctx.Err() != nil || emitted {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		if i+1 < len(targets) {
 			i18n.Logf(opts.Lang, "log.agent.fallback", "agent: %s 调用失败，改用 %s：%v",
@@ -269,11 +271,11 @@ func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Optio
 	if lastErr == nil {
 		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
 	}
-	return "", nil, lastErr
+	return "", nil, nil, lastErr
 }
 
-func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, bool, error) {
-	images, labels, retained := a.summaryImages(sessionID, opts.Lang, msgs)
+func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, []llm.FilePart, bool, error) {
+	images, labels, retained, files := a.summaryMedia(sessionID, opts.Lang, msgs)
 	promptText := buildCompactPrompt(opts.Lang, extras, serializeHistoryWithLabels(opts.Lang, msgs, labels))
 	if len(images) > 0 {
 		promptText += "\n\n" + prompt.T(opts.Lang, "prompt.core.compact.images",
@@ -287,7 +289,7 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 		Thinking:    "off", // 压缩追求速度，不启用思考
 	})
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, nil, false, err
 	}
 	var summary strings.Builder
 	emitted := false
@@ -298,16 +300,16 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 			summary.WriteString(ev.Content)
 			emit(Event{Type: EventDelta, Content: ev.Content})
 		case llm.EventError:
-			return "", nil, emitted, ev.Err
+			return "", nil, nil, emitted, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", nil, emitted, err
+		return "", nil, nil, emitted, err
 	}
 	if strings.TrimSpace(summary.String()) == "" {
-		return "", nil, emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
+		return "", nil, nil, emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
 	}
-	return summary.String(), retained, emitted, nil
+	return summary.String(), retained, files, emitted, nil
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。
@@ -321,11 +323,15 @@ func serializeHistory(lang string, msgs []session.StoredMessage) string {
 	return serializeHistoryWithLabels(lang, msgs, nil)
 }
 
-// summaryImages 选出随摘要请求一起发送的图片，并给历史里的每张图一个编号标签。
+// summaryMedia 选出随摘要请求一起发送的图片，并给历史里的每张图一个编号标签。
 // 图片是随机文件名，只给名字对模型没有意义；按出现顺序编号、随请求附带原图，
 // 摘要才能把「那张图里有什么」写进去。超出数量或总字节预算的图明确标成未附带，
 // 不假装它们已经被看过。
-func (a *Agent) summaryImages(sessionID, lang string, msgs []session.StoredMessage) ([]llm.ImagePart, map[string]string, []session.StoredMessage) {
+//
+// 文件不随摘要请求发送，但文件引用要跟着摘要消息留下：正文被摘要吸收后，
+// 引用仍然能解析出路径，模型不会失去访问线索。只把引用搬过去、不保留整段
+// 原文——否则带附件的历史永远压不下去，每轮都会重新触发压缩。
+func (a *Agent) summaryMedia(sessionID, lang string, msgs []session.StoredMessage) ([]llm.ImagePart, map[string]string, []session.StoredMessage, []llm.FilePart) {
 	const maxImages = 8
 	const maxBytes = 10 << 20
 	labels := map[string]string{}
@@ -359,18 +365,37 @@ func (a *Agent) summaryImages(sessionID, lang string, msgs []session.StoredMessa
 			labels[img.Name] = ref + prompt.T(lang, "prompt.core.compact.image_attached", "，已随摘要附带")
 		}
 	}
-	var retained []session.StoredMessage
-	if len(omitted) > 0 {
-		for _, m := range msgs {
-			for _, img := range m.Images {
-				if omitted[img.Name] {
-					retained = append(retained, m)
-					break
-				}
+	// 只有预算装不下的图片需要保留整条消息；文件改成只搬引用。
+	retain := make(map[int]bool)
+	for i, m := range msgs {
+		for _, img := range m.Images {
+			if omitted[img.Name] {
+				retain[i] = true
+				break
 			}
 		}
 	}
-	return out, labels, retained
+	var retained []session.StoredMessage
+	var files []llm.FilePart
+	seenFile := make(map[string]bool)
+	for i, m := range msgs {
+		if retain[i] {
+			retained = append(retained, m)
+			continue
+		}
+		for _, f := range m.Files {
+			key := f.Stored
+			if key == "" {
+				key = f.Name + "\x00" + f.MediaType
+			}
+			if seenFile[key] {
+				continue
+			}
+			seenFile[key] = true
+			files = append(files, f)
+		}
+	}
+	return out, labels, retained, files
 }
 
 func serializeHistoryWithLabels(lang string, msgs []session.StoredMessage, labels map[string]string) string {
@@ -395,6 +420,10 @@ func serializeHistoryWithLabels(lang string, msgs []session.StoredMessage, label
 					continue
 				}
 				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.image", "[图片: %s]\n"), img.Name)
+			}
+			for _, f := range m.Files {
+				fmt.Fprintf(&b, prompt.T(lang, "prompt.core.transcript.file", "[文件: %s（%s）]\n"),
+					f.Name, humanFileSize(f.Size))
 			}
 		case llm.RoleAssistant:
 			if m.Content != "" {

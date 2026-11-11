@@ -232,6 +232,51 @@ func (s *Store) ReadImage(id, name string) ([]byte, error) {
 	return os.ReadFile(p)
 }
 
+// PutFile 把一个普通文件写进该会话的附件目录，返回可安全放进消息的名字。
+// 落盘名用随机前缀加原扩展名，避免重名与路径穿越；原始文件名只出现在正文说明里。
+func (s *Store) PutFile(id, name string, data []byte) (string, error) {
+	if _, err := s.path(id); err != nil {
+		return "", err
+	}
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	stored := hex.EncodeToString(buf[:]) + safeExt(name)
+	dir := filepath.Join(s.dir, id, "files")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, stored), data, 0o600); err != nil {
+		return "", err
+	}
+	return stored, nil
+}
+
+// FilePath 返回会话文件的绝对落盘路径。名字只允许 PutFile 生成的形式。
+func (s *Store) FilePath(id, name string) (string, error) {
+	if _, err := s.path(id); err != nil {
+		return "", err
+	}
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid file name %q", name)
+	}
+	return filepath.Abs(filepath.Join(s.dir, id, "files", name))
+}
+
+func safeExt(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if len(ext) < 2 || len(ext) > 17 {
+		return ""
+	}
+	for _, r := range ext[1:] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return ""
+		}
+	}
+	return ext
+}
+
 func imageExt(mediaType string) string {
 	switch strings.ToLower(strings.TrimSpace(mediaType)) {
 	case "image/png":

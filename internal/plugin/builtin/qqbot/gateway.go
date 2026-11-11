@@ -269,12 +269,14 @@ func (p *Plugin) handleC2CMessage(ctx context.Context, frame wsFrame) {
 		return
 	}
 	text := strings.TrimSpace(d.Content)
-	images, note := p.inboundImages(ctx, d.Attachments)
-	if text == "" && len(images) == 0 && note == "" && len(d.Attachments) > 0 {
+	images, imageNote := p.inboundImages(ctx, d.Attachments)
+	files, fileNote := p.inboundFiles(ctx, d.Attachments)
+	note := joinNotes(imageNote, fileNote)
+	if text == "" && len(images) == 0 && len(files) == 0 && note == "" && len(d.Attachments) > 0 {
 		note = i18n.T(p.langOf(), "plugin.qq_bot.msg.unsupported", "暂不支持该消息类型，请发文字或图片。")
 	}
 	p.handleInbound(ctx, inbound{
-		openid: d.Author.UserOpenID, msgID: d.ID, content: text, images: images, note: note,
+		openid: d.Author.UserOpenID, msgID: d.ID, content: text, images: images, files: files, note: note,
 	})
 }
 

@@ -916,14 +916,27 @@ func TestActualBytesEnforceTotalLimit(t *testing.T) {
 	}
 }
 
-func TestNonImageAttachmentGetsNote(t *testing.T) {
+func TestVoiceAttachmentGetsNote(t *testing.T) {
 	_, f, _ := newInited(t, noopTurn, "user1")
 	f.pushC2CAttachments("user1", "", []map[string]any{
-		{"content_type": "file/pdf", "filename": "a.pdf", "size": 1024, "url": f.srv.URL + "/file/a.pdf"},
+		{"content_type": "audio/silk", "filename": "a.silk", "size": 1024, "url": f.srv.URL + "/file/a.silk"},
 	})
 	m := f.expectSend(t)
 	if !strings.Contains(m.content, "暂不支持该消息类型") {
-		t.Fatalf("非图片附件应回提示: %+v", m)
+		t.Fatalf("语音附件应回提示: %+v", m)
+	}
+}
+
+func TestInboundFileDownload(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	files, note := p.inboundFiles(context.Background(), []qqAttachment{{
+		ContentType: "application/pdf", Filename: "报告.pdf", Size: int64(len(testPNG)), URL: f.srv.URL + "/file/1.pdf",
+	}})
+	if note != "" || len(files) != 1 {
+		t.Fatalf("files=%+v note=%q", files, note)
+	}
+	if files[0].Name != "报告.pdf" || files[0].MediaType != "application/pdf" || string(files[0].Data) != string(testPNG) {
+		t.Fatalf("文件内容不符: %+v", files[0])
 	}
 }
 
@@ -950,6 +963,15 @@ func TestOutboundImageUploadsThenSendsRichMedia(t *testing.T) {
 	}
 	if m.msgID != "msg-7" || m.seq <= 0 {
 		t.Fatalf("应挂在入站消息上被动回复: %+v", m)
+	}
+}
+
+func TestOutboundFileUnsupported(t *testing.T) {
+	p, _, _ := newInited(t, noopTurn, "user1")
+	err := (sender{p}).SendFile(context.Background(), "user1", "msg-7",
+		llm.FilePart{Name: "a.txt", MediaType: "text/plain", Data: []byte("hello")})
+	if err == nil || !strings.Contains(err.Error(), "暂不支持发送文件") {
+		t.Fatalf("QQ 应明确拒绝文件，得到 %v", err)
 	}
 }
 
