@@ -9,6 +9,30 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v1.2.0] - 2026-11-10
+
+### 新增
+
+- 新增模型备用链：主模型临时故障（超时、限流、服务端错误）时自动切到备用模型，可在设置页配置多个备用
+- 新增 Responses API 协议支持：提供商可在设置里切换 `chat` / `responses`，更好支持推理模型，对话状态仍存在本地
+- Web UI 可随消息发送图片，支持预览与历史回看
+- 九条 IM 通道支持私聊收发图片与文件：图片交给模型理解，文件存入会话附件目录供 `read_file` 读取
+- 新增 `media` 插件：模型可调用 `send_image` / `send_file` 把工作目录里的图片或文件发回当前 IM 对话
+- 微信 iLink 支持入站图片与文件
+- QQ、企业微信、钉钉、微信 iLink 支持入站语音，直接用平台自带转写，零额外成本
+
+---
+
+### Added
+
+- Model fallback chain: automatically switches to backup models when the primary hits a transient failure (timeout, rate limit, server error); configure several backups in the settings page
+- Responses API protocol support: a provider can switch between `chat` and `responses` in settings, with better support for reasoning models while conversation state stays local
+- The web UI can send images with a message, with preview and history rendering
+- All nine IM channels send and receive images and files in direct messages: images go to the model, files are stored in the session attachment directory for `read_file`
+- New `media` plugin: the model can call `send_image` / `send_file` to send an image or file from the working directory back to the current IM chat
+- WeChat iLink supports inbound images and files
+- QQ, WeCom, DingTalk and WeChat iLink support inbound voice using the platform's own transcription, at no extra cost
+
 ## [v1.1.0] - 2026-11-09
 
 ### 新增
