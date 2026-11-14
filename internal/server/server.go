@@ -75,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/confirmations/{id}", s.confirmResolve)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.compact)
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)

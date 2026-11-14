@@ -270,6 +270,15 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// state 返回启用插件贡献的角色状态快照。
+//
+// 它只经内存下发：不落盘、不进模型上下文、不经 IM 转发。内容里有记忆、
+// 心里话这类私人文本，因此显式禁掉缓存，别让浏览器或中间层留着。
+func (s *Server) state(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.plugins.State(reqLang(r)))
+}
+
 // reqLang 判定这一次请求要用哪种语言展示插件元数据。
 //
 // 按请求判定而不是存在服务端：同一个服务可能同时连着一个中文浏览器和一个英文

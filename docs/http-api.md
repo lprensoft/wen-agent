@@ -19,6 +19,7 @@
 | POST | `/api/plugins/{name}/actions/{key}` | 触发插件声明的操作（如微信扫码绑定），立即返回，流程在后台跑。请求体可选：`{"config": {...}, "token": "..."}`，`config` 是配置弹窗里尚未保存的值，`token` 原样带回列表里该操作的 `token`（按钮指的是哪一个，如批准的是哪一条提议） |
 | GET | `/api/plugins/{name}/actions/{key}` | 轮询该操作的进展：状态、说明文字与一张可选 PNG（只经内存下发，不落盘） |
 | GET | `/api/status` | 模型配置与插件状态行；带 `session_id` 查询参数时附上该会话的用量 |
+| GET | `/api/state` | 启用插件的只读状态快照（记忆索引、今日安排、现场等），按功能分组；带 `lang` 查询参数。内容含记忆、日程与现场这类私人文本，响应带 `Cache-Control: no-store`，不进入模型上下文 |
 | GET | `/api/events` | 常驻 SSE 流，推送会话注记（后台任务在会话里留下的、模型看不到的一行说明） |
 | GET | `/api/models` | 提供商与模型配置（`api_key` 只返回掩码） |
 | PUT | `/api/models` | 整档保存；请求里 `api_key` 留空表示不修改 |

@@ -145,6 +145,24 @@ func TestEnglishUserFacingHasNoChinese(t *testing.T) {
 			t.Errorf("状态行里有中文 %q: %s", han, line)
 		}
 	}
+
+	// 角色状态页同样走 internal/i18n。只扫静态字段：Value / Detail / Meta
+	// 是运行时事实（记忆正文、地点、时间），本就可能是中文，不能拿来判漏译。
+	for _, ps := range m.State(i18n.LangEN).Plugins {
+		for _, sec := range ps.Sections {
+			if han := hanIn(sec.Title); han != "" {
+				t.Errorf("插件 %s 的状态块标题里有中文 %q: %s", ps.Name, han, sec.Title)
+			}
+			if han := hanIn(sec.Empty); han != "" {
+				t.Errorf("插件 %s 的状态块空状态里有中文 %q: %s", ps.Name, han, sec.Empty)
+			}
+			for _, row := range sec.Rows {
+				if han := hanIn(row.Label); han != "" {
+					t.Errorf("插件 %s 的状态行标签里有中文 %q: %s", ps.Name, han, row.Label)
+				}
+			}
+		}
+	}
 }
 
 // TestChinesePathUnchanged 是「中文用户感觉不到任何区别」那条要求的哨兵：中文那边

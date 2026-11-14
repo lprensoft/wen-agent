@@ -96,6 +96,8 @@ A character should have a day of its own outside your conversations, but the mod
 | `max_commitments_inject` | 8 | The number of commitments injected per turn |
 | `max_inject_bytes` | 2048 | The combined byte limit on both injected blocks |
 
+- **Character state page**: a read-only view of today's plan with each item's time and status, plus upcoming commitments; cancelled items are omitted.
+
 ## Relationship (relationship plugin)
 
 Half of a stable personality is a stable attitude toward one particular person. Until now the character re-derived its attitude toward you from contact records and the memory index on every turn, which is why it ran hot and cold — clingy one turn, politely distant the next. This plugin records "the two of you" as a small snapshot: what stage you are at ("just met", "somewhere in between", "together", "not speaking" — a free-form phrase, not an enumeration), what you call each other, the most recent change in the relationship (making up, a fight, a confession, being neglected, injected with "N days ago"), the understandings and off-limits subjects you have arrived at ("she hates being rushed", "always say goodnight", at most five), and one line on how you are doing lately. It is injected as a `[关系]` block every turn, and the attitude and the sense of proportion follow it. No settings. On by default, hard-depends on `roleplay`.
@@ -214,6 +216,8 @@ The scene and the posture used to be carried forward only by the model looking b
 - **Fields that have sat a while are timestamped**: a field untouched for more than half an hour is marked "recorded N ago", giving the model a cue for judging whether it has lapsed on its own (after a night's sleep, last night's posture no longer holds) without hanging a timestamp on every line.
 - **Only observable facts about the present are recorded**, never feelings or inner life — those belong to `mood`. Stored once per visibility scope.
 - **Clear in one click**: the gear on the settings page has "clear the presence", covering the separate copies each persona keeps. It cannot be undone.
+
+- **Character state page**: a read-only view of location, attire, posture, current activity, and when it last changed.
 
 ## Style watch (style_watch plugin)
 

@@ -39,6 +39,8 @@ Session history is not reliable memory: over the context budget, the oldest turn
 | `decay_blur_days` | 30 | Days unmentioned before the body collapses into its summary |
 | `decay_forget_days` | 90 | Days unmentioned before it leaves the store; must be larger than the previous setting |
 
+- **Character state page**: a read-only view of the 30 most recent memories with title, type and one-line description; full text is still read on demand.
+
 ## History search (session_search plugin)
 
 `memory` stores distilled conclusions; this plugin is for going back to what was actually said. The two complement each other: memory has a high signal-to-noise ratio and lives permanently in the prompt, while the raw conversation is faithful but noisy and searched on demand.
