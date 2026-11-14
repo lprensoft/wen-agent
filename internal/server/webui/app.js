@@ -497,9 +497,11 @@ async function syncCurrentSession() {
     const res = await fetch(`/api/sessions/${currentSession}`);
     if (!res.ok) return;
     const data = await res.json();
+    // 域先更新：refreshFp 也会把指纹对齐，轮询随即因指纹相同提前返回，
+    // 否则聊天里切换人格后 currentDomain 会一直停在上一个人格。
+    currentDomain = domainOf(data.messages);
     const fp = historyFp(data.messages);
     if (fp === renderedFp) return;
-    currentDomain = domainOf(data.messages);
     renderHistory(data.messages);
     renderedFp = fp;
     scrollBottom();
@@ -511,7 +513,10 @@ async function refreshFp() {
   if (!currentSession) return;
   try {
     const res = await fetch(`/api/sessions/${currentSession}`);
-    if (res.ok) renderedFp = historyFp((await res.json()).messages);
+    if (!res.ok) return;
+    const data = await res.json();
+    currentDomain = domainOf(data.messages);
+    renderedFp = historyFp(data.messages);
   } catch { /* 忽略 */ }
 }
 
@@ -1293,6 +1298,10 @@ async function openSettings() {
   settingsPluginsEl.textContent = t("common.loading");
   loadModels();
   await loadSettingsPlugins();
+  // 关闭设置不会重置当前栏目：再次打开时若还停在角色状态，要重新取快照，
+  // 否则刚聊完的记忆与现场会一直是上次打开时的那一份。
+  const nav = $(".settings-nav-item.active");
+  if (nav && nav.dataset.section === "state") loadState();
 }
 
 async function loadSettingsPlugins() {

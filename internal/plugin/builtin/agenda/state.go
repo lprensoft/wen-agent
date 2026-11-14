@@ -3,6 +3,7 @@ package agenda
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -35,7 +36,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			i18n.Logf(p.langOf(), "log.agenda.state_failed", "读取日程状态失败（域 %q）: %v", tag, err)
 			failed = true
 		} else if pl.Date == today {
-			if sec, ok := p.daySection(q.Lang, pl, tag); ok {
+			if sec, ok := p.daySection(q.Lang, pl, day, s.dayStartHour, tag); ok {
 				out = append(out, sec)
 				planned = true
 			}
@@ -62,7 +63,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 
 // daySection 渲染一张表。取消的项不出现——它们不再占角色的一天；
 // 已完成、跳过、延期的项保留，用灰色说明它们曾经在那里。
-func (p *Plugin) daySection(lang string, pl Plan, domain string) (plugin.StateSection, bool) {
+func (p *Plugin) daySection(lang string, pl Plan, day time.Time, dayStartHour int, domain string) (plugin.StateSection, bool) {
 	items := make([]Item, 0, len(pl.Items))
 	for _, it := range pl.Items {
 		if it.Status == statusCancelled {
@@ -74,8 +75,18 @@ func (p *Plugin) daySection(lang string, pl Plan, domain string) (plugin.StateSe
 		return plugin.StateSection{}, false
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Start != items[j].Start {
-			return items[i].Start < items[j].Start
+		// 不能直接比 HH:MM：day_start_hour 之前的 01:00 属于次日凌晨，
+		// 它排在 09:00 与 23:00 之后，而不是最前。
+		si, _ := items[i].span(day, dayStartHour)
+		sj, _ := items[j].span(day, dayStartHour)
+		if si.IsZero() || sj.IsZero() {
+			if items[i].Start != items[j].Start {
+				return items[i].Start < items[j].Start
+			}
+			return items[i].ID < items[j].ID
+		}
+		if !si.Equal(sj) {
+			return si.Before(sj)
 		}
 		return items[i].ID < items[j].ID
 	})

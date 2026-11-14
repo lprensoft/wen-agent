@@ -104,3 +104,34 @@ func TestStateReadFailureIsNotAnEmptyState(t *testing.T) {
 		t.Fatalf("读失败时 State = %+v，期望不报空状态", secs)
 	}
 }
+
+// day_start_hour 之前的 01:00 属于次日凌晨，必须排在 23:00 之后。
+func TestStateDaySortsAcrossLogicalMidnight(t *testing.T) {
+	now := time.Date(2026, 11, 15, 10, 0, 0, 0, time.Local)
+	p := stateTestPlugin(t, now)
+	p.dayStartHour = 5
+	day := p.snapshot().today(now)
+	items := []Item{
+		{ID: "c", Title: "次日凌晨", Start: "01:00", End: "02:00", Status: statusPlanned},
+		{ID: "a", Title: "上午", Start: "09:00", End: "10:00", Status: statusPlanned},
+		{ID: "b", Title: "深夜", Start: "23:00", End: "23:30", Status: statusPlanned},
+	}
+	if err := p.storeFor("").SavePlan(Plan{Date: day.Format(dateLayout), Items: items}); err != nil {
+		t.Fatal(err)
+	}
+
+	secs := p.State(plugin.StateQuery{Lang: "zh"})
+	if len(secs) != 1 || len(secs[0].Rows) != 3 {
+		t.Fatalf("State = %+v", secs)
+	}
+	var got []string
+	for _, r := range secs[0].Rows {
+		got = append(got, r.Value)
+	}
+	want := []string{"上午", "深夜", "次日凌晨"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("排序 = %v，期望 %v", got, want)
+		}
+	}
+}
