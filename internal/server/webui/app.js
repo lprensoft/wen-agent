@@ -36,6 +36,7 @@ let imageReadPromise = Promise.resolve();
 let sending = false;
 
 let currentSession = null; // 当前 session id
+let currentDomain = ""; // 当前会话最后一条消息所属的可见域，供角色状态页折叠其它人格
 let busy = false;          // 正在等待回复
 let chatAbort = null;      // 进行中对话的中断控制器，非 null 表示可停止
 
@@ -441,6 +442,7 @@ async function newSession() {
   const res = await fetch("/api/sessions", { method: "POST" });
   const meta = await res.json();
   currentSession = meta.id;
+  currentDomain = "";
   clearMessages();
   renderedFp = historyFp([]);
   await loadSessions();
@@ -453,9 +455,11 @@ async function newSession() {
 async function selectSession(id, internal = false) {
   if (!internal && (busy || sending)) return;
   currentSession = id;
+  currentDomain = "";
   const res = await fetch(`/api/sessions/${id}`);
   if (!res.ok) { await loadSessions(); return; }
   const data = await res.json();
+  currentDomain = domainOf(data.messages);
   renderHistory(data.messages);
   renderedFp = historyFp(data.messages);
   loadSessions();
@@ -466,6 +470,21 @@ async function selectSession(id, internal = false) {
 // 用「条数 + 末条时间戳」做指纹，变了才整体重渲染，避免无谓的闪动。
 
 let renderedFp = ""; // 消息区当前渲染内容对应的指纹
+
+// domainOf 取会话里最后一条带标签的消息所属的域。状态页据此把其它人格
+// 折叠起来；没有标签（共享域）时返回空串。
+function domainOf(msgs) {
+  for (let i = (msgs || []).length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (!m) continue;
+    // 注记与一次性输入不属于对话本身，跳过它们找最后一条真正的消息。
+    if (m.kind === "notice" || m.kind === "ephemeral") continue;
+    // 空标签是共享域，必须原样返回；继续往前找会把「现在在共享域」
+    // 误判成上一条带标签的消息所属的人格。
+    return m.tag || "";
+  }
+  return "";
+}
 
 function historyFp(msgs) {
   const last = msgs[msgs.length - 1];
@@ -480,6 +499,7 @@ async function syncCurrentSession() {
     const data = await res.json();
     const fp = historyFp(data.messages);
     if (fp === renderedFp) return;
+    currentDomain = domainOf(data.messages);
     renderHistory(data.messages);
     renderedFp = fp;
     scrollBottom();
@@ -1283,6 +1303,247 @@ async function loadSettingsPlugins() {
   }
 }
 
+// ---------- 角色状态 ----------
+//
+// 只读快照：内容由各插件经 StateReporter 提供，服务端已按请求语言译好静态文字。
+// 这里所有 Value / Detail 都用 textContent 写入——记忆与人物是用户与模型写的
+// 文本，走 innerHTML 等于把它们当 HTML 执行。
+
+const stateEl = $("#settings-state");
+const stateMetaEl = $("#state-meta");
+const stateRefreshBtn = $("#btn-state-refresh");
+let stateLoading = false;
+
+// relativeTime 用浏览器自带的复数与语序规则，不另造一套「N 分钟前」的字典。
+function relativeTime(iso) {
+  const ts = Date.parse(iso);
+  if (!ts) return "";
+  const diff = (ts - Date.now()) / 1000;
+  const abs = Math.abs(diff);
+  const rtf = new Intl.RelativeTimeFormat(I18N.locale, { numeric: "auto" });
+  if (abs < 60) return rtf.format(Math.round(diff), "second");
+  if (abs < 3600) return rtf.format(Math.round(diff / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(diff / 3600), "hour");
+  return rtf.format(Math.round(diff / 86400), "day");
+}
+
+async function loadState() {
+  if (!stateEl || stateLoading) return;
+  stateLoading = true;
+  stateEl.textContent = t("common.loading");
+  stateMetaEl.textContent = "";
+  try {
+    const res = await fetch(withLang("/api/state"));
+    if (!res.ok) throw new Error(t("common.unknownError"));
+    renderState(await res.json());
+  } catch (e) {
+    stateEl.textContent = t("settings.state.loadFailed", { msg: e.message });
+  } finally {
+    stateLoading = false;
+  }
+}
+
+function renderState(snap) {
+  if (!stateEl) return;
+  stateEl.textContent = "";
+  stateMetaEl.textContent = t("settings.state.readonly");
+
+  const plugins = (snap && snap.plugins) || [];
+  if (!plugins.length) {
+    const empty = document.createElement("div");
+    empty.className = "state-empty";
+    // 全都因为超限被丢掉了，与「确实没有状态」不是一回事。
+    empty.textContent = snap && snap.truncated
+      ? t("settings.state.truncated")
+      : t("settings.state.empty");
+    stateEl.append(empty);
+    return;
+  }
+
+  // 当前域优先取当前会话最后一条消息的标签；没有会话或该域不在快照里时，
+  // 退到最近更新的一块所属域。只影响折叠，不影响返回什么。
+  const domains = new Set();
+  let hasShared = false;
+  for (const p of plugins) {
+    for (const s of p.sections || []) {
+      if (s.domain) domains.add(s.domain);
+      else hasShared = true;
+    }
+  }
+  let domain = currentDomain;
+  const known = domain === "" ? hasShared : domains.has(domain);
+  if (!known) {
+    domain = "";
+    let latest = 0;
+    for (const p of plugins) {
+      for (const s of p.sections || []) {
+        const ts = Date.parse(s.updated_at || "") || 0;
+        if (s.domain && ts >= latest) {
+          latest = ts;
+          domain = s.domain;
+        }
+      }
+    }
+    if (!domain) domain = domains.values().next().value || "";
+  }
+
+  const primary = [];
+  const others = [];
+  for (const p of plugins) {
+    const sections = (p.sections || []).filter((s) => s && s.title);
+    if (!sections.length) continue;
+    const keep = sections.filter((s) => !s.domain || s.domain === domain);
+    const rest = sections.filter((s) => s.domain && s.domain !== domain);
+    if (keep.length) primary.push({ ...p, sections: keep });
+    if (rest.length) others.push(...rest);
+  }
+
+  renderStatePlugins(primary);
+
+  // 其它人格域默认折叠：表人格的窗口里不该一进来就摊开里人格的状态。
+  if (others.length) {
+    const det = document.createElement("details");
+    det.className = "state-others";
+    const sum = document.createElement("summary");
+    sum.textContent = t("settings.state.others", { n: new Set(others.map((s) => s.domain)).size });
+    det.append(sum);
+    for (const s of others) det.append(renderStateSection(s, true));
+    stateEl.append(det);
+  }
+
+  if (snap && snap.truncated) {
+    const note = document.createElement("div");
+    note.className = "state-more";
+    note.textContent = t("settings.state.truncated");
+    stateEl.append(note);
+  }
+}
+
+function renderStatePlugins(plugins) {
+  // 按稳定标识分组、按译名展示，与设置页的插件卡片同一套规则。
+  const groups = new Map();
+  for (const p of plugins) {
+    const key = p.category_key || "other";
+    if (!groups.has(key)) {
+      groups.set(key, { title: p.category || key, plugins: [] });
+    }
+    groups.get(key).plugins.push(p);
+  }
+
+  for (const g of groups.values()) {
+    const head = document.createElement("div");
+    head.className = "state-group-title";
+    head.textContent = g.title;
+    stateEl.append(head);
+
+    for (const p of g.plugins) {
+      const wrap = document.createElement("div");
+      wrap.className = "state-plugin";
+      for (const s of p.sections) wrap.append(renderStateSection(s));
+      if (p.truncated) {
+        const note = document.createElement("div");
+        note.className = "state-more";
+        note.textContent = t("settings.state.truncated");
+        wrap.append(note);
+      }
+      stateEl.append(wrap);
+    }
+  }
+}
+
+function renderStateSection(s, showDomain = false) {
+  const det = document.createElement("details");
+  det.className = "state-block";
+  const rows = s.rows || [];
+  det.open = rows.length <= 8;
+
+  const sum = document.createElement("summary");
+  const title = document.createElement("span");
+  title.className = "state-block-title";
+  title.textContent = s.title || "";
+  sum.append(title);
+
+  if (s.summary) {
+    const brief = document.createElement("span");
+    brief.className = "state-block-summary";
+    brief.textContent = s.summary;
+    sum.append(brief);
+  }
+
+  const meta = document.createElement("span");
+  meta.className = "state-block-meta";
+  if (showDomain && s.domain) {
+    const chip = document.createElement("span");
+    chip.className = "state-domain";
+    chip.textContent = t("settings.state.domain", { name: s.domain });
+    meta.append(chip);
+  }
+  if (s.updated_at) {
+    const when = document.createElement("span");
+    when.textContent = relativeTime(s.updated_at);
+    meta.append(when);
+  }
+  if (meta.childNodes.length) sum.append(meta);
+  det.append(sum);
+
+  if (!rows.length) {
+    if (s.empty) {
+      const empty = document.createElement("div");
+      empty.className = "state-empty";
+      empty.textContent = s.empty;
+      det.append(empty);
+    }
+    return det;
+  }
+
+  const body = document.createElement("div");
+  body.className = "state-rows";
+  for (const r of rows) body.append(renderStateRow(r));
+  det.append(body);
+
+  if (s.more) {
+    const more = document.createElement("div");
+    more.className = "state-more";
+    more.textContent = t("settings.state.more", { n: s.more });
+    det.append(more);
+  }
+  return det;
+}
+
+function renderStateRow(r) {
+  const row = document.createElement("div");
+  row.className = "state-row";
+  if (r.tone === "muted" || r.tone === "warn") row.classList.add("tone-" + r.tone);
+
+  if (r.meta) {
+    const meta = document.createElement("span");
+    meta.className = "state-row-meta";
+    meta.textContent = r.meta;
+    row.append(meta);
+  }
+  if (r.label) {
+    const label = document.createElement("span");
+    label.className = "state-row-label";
+    label.textContent = r.label;
+    row.append(label);
+  }
+
+  const value = document.createElement("span");
+  value.className = "state-row-value";
+  value.textContent = r.value || "";
+  row.append(value);
+
+  if (r.detail) {
+    const detail = document.createElement("span");
+    detail.className = "state-row-detail";
+    detail.textContent = r.detail;
+    row.append(detail);
+  }
+  return row;
+}
+
+if (stateRefreshBtn) stateRefreshBtn.addEventListener("click", loadState);
+
 // 左侧栏目与右侧 section 按 data-section 对应
 function showSettingsSection(name) {
   for (const b of document.querySelectorAll(".settings-nav-item")) {
@@ -1298,6 +1559,7 @@ $("#settings-nav").addEventListener("click", (e) => {
   if (!btn) return;
   showSettingsSection(btn.dataset.section);
   if (btn.dataset.section === "access") loadAccessState();
+  if (btn.dataset.section === "state") loadState();
 });
 
 // ---------- 访问控制 ----------
@@ -2849,6 +3111,7 @@ function retranslate() {
     loadModels();
     const nav = $(".settings-nav-item.active");
     if (nav && nav.dataset.section === "access") loadAccessState();
+    if (nav && nav.dataset.section === "state") loadState();
   }
 }
 
