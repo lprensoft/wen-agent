@@ -62,6 +62,8 @@ func (a *Agent) AppendNotice(ctx context.Context, sessionID, text string) error 
 	if err := a.store.Append(sessionID, m); err != nil {
 		return err
 	}
+	// 注记也是界面上的新内容：会话列表的未读据此亮起来。
+	_ = a.store.SetLastMessage(sessionID, m.TS)
 
 	a.mu.RLock()
 	sink := a.noticeSink

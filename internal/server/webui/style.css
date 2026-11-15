@@ -247,6 +247,17 @@ body {
 .session-item:hover .btn-del { visibility: visible; }
 .session-item .btn-del:hover { color: var(--danger); background: var(--danger-bg); }
 
+/* 未读：机器自发的一轮也会在这里亮起来。标题提一档，右边留一个小点。 */
+.session-item.unread .title { color: var(--text); font-weight: 600; }
+.unread-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+
 /* ---------- 聊天区 ---------- */
 /* 消息区与输入框共用一个栏宽：定宽居中而非百分比内边距——按百分比算，
    超宽屏上行长仍然失控。两者取同一个变量，保证左右永远对齐。 */

@@ -304,3 +304,42 @@ func TestPutFileAndFilePath(t *testing.T) {
 		t.Fatalf("PutFile second: %v", err)
 	}
 }
+
+// 最近消息时间要真的落进 meta 行：界面靠它判断会话有没有新内容。
+func TestSetLastMessage(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.LastMessageAt != nil {
+		t.Fatalf("新会话不该有最近消息时间: %v", meta.LastMessageAt)
+	}
+
+	ts := time.Now().Add(-time.Minute).Truncate(time.Second)
+	if err := s.SetLastMessage(meta.ID, ts); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.Get(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastMessageAt == nil || !got.LastMessageAt.Equal(ts) {
+		t.Fatalf("LastMessageAt = %v，期望 %v", got.LastMessageAt, ts)
+	}
+	// 最近消息不等于最近真人交互：前者含机器轮次，后者只记真人。
+	if got.LastActiveAt != nil {
+		t.Errorf("SetLastMessage 不该改动 LastActiveAt: %v", got.LastActiveAt)
+	}
+
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].LastMessageAt == nil {
+		t.Fatalf("列表里的 meta 没带上最近消息时间: %+v", list)
+	}
+}

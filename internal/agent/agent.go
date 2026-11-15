@@ -84,6 +84,9 @@ type Agent struct {
 	// noticeSink 是会话注记的实时出口（见 notice.go）。同受 mu 保护：
 	// 它由 server 在启动时装一次，而注记从插件的后台 goroutine 上写出。
 	noticeSink NoticeSink
+	// turnSink 是一轮结束的实时出口（见 turn.go）。与 noticeSink 同样由 server
+	// 启动时装一次，从发起轮次的 goroutine 上调用。
+	turnSink TurnSink
 
 	// 每会话一把轮次锁：同一会话的对话轮次与压缩互斥，防止交错写历史，
 	// 以及压缩的 Replace 覆盖并发轮次刚 Append 的消息。
@@ -444,7 +447,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 			if !ok {
 				return "", err
 			}
-			a.plugins.NotifyTurnEnd(ctx, plugin.TurnEndEvent{
+			a.endTurn(ctx, plugin.TurnEndEvent{
 				SessionID:   sessionID,
 				Origin:      origin,
 				Interactive: true, // 转译只发生在真人在场的轮次
@@ -500,7 +503,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 		if len(r.toolCalls) == 0 {
 			// 无工具调用，本轮结束
 			a.maybeAutoCompact(ctx, targets, opts, sessionID, r.usage, emit)
-			a.plugins.NotifyTurnEnd(ctx, plugin.TurnEndEvent{
+			a.endTurn(ctx, plugin.TurnEndEvent{
 				SessionID:   sessionID,
 				Origin:      origin,
 				Interactive: plugin.IsInteractive(ctx),
