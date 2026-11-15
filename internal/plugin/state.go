@@ -52,6 +52,8 @@ type StateSection struct {
 	// PinnedOrder 决定聊天页顶部那一行里的先后，小的在前；0 按注册顺序排。
 	PinnedOrder int `json:"pinned_order,omitempty"`
 	// Collapsed 表示这一块在状态页里默认收起（如心里话）。
+	// Global 表示这一块不属于任何一个可见域（如心跳），任何人格下都该显示。
+	Global    bool `json:"global,omitempty"`
 	Collapsed bool `json:"collapsed,omitempty"`
 	// UpdatedAt 是这份状态最后一次变化的时刻，零值表示不知道（前端不显示）。
 	// 不是查询时刻：天气、现场、心情都可能停在几小时前，读的人要知道。

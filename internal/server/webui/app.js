@@ -1426,7 +1426,7 @@ async function loadPinnedState() {
     for (const p of plugins) {
       for (const s of p.sections || []) {
         if (!s.pinned || !s.summary) continue;
-        if (s.domain && s.domain !== domain) continue;
+        if (!s.global && s.domain !== domain) continue;
         items.push(s);
       }
     }
@@ -1467,8 +1467,14 @@ function renderState(snap) {
   for (const p of plugins) {
     const sections = (p.sections || []).filter((s) => s && s.title);
     if (!sections.length) continue;
-    const keep = sections.filter((s) => !s.domain || s.domain === domain);
-    const rest = sections.filter((s) => s.domain && s.domain !== domain);
+    const keep = [];
+    const rest = [];
+    for (const s of sections) {
+      // 空域在人格启用后是旧共享库留下的状态，不再属于当前人格；
+      // 只有标了 global 的心跳等真正全局块可以跨人格显示。
+      if (s.global || (domain === "" ? !s.domain : s.domain === domain)) keep.push(s);
+      else rest.push(s);
+    }
     if (keep.length) primary.push({ ...p, sections: keep });
     if (rest.length) others.push(...rest);
   }
@@ -1547,10 +1553,12 @@ function renderStateSection(s, showDomain = false) {
 
   const meta = document.createElement("span");
   meta.className = "state-block-meta";
-  if (showDomain && s.domain) {
+  if (showDomain && !s.global) {
     const chip = document.createElement("span");
     chip.className = "state-domain";
-    chip.textContent = t("settings.state.domain", { name: s.domain });
+    chip.textContent = s.domain
+      ? t("settings.state.domain", { name: s.domain })
+      : t("settings.state.shared");
     meta.append(chip);
   }
   if (s.updated_at) {

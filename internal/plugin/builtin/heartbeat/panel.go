@@ -10,9 +10,15 @@ import (
 // State 把心跳的节奏交给设置页的「角色状态」，并给聊天页顶部贡献一行
 // 「下次开口」摘要。心跳是全局的，没有可见域。
 func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
+	now := time.Now()
 	p.mu.Lock()
-	cur, dynamic, lastBeat := p.cur, p.dynamic, p.lastBeat
+	cur, dynamic := p.cur, p.dynamic
 	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
+	var next time.Time
+	if cur > 0 {
+		// 与调度器共用同一套提前/延后规则，但只读：查看状态不会改写忙碌观察。
+		next, _, _, _ = p.nextBeatAt(now)
+	}
 	p.mu.Unlock()
 	if cur <= 0 {
 		return nil
@@ -43,7 +49,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			summary = i18n.Tf(lang, "plugin.heartbeat.state.paused", "暂停中，约 %s后恢复", humanDur(lang, until))
 		}
 	} else {
-		summary = nextBeatDesc(lang, lastBeat.Add(cur))
+		summary = nextBeatDesc(lang, next)
 	}
 	statusValue := i18n.T(lang, "plugin.heartbeat.state.running", "运行中")
 	statusDetail := summary
@@ -64,5 +70,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		Rows:        rows,
 		Pinned:      true,
 		PinnedOrder: 3,
+		Global:      true,
 	}}
 }
