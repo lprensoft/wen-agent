@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -201,5 +202,130 @@ func TestRenderRowsForJudgeDropsOldest(t *testing.T) {
 func TestHumanHours(t *testing.T) {
 	if humanHours("", 8) != "8 小时" || humanHours("", 1.5) != "1.5 小时" {
 		t.Error(humanHours("", 8), humanHours("", 1.5))
+	}
+}
+
+// 断言与预置是脚本里最容易写错的两块：规则 id 拼错、上限写成负数、expect 挂到
+// compact 上，都该在解析时拦住，而不是跑完一次模型调用才发现什么都没断言上。
+func TestParseScriptSeedsAndExpects(t *testing.T) {
+	good := `{"name":"空调","seed":[{"tool":"save_memory","args":{"name":"怕冷"},"scope":"inner"}],` +
+		`"turns":[{"say":"空调开好低","expect":{"must_include":["空调"],"must_not_include":["作为 AI"],` +
+		`"max_hits":{"closing_cliche":0},"max_sentences":3,"must_call":["recall_memory"]}}]}`
+	sc, err := parseScript([]byte(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sc.Seed) != 1 || sc.Seed[0].Tool != "save_memory" || sc.Seed[0].Scope != "inner" {
+		t.Fatalf("seed = %+v", sc.Seed)
+	}
+	exp := sc.Turns[0].Expect
+	if exp == nil || len(exp.MustInclude) != 1 || exp.MaxHits["closing_cliche"] != 0 || exp.MaxSentences != 3 || len(exp.MustCall) != 1 {
+		t.Fatalf("expect = %+v", exp)
+	}
+
+	bad := map[string]string{
+		"expect 挂到压缩上": `{"turns":[{"say":"a"},{"compact":true,"expect":{}}]}`,
+		"未知规则":         `{"turns":[{"say":"a","expect":{"max_hits":{"no_such_rule":0}}}]}`,
+		"负的句数上限":       `{"turns":[{"say":"a","expect":{"max_sentences":-1}}]}`,
+		"空断言词":         `{"turns":[{"say":"a","expect":{"must_include":[" "]}}]}`,
+		"空工具名":         `{"seed":[{"tool":"  "}],"turns":[{"say":"a"}]}`,
+	}
+	for name, raw := range bad {
+		if _, err := parseScript([]byte(raw)); err == nil {
+			t.Errorf("%s 应当报错", name)
+		}
+	}
+}
+
+func TestEvalExpectFails(t *testing.T) {
+	row := evalRow{
+		Reply:   "今天风大，别开窗。",
+		Metrics: stylecheck.Metrics{Runes: 9, Sentences: 2},
+		Tools:   []string{"recall_memory"},
+	}
+	cases := []struct {
+		name string
+		exp  *evalExpect
+		hits []stylecheck.Hit
+		want int
+	}{
+		{"无断言", nil, nil, 0},
+		{"包含命中", &evalExpect{MustInclude: []string{"风"}}, nil, 0},
+		{"包含未命中", &evalExpect{MustInclude: []string{"雨"}}, nil, 1},
+		{"禁词出现", &evalExpect{MustNotInclude: []string{"风"}}, nil, 1},
+		{"命中超上限", &evalExpect{MaxHits: map[string]int{"self_ai": 0}}, []stylecheck.Hit{{Rule: "self_ai"}}, 1},
+		{"句数超上限", &evalExpect{MaxSentences: 1}, nil, 1},
+		{"该调的工具没调", &evalExpect{MustCall: []string{"save_memory"}}, nil, 1},
+		{"全部通过", &evalExpect{MustInclude: []string{"风"}, MaxSentences: 2, MustCall: []string{"recall_memory"}}, nil, 0},
+	}
+	for _, c := range cases {
+		row.Hits = c.hits
+		if got := evalExpectFails(row, c.exp); len(got) != c.want {
+			t.Errorf("%s: fails = %v，期望 %d 条", c.name, got, c.want)
+		}
+	}
+}
+
+// 基线只判确定性指标：命中变多、句数明显变多、新增断言失败；评分只算趋势。
+func TestCompareEvalBaseline(t *testing.T) {
+	base := evalJSON{
+		Schema: evalJSONSchema,
+		Turns:  []evalJSONTurn{{Index: 1, Sentences: 2, HitCounts: map[string]int{"self_ai": 0}}},
+		Judge:  &evalJSONJudge{SamePerson: 4, Tone: 4, Relation: 5},
+	}
+	cur := evalJSON{
+		Schema: evalJSONSchema,
+		Turns:  []evalJSONTurn{{Index: 1, Sentences: 4, HitCounts: map[string]int{"self_ai": 1}}},
+		Judge:  &evalJSONJudge{SamePerson: 2, Tone: 3, Relation: 5},
+	}
+	regs, delta := compareEvalBaseline(cur, base)
+	if len(regs) != 1 || !strings.Contains(regs[0], "self_ai") && !strings.Contains(regs[0], "自称") {
+		t.Fatalf("退化项 = %v，期望命中变多一条", regs)
+	}
+	// 句数 2→4 只多了 2，按阈值不算退化。
+	if delta == nil || delta.BaseSame != 4 || delta.CurSame != 2 {
+		t.Fatalf("评分对照 = %+v", delta)
+	}
+
+	cur.Turns[0].Sentences = 5
+	regs, _ = compareEvalBaseline(cur, base)
+	if len(regs) != 2 {
+		t.Fatalf("句数 +3 应当报退化，得到 %v", regs)
+	}
+
+	// 脚本多了一轮（基线里没有）时不比，那是脚本变了，不是退化。
+	cur.Turns = append(cur.Turns, evalJSONTurn{Index: 2, Sentences: 9})
+	if regs, _ := compareEvalBaseline(cur, base); len(regs) != 2 {
+		t.Fatalf("新增轮次不该算退化: %v", regs)
+	}
+}
+
+func TestEvalJSONRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.json")
+	res := evalResult{
+		Name:  "晚安",
+		Model: "p/m",
+		Rows: []evalRow{{
+			Kind: rowSay, Index: 1, Say: "睡了吗", Reply: "刚躺下",
+			Metrics: stylecheck.Metrics{Runes: 3, Sentences: 1},
+			Hits:    []stylecheck.Hit{{Rule: "self_ai"}},
+			Tools:   []string{"recall_memory"},
+		}},
+	}
+	if err := writeEvalJSON(path, res); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadEvalJSON(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Schema != evalJSONSchema || len(got.Turns) != 1 || got.Turns[0].HitCounts["self_ai"] != 1 || got.Turns[0].Sentences != 1 {
+		t.Fatalf("读回 = %+v", got)
+	}
+	if err := os.WriteFile(path, []byte(`{"schema":99,"turns":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadEvalJSON(path); err == nil {
+		t.Error("schema 不认识时应当报错")
 	}
 }

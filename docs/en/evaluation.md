@@ -3,17 +3,41 @@
 [← Back to README](../../README.en.md)　·　[中文](../evaluation.md)　·　English
 
 
-You have just adjusted a prompt — is the character better now, or worse? `wen eval` turns that question from "chat a bit more and see how it feels" into a script you can run again:
+You have just adjusted a prompt — is the character better now, or worse? `wen eval` turns that question from "chat a bit more and see how it feels" into a script you can rerun and judge:
 
 ```bash
-wen eval docs/eval/example.json              # report goes to stdout
-wen eval docs/eval/example.json -o report.md # written to a file
+wen eval docs/eval/example.json                    # report goes to stdout
+wen eval docs/eval/example.json -o report.md        # written to a file
+wen eval docs/eval/night.json --json run.json      # structured result, for the next comparison
+wen eval docs/eval/night.json --baseline run.json  # compare with the last run; exit 1 on deterministic regressions
 ```
 
-A script is a single JSON file. `name` names the report; `turns` lists the steps in order — `{"say": "what you say"}` is one turn of conversation, `{"compact": true}` forces a compaction at that point (to see whether the character survives it), and `{"gap_hours": 8}` only notes "this much time passed here" in the report (it does not change the system clock, and the model never sees it). The optional `judge_points` adds a few things for the judging pass to pay attention to. See [`docs/eval/example.json`](../eval/example.json) for an example.
+A script is a single JSON file. `name` names the report, `seed` preloads state, and `turns` lists the steps in order — `{"say": "what you say"}` is one turn, `{"compact": true}` forces a compaction at that point (to see whether the character survives it), and `{"gap_hours": 8}` only notes "this much time passed here" in the report (it does not change the system clock, and the model cannot see it); optional `judge_points` add extra focus points for the judge. See [`docs/eval/example.json`](eval/example.json).
 
-It runs with **the same configuration and plugins as `wen serve`** — the same config.yaml, models.json and plugins.state.json, so the character sheet, the sample lines and the natural-expression rules are all in effect — with two differences. Sessions and plugin data all go to a temporary directory that is deleted when the run finishes, so the memory store, the mood and every other piece of state start blank and nothing real is touched. And the chat-channel and background-task plugins (heartbeat, scheduler, QQ / WeChat / Feishu / Telegram) do not start: they would connect to real platforms, or interject in the evaluation session. You can run it while the service is up; the two do not interfere.
+`seed` writes state through the plugins' own tools before the run starts, the same way the model calls them:
 
-The report is Markdown: the script name, the number of turns, the number of compactions (script-requested and automatically triggered counted separately), and per turn the character count, sentence count, share of acted-out narration and assistant-speak hits (the same rules `style_watch` uses). Then the current model does one judging pass, scoring "does it read as the same person", "is the tone consistent (especially across a compaction)" and "are the relationship and the forms of address continuous" from 1 to 5 with a sentence of reasoning each. Every reply is appended verbatim at the end.
+```json
+"seed": [
+  {"tool": "save_memory", "args": {"name": "Afraid of cold", "description": "Feels cold below 26°C", "type": "偏好", "content": "..."}},
+  {"tool": "update_relationship", "args": {"stage": "熟悉"}, "scope": "inner"}
+]
+```
 
-A few limits worth keeping in mind. The scores come from a model too, so the same script run twice will not score identically — **read them as a trend, not as absolute values**; the meaningful comparison is one run before a prompt change and one after. Assistant-speak detection is a regex heuristic, and a hit does not mean the character broke. The memory store is empty, so anything that depends on long-term memory cannot be measured. And `gap_hours` does not make the model actually feel time pass. If a turn fails, the report is still produced with that turn marked, but the exit code is 1.
+`scope` puts the state into one persona; without it the shared domain is used. Going through the real tools keeps the fields identical to the plugin docs and independent of the on-disk format; the trade-off is that "remembered three days ago" cannot be expressed yet — a virtual clock is still on the roadmap.
+
+`expect` hangs off a `say` step and is a deterministic assertion that does not rely on the judge:
+
+```json
+{"say": "The office AC is so low today.", "expect": {
+  "must_include": ["AC"], "must_not_include": ["as an AI"],
+  "max_hits": {"closing_cliche": 0}, "max_sentences": 3, "must_call": ["recall_memory"]
+}}
+```
+
+Any unmet expectation fails the gate and exits 1. `max_hits` uses the rule ids from `style_watch`; a typo is reported when the script is parsed. An absent or zero `max_sentences` means no limit; a zero inside `max_hits` means the rule may not match at all.
+
+It uses the **same configuration and plugins** as `wen serve` (the same config.yaml, models.json and plugins.state.json; persona, voice samples and natural-expression rules all apply), but sessions and plugin data live in a temporary directory that is deleted afterwards, so real data is never touched; message channels and background plugins (heartbeat, scheduler, QQ / WeChat / Feishu / Telegram) do not start. It can run while the service is up.
+
+The report has two halves: the gate and per-turn deterministic metrics (length, sentences, share of action passages, assistant-speak hits, expectation results), then the model's judgement ("reads as one person / tone is consistent / relationship and address are continuous", 1-5 each). With `--baseline` there is a comparison section: more hits, clearly more sentences, or new expectation failures count as regressions; **scores are shown as a trend and never fail the gate**.
+
+Limitations: judging is done by a model and varies between runs — use it for trends, not absolute values; assistant-speak detection is a regex heuristic, so a hit is not proof of a bad reply; `gap_hours` does not make the model feel time pass, and the virtual clock is not built yet; `seed` goes through tools, so past timestamps cannot be specified.

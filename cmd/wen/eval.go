@@ -42,6 +42,8 @@ func runEval(args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
 	out := fs.String("o", "", tr("cli.eval.flag.out", "报告写入的文件（默认打到标准输出）"))
+	jsonOut := fs.String("json", "", tr("cli.eval.flag.json", "把结构化结果写入文件，作为下一次对比的基线"))
+	baselinePath := fs.String("baseline", "", tr("cli.eval.flag.baseline", "与上次的 --json 结果对比；确定性指标退化时退出码为 1"))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -93,7 +95,39 @@ func runEval(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if len(sc.Seed) > 0 {
+		if err := runSeeds(ctx, rt, sc.Seed); err != nil {
+			return err
+		}
+		fmt.Fprint(os.Stderr, trf("cli.eval.seed.done", "预置状态：%d 条\n", len(sc.Seed)))
+	}
+
+	// 基线先读、先校验，再开跑：脚本名对不上时当场报错，别烧完一整轮模型调用才发现。
+	var base evalJSON
+	if *baselinePath != "" {
+		base, err = loadEvalJSON(*baselinePath)
+		if err != nil {
+			return err
+		}
+		if base.Name != "" && sc.Name != "" && base.Name != sc.Name {
+			return fmt.Errorf(tr("cli.eval.err.baseline_name", "基线来自另一个脚本（%s），不能与 %s 对比"), base.Name, sc.Name)
+		}
+		if model := rt.current.ProviderName + "/" + rt.current.ModelID; base.Model != "" && base.Model != model {
+			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_model", "注意：基线用的是 %s，本次是 %s；评分与命中都可能不可比\n", base.Model, model))
+		}
+	}
+
 	res := runScript(ctx, rt, sc, os.Stderr)
+	if *baselinePath != "" {
+		res.BaselinePath = *baselinePath
+		res.Regressions, res.JudgeDelta = compareEvalBaseline(evalJSONOf(res), base)
+	}
+	if *jsonOut != "" {
+		if err := writeEvalJSON(*jsonOut, res); err != nil {
+			return err
+		}
+		fmt.Fprint(os.Stderr, trf("cli.eval.json_written", "结构化结果已写入 %s\n", *jsonOut))
+	}
 	report := renderEvalReport(res)
 	if *out != "" {
 		if err := os.WriteFile(*out, []byte(report), 0o644); err != nil {
@@ -104,7 +138,10 @@ func runEval(args []string) error {
 		fmt.Print(report)
 	}
 	if res.failed() {
-		return fmt.Errorf("%s", tr("cli.eval.err.had_failure", "有轮次失败，见报告"))
+		if res.turnFailed() {
+			return fmt.Errorf("%s", tr("cli.eval.err.had_failure", "有轮次失败，见报告"))
+		}
+		return fmt.Errorf("%s", tr("cli.eval.err.gate_failed", "门禁未通过，见报告"))
 	}
 	return nil
 }
@@ -119,6 +156,36 @@ func evalSuppressed(p plugin.Plugin) bool {
 		return true
 	}
 	return false
+}
+
+// runSeeds 在开跑之前把预置状态写进评测环境。
+//
+// 走插件自己的工具而不是直接写状态文件：不复制十几个插件的落盘格式，种子也走真实
+// 的写入路径；以后加插件不用改这里。代价是暂时表达不了「三天前」这类时间，那要等
+// 虚拟时钟。
+func runSeeds(ctx context.Context, rt *runtime, seeds []evalSeed) error {
+	for i, sd := range seeds {
+		tool, ok := rt.plugins.FindTool(sd.Tool)
+		if !ok {
+			return fmt.Errorf(tr("cli.eval.err.seed_tool", "seed[%d]: 没有工具 %q"), i+1, sd.Tool)
+		}
+		args := []byte("{}")
+		if len(sd.Args) > 0 {
+			raw, err := json.Marshal(sd.Args)
+			if err != nil {
+				return fmt.Errorf(tr("cli.eval.err.seed_args", "seed[%d]（%s）的参数不是合法 JSON: %w"), i+1, sd.Tool, err)
+			}
+			args = raw
+		}
+		c := ctx
+		if sd.Scope != "" {
+			c = plugin.WithScope(c, plugin.Scope{Write: sd.Scope, Read: []string{sd.Scope}})
+		}
+		if _, err := tool.Execute(c, args); err != nil {
+			return fmt.Errorf(tr("cli.eval.err.seed_failed", "seed[%d]（%s）失败: %w"), i+1, sd.Tool, err)
+		}
+	}
+	return nil
 }
 
 // runScript 跑完整个脚本并收集结果。progress 收每轮的进度提示，可为 nil。
@@ -153,7 +220,7 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.Fil
 		case step.Say != "":
 			turnNo++
 			say(tr("cli.eval.say.turn", "第 %d 轮：%s"), turnNo, clipLine(step.Say, 30))
-			row := runSayTurn(plugin.WithInteractive(ctx), rt.agent, sessionID, turnNo, step.Say)
+			row := runSayTurn(plugin.WithInteractive(ctx), rt.agent, sessionID, turnNo, step.Say, step.Expect)
 			res.Rows = append(res.Rows, row.rows...)
 			res.AutoCompactions += row.autoCompactions
 			if row.failed {
@@ -210,17 +277,19 @@ type sayOutcome struct {
 
 // runSayTurn 跑一轮对话。最终文本从事件流里取：每次工具调用开始就清一次缓冲，
 // 留下的就是最后那段回复。
-func runSayTurn(ctx context.Context, ag *agent.Agent, sessionID string, index int, input string) sayOutcome {
+func runSayTurn(ctx context.Context, ag *agent.Agent, sessionID string, index int, input string, exp *evalExpect) sayOutcome {
 	var (
 		buf     strings.Builder
 		errText string
 		compact bool
+		tools   []string
 	)
 	ag.Run(ctx, sessionID, input, func(ev agent.Event) {
 		switch ev.Type {
 		case agent.EventDelta:
 			buf.WriteString(ev.Content)
 		case agent.EventToolStart:
+			tools = append(tools, ev.ToolName)
 			buf.Reset()
 		case agent.EventCompactStart:
 			compact = true
@@ -228,12 +297,19 @@ func runSayTurn(ctx context.Context, ag *agent.Agent, sessionID string, index in
 			errText = ev.Error
 		}
 	})
-	row := evalRow{Kind: rowSay, Index: index, Say: input, Reply: strings.TrimSpace(buf.String()), Err: errText}
+	row := evalRow{Kind: rowSay, Index: index, Say: input, Reply: strings.TrimSpace(buf.String()), Tools: tools, Err: errText}
 	if errText != "" {
 		return sayOutcome{rows: []evalRow{row}, failed: true}
 	}
 	row.Metrics = stylecheck.Measure(uiLang, row.Reply)
 	row.Hits = stylecheck.Check(uiLang, row.Reply)
+	if exp != nil {
+		row.ExpectFails = evalExpectFails(row, exp)
+		if row.ExpectFails == nil {
+			// 写了 expect 但全部通过：留一个空切片，报告才能区分「没断言」与「断言全过」。
+			row.ExpectFails = []string{}
+		}
+	}
 	out := sayOutcome{rows: []evalRow{row}}
 	if compact {
 		out.rows = append(out.rows, evalRow{Kind: rowAutoCompact})
@@ -269,15 +345,36 @@ func clipLine(s string, max int) string {
 // evalScript 是脚本文件的形状。
 type evalScript struct {
 	Name        string     `json:"name"`
+	Seed        []evalSeed `json:"seed,omitempty"`
 	Turns       []evalStep `json:"turns"`
 	JudgePoints []string   `json:"judge_points,omitempty"`
 }
 
+// evalSeed 是一条预置状态：用插件的某个工具往评测环境里写一条。
+//
+// 走工具而不是直接写状态文件：不复制每个插件的落盘格式，种子也走真实写入路径。
+// 时间相关的种子（「三天前记住的」）要等虚拟时钟。
+type evalSeed struct {
+	Tool  string         `json:"tool"`
+	Args  map[string]any `json:"args,omitempty"`
+	Scope string         `json:"scope,omitempty"` // 可见域；空 = 共享
+}
+
+// evalExpect 是一轮回复的确定性断言。全部为空表示不断言。
+type evalExpect struct {
+	MustInclude    []string       `json:"must_include,omitempty"`
+	MustNotInclude []string       `json:"must_not_include,omitempty"`
+	MaxHits        map[string]int `json:"max_hits,omitempty"`
+	MaxSentences   int            `json:"max_sentences,omitempty"`
+	MustCall       []string       `json:"must_call,omitempty"`
+}
+
 // evalStep 是脚本里的一步：三者取其一。
 type evalStep struct {
-	Say      string  `json:"say,omitempty"`
-	Compact  bool    `json:"compact,omitempty"`
-	GapHours float64 `json:"gap_hours,omitempty"`
+	Say      string      `json:"say,omitempty"`
+	Compact  bool        `json:"compact,omitempty"`
+	GapHours float64     `json:"gap_hours,omitempty"`
+	Expect   *evalExpect `json:"expect,omitempty"`
 }
 
 // parseScript 解析并校验脚本。
@@ -290,6 +387,12 @@ func parseScript(raw []byte) (evalScript, error) {
 	}
 	if len(sc.Turns) == 0 {
 		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_turns", "turns 为空"))
+	}
+	for i, sd := range sc.Seed {
+		if strings.TrimSpace(sd.Tool) == "" {
+			return sc, fmt.Errorf(tr("cli.eval.err.seed_tool_empty", "seed[%d]: tool 不能为空"), i+1)
+		}
+		sc.Seed[i].Tool = strings.TrimSpace(sd.Tool)
 	}
 	says := 0
 	for i, st := range sc.Turns {
@@ -310,10 +413,42 @@ func parseScript(raw []byte) (evalScript, error) {
 		if n != 1 {
 			return sc, fmt.Errorf(tr("cli.eval.err.bad_step", "turns[%d]: 每步只能是 say、compact、gap_hours 之一"), i)
 		}
+		if st.Expect != nil {
+			if strings.TrimSpace(st.Say) == "" {
+				return sc, fmt.Errorf(tr("cli.eval.err.expect_not_say", "turns[%d]: expect 只能用在 say 上"), i)
+			}
+			if err := validateExpect(i, st.Expect); err != nil {
+				return sc, err
+			}
+		}
 		sc.Turns[i].Say = strings.TrimSpace(st.Say)
 	}
 	if says == 0 {
 		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_say", "脚本里没有任何一句 say"))
 	}
 	return sc, nil
+}
+
+// validateExpect 在开跑前拦住写错的断言：规则 id 拼错、上限写成负数，都该在脚本
+// 解析时就说清楚，而不是跑完一次模型调用才发现什么都没断言上。
+func validateExpect(i int, e *evalExpect) error {
+	for _, list := range [][]string{e.MustInclude, e.MustNotInclude, e.MustCall} {
+		for _, s := range list {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf(tr("cli.eval.err.expect_empty", "turns[%d]: 断言里有空字符串"), i)
+			}
+		}
+	}
+	for id, n := range e.MaxHits {
+		if !stylecheck.Known(id) {
+			return fmt.Errorf(tr("cli.eval.err.expect_rule", "turns[%d]: 未知的命中规则 %q"), i, id)
+		}
+		if n < 0 {
+			return fmt.Errorf(tr("cli.eval.err.expect_hits_neg", "turns[%d]: max_hits[%q] 不能为负"), i, id)
+		}
+	}
+	if e.MaxSentences < 0 {
+		return fmt.Errorf(tr("cli.eval.err.expect_sentences_neg", "turns[%d]: max_sentences 不能为负"), i)
+	}
+	return nil
 }

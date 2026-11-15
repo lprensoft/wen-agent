@@ -3,18 +3,41 @@
 [← 返回 README](../README.md)　·　中文　·　[English](en/evaluation.md)
 
 
-调一次提示词之后，角色是变好了还是变坏了？`wen eval` 把这件事从「再聊几句感觉一下」变成可以重复跑的脚本：
+调一次提示词之后，角色是变好了还是变坏了？`wen eval` 把这件事从「再聊几句感觉一下」变成可以重复跑、能判定的脚本：
 
 ```bash
-wen eval docs/eval/example.json            # 报告打到标准输出
-wen eval docs/eval/example.json -o 报告.md  # 写入文件
+wen eval docs/eval/example.json                    # 报告打到标准输出
+wen eval docs/eval/example.json -o 报告.md          # 写入文件
+wen eval docs/eval/night.json --json run.json      # 结构化结果，供下一次对比
+wen eval docs/eval/night.json --baseline run.json  # 与上次对比，确定性指标退化时退出码为 1
 ```
 
-脚本是一个 JSON：`name` 给报告起名，`turns` 按顺序列出步骤——`{"say": "你说的话"}` 是一轮对话，`{"compact": true}` 在此处强制压缩一次（看压缩前后角色有没有变），`{"gap_hours": 8}` 只是记一笔「这里隔了多久」写进报告（不改系统时间，模型看不到它）；可选的 `judge_points` 给评判加几条额外关注点。示例见 [`docs/eval/example.json`](eval/example.json)。
+脚本是一个 JSON：`name` 给报告起名，`seed` 预置状态，`turns` 按顺序列出步骤——`{"say": "你说的话"}` 是一轮对话，`{"compact": true}` 在此处强制压缩一次（看压缩前后角色有没有变），`{"gap_hours": 8}` 只是记一笔「这里隔了多久」写进报告（不改系统时间，模型看不到它）；可选的 `judge_points` 给评判加几条额外关注点。示例见 [`docs/eval/example.json`](eval/example.json)。
 
-它用与 `wen serve` **相同的配置与插件**（读同一份 config.yaml、models.json 与 plugins.state.json，角色设定、样例、自然表达规则全部照常生效），但：会话与插件数据全部落在一个临时目录、跑完即删，记忆库与心情等状态从空白开始，不碰真实数据；消息通道与后台任务类插件（心跳、定时、QQ / 微信 / 飞书 / Telegram）不启动——它们会连到真实平台、或在评测会话上插话。服务正在运行时也可以跑，两者互不影响。
+`seed` 在开跑前用插件自己的工具把状态写进去，写法和模型调用工具一样：
 
-报告是 Markdown：脚本名、轮数、压缩次数（脚本里要求的与自动触发的分开计）、每轮的字数 / 句数 / 演绎占比 / 助手腔命中（规则同 `style_watch`），再用当前模型做一次评判，按「像不像同一个人 / 语气是否一致（尤其压缩前后）/ 关系与称呼是否连续」三项各打 1-5 分并各写一句理由，末尾附全部回复原文。
+```json
+"seed": [
+  {"tool": "save_memory", "args": {"name": "怕冷", "description": "空调 26 度以下会冷", "type": "偏好", "content": "……"}},
+  {"tool": "update_relationship", "args": {"stage": "熟悉"}, "scope": "inner"}
+]
+```
 
-几条局限要记着：评分也是模型打的，同一脚本跑两次分数会抖，**用来看趋势，不当绝对值**——改提示词前后各跑一遍比较才有意义；助手腔检测是正则启发式，命中不等于出戏；记忆库是空的，依赖长期记忆的行为测不出来；`gap_hours` 不会让模型真的感到时间流逝。对话中某一轮失败时报告照样生成、失败的那轮标出来，但退出码为 1。
+`scope` 把状态写进某个人格，不写就是共享域。走真实工具意味着字段与插件文档一致，也不必担心落盘格式变化；代价是暂时表达不了「三天前记住的」这类时间，虚拟时钟还在计划中。
 
+`expect` 挂在 `say` 上，是不依赖模型评分的确定性断言：
+
+```json
+{"say": "今天空调开好低。", "expect": {
+  "must_include": ["空调"], "must_not_include": ["作为 AI"],
+  "max_hits": {"closing_cliche": 0}, "max_sentences": 3, "must_call": ["recall_memory"]
+}}
+```
+
+任何一条不满足就算「门禁未通过」，退出码为 1。`max_hits` 用 `style_watch` 的规则 id，拼错会在解析脚本时就报出来。`max_sentences` 不写或写 0 表示不限；`max_hits` 里的 0 则表示一次都不许命中。
+
+它用与 `wen serve` **相同的配置与插件**（读同一份 config.yaml、models.json 与 plugins.state.json，角色设定、样例、自然表达规则全部照常生效），但：会话与插件数据全部落在一个临时目录、跑完即删，不碰真实数据；消息通道与后台任务类插件（心跳、定时、QQ / 微信 / 飞书 / Telegram）不启动。服务正在运行时也可以跑，两者互不影响。
+
+报告分两半：上半是门禁与逐轮确定性指标（字数、句数、演绎占比、助手腔命中、断言结果），下半是模型评判（「像不像同一个人 / 语气是否一致 / 关系与称呼是否连续」，各 1-5 分）。给了 `--baseline` 时多一节对比：命中变多、句数明显变多、新增断言失败判为退化；**评分只列变化，不判失败**。
+
+几条局限：评分是模型打的，同一脚本跑两次会抖，用来看趋势、不当绝对值；助手腔检测是正则启发式，命中不等于出戏；`gap_hours` 不会让模型真的感到时间流逝，虚拟时钟还没做；`seed` 走工具，不能指定过去的时间戳。

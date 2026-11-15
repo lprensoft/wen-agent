@@ -24,14 +24,16 @@ const (
 
 // evalRow 是报告里的一行。
 type evalRow struct {
-	Kind     string
-	Index    int // 轮次编号，只对 say 有意义，从 1 起
-	Say      string
-	Reply    string
-	GapHours float64
-	Metrics  stylecheck.Metrics
-	Hits     []stylecheck.Hit
-	Err      string
+	Kind        string
+	Index       int // 轮次编号，只对 say 有意义，从 1 起
+	Say         string
+	Reply       string
+	GapHours    float64
+	Metrics     stylecheck.Metrics
+	Hits        []stylecheck.Hit
+	Tools       []string // 这一轮调用过的工具名，供 must_call 断言
+	ExpectFails []string // 没通过的断言，已按界面语言成句
+	Err         string
 }
 
 // evalScore 是评判的一项：分数与一句理由。
@@ -63,10 +65,13 @@ type evalResult struct {
 	SetupErr        string
 	StartedAt       time.Time
 	Duration        time.Duration
+	BaselinePath    string          // 给了 --baseline 时，对比文件的路径
+	Regressions     []string        // 与基线相比退化的确定性指标
+	JudgeDelta      *evalJudgeDelta // 评分变化，只作趋势
 }
 
-// failed 报告是否有轮次失败（含没能开始）。
-func (r evalResult) failed() bool {
+// turnFailed 报告是否真的有轮次没跑成。断言失败不算：话已经说出来了，只是不合预期。
+func (r evalResult) turnFailed() bool {
 	if r.SetupErr != "" {
 		return true
 	}
@@ -76,6 +81,79 @@ func (r evalResult) failed() bool {
 		}
 	}
 	return false
+}
+
+// failed 报告是否有轮次失败、断言失败或基线退化（含没能开始）。
+func (r evalResult) failed() bool {
+	if r.turnFailed() {
+		return true
+	}
+	for _, row := range r.Rows {
+		if len(row.ExpectFails) > 0 {
+			return true
+		}
+	}
+	return len(r.Regressions) > 0
+}
+
+// gateFails 汇总门禁项：每轮的断言失败与基线退化。评分不在其中——它本来就抖。
+func (r evalResult) gateFails() []string {
+	var out []string
+	for _, row := range r.Rows {
+		for _, f := range row.ExpectFails {
+			out = append(out, trf("cli.eval.gate.turn", "第 %d 轮：%s", row.Index, f))
+		}
+	}
+	return append(out, r.Regressions...)
+}
+
+// evalExpectFails 返回这一轮违反了哪些断言；空表示全过。
+func evalExpectFails(row evalRow, exp *evalExpect) []string {
+	if exp == nil {
+		return nil
+	}
+	var fails []string
+	for _, want := range exp.MustInclude {
+		if !strings.Contains(row.Reply, want) {
+			fails = append(fails, trf("cli.eval.expect.missing", "缺少「%s」", want))
+		}
+	}
+	for _, bad := range exp.MustNotInclude {
+		if strings.Contains(row.Reply, bad) {
+			fails = append(fails, trf("cli.eval.expect.forbidden", "出现了「%s」", bad))
+		}
+	}
+	counts := map[string]int{}
+	for _, h := range row.Hits {
+		counts[h.Rule]++
+	}
+	ids := make([]string, 0, len(exp.MaxHits))
+	for id := range exp.MaxHits {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if counts[id] > exp.MaxHits[id] {
+			fails = append(fails, trf("cli.eval.expect.hits", "「%s」命中 %d 次，上限 %d",
+				stylecheck.LabelOf(uiLang, id), counts[id], exp.MaxHits[id]))
+		}
+	}
+	if exp.MaxSentences > 0 && row.Metrics.Sentences > exp.MaxSentences {
+		fails = append(fails, trf("cli.eval.expect.sentences", "句数 %d，上限 %d", row.Metrics.Sentences, exp.MaxSentences))
+	}
+	for _, name := range exp.MustCall {
+		ok := false
+		for _, t := range row.Tools {
+			if t == name {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			fails = append(fails, trf("cli.eval.expect.must_call", "没有调用 %s", name))
+		}
+	}
+	return fails
 }
 
 // sayRows 只取对话轮次。
@@ -260,11 +338,39 @@ func renderEvalReport(r evalResult) string {
 	if r.Duration > 0 {
 		b.WriteString(trf("cli.eval.duration", "- 用时：%s\n", r.Duration.Round(time.Second)))
 	}
-	if r.failed() {
+	if r.turnFailed() {
 		b.WriteString(tr("cli.eval.had_failure", "- **有轮次失败**，其后的步骤未执行\n"))
 	}
+	if fails := r.gateFails(); len(fails) == 0 {
+		if r.BaselinePath == "" {
+			b.WriteString(tr("cli.eval.gate.ok_plain", "- 门禁：通过（确定性断言）\n"))
+		} else {
+			b.WriteString(tr("cli.eval.gate.ok", "- 门禁：通过（确定性断言与基线）\n"))
+		}
+	} else {
+		b.WriteString(trf("cli.eval.gate.fail", "- 门禁：未通过（%d 项）\n", len(fails)))
+		b.WriteString(tr("cli.eval.gate.head", "\n**未通过项**\n\n"))
+		for _, f := range fails {
+			b.WriteString(trf("cli.eval.gate.item", "- %s\n", f))
+		}
+		b.WriteString("\n")
+	}
 
-	b.WriteString(tr("cli.eval.scores_head", "\n## 评分\n\n"))
+	if r.BaselinePath != "" {
+		b.WriteString(tr("cli.eval.baseline.head", "\n## 与基线对比\n\n"))
+		if len(r.Regressions) == 0 {
+			b.WriteString(tr("cli.eval.baseline.same", "- 确定性指标与基线一致。\n"))
+		} else {
+			b.WriteString(trf("cli.eval.baseline.regressed", "- 确定性指标退化 %d 项，已计入上方门禁。\n", len(r.Regressions)))
+		}
+		if d := r.JudgeDelta; d != nil {
+			b.WriteString(trf("cli.eval.baseline.judge",
+				"- 评分变化（趋势，不作门禁）：像不像同一个人 %d→%d，语气 %d→%d，关系 %d→%d\n",
+				d.BaseSame, d.CurSame, d.BaseTone, d.CurTone, d.BaseRelation, d.CurRelation))
+		}
+	}
+
+	b.WriteString(tr("cli.eval.scores_head", "\n## 评分（趋势，不作门禁）\n\n"))
 	if r.Judge.Err != "" {
 		b.WriteString(trf("cli.eval.judge_failed", "> 评判未完成：%s\n", r.Judge.Err))
 		if r.Judge.Raw != "" {
@@ -277,7 +383,7 @@ func renderEvalReport(r evalResult) string {
 		b.WriteString(trf("cli.eval.row.relation", "| 关系与称呼是否连续 | %d/5 | %s |\n", r.Judge.Relation.Score, mdCell(r.Judge.Relation.Reason)))
 	}
 
-	b.WriteString(tr("cli.eval.rows_head", "\n## 逐轮\n\n| 轮 | 用户 | 字数 | 句数 | 演绎 | 命中 |\n|---|---|---|---|---|---|\n"))
+	b.WriteString(tr("cli.eval.rows_head", "\n## 逐轮\n\n| 轮 | 用户 | 字数 | 句数 | 演绎 | 断言 | 命中 |\n|---|---|---|---|---|---|---|\n"))
 	for _, row := range r.Rows {
 		switch row.Kind {
 		case rowSay:
@@ -285,19 +391,19 @@ func renderEvalReport(r evalResult) string {
 				b.WriteString(trf("cli.eval.row.failed", "| %d | %s | | | | **失败**：%s |\n", row.Index, mdCell(row.Say), mdCell(row.Err)))
 				continue
 			}
-			fmt.Fprintf(&b, "| %d | %s | %d | %d | %d%% | %s |\n",
+			fmt.Fprintf(&b, "| %d | %s | %d | %d | %d%% | %s | %s |\n",
 				row.Index, mdCell(row.Say), row.Metrics.Runes, row.Metrics.Sentences,
-				int(row.Metrics.BracketRatio*100+0.5), mdCell(hitsCell(row.Hits)))
+				int(row.Metrics.BracketRatio*100+0.5), expectCell(row), mdCell(hitsCell(row.Hits)))
 		case rowCompact:
 			if row.Err != "" {
-				b.WriteString(trf("cli.eval.row.compact_failed", "| — | （压缩失败：%s） | | | | |\n", mdCell(row.Err)))
+				b.WriteString(trf("cli.eval.row.compact_failed", "| — | （压缩失败：%s） | | | | | |\n", mdCell(row.Err)))
 			} else {
-				b.WriteString(tr("cli.eval.row.compact", "| — | （压缩） | | | | |\n"))
+				b.WriteString(tr("cli.eval.row.compact", "| — | （压缩） | | | | | |\n"))
 			}
 		case rowAutoCompact:
-			b.WriteString(tr("cli.eval.row.auto_compact", "| — | （自动压缩） | | | | |\n"))
+			b.WriteString(tr("cli.eval.row.auto_compact", "| — | （自动压缩） | | | | | |\n"))
 		case rowGap:
-			b.WriteString(trf("cli.eval.row.gap", "| — | （间隔 %s，仅记录，不改系统时间） | | | | |\n", humanHours(uiLang, row.GapHours)))
+			b.WriteString(trf("cli.eval.row.gap", "| — | （间隔 %s，仅记录，不改系统时间） | | | | | |\n", humanHours(uiLang, row.GapHours)))
 		}
 	}
 
@@ -320,6 +426,17 @@ func renderEvalReport(r evalResult) string {
 		}
 	}
 	return b.String()
+}
+
+// expectCell 把这一轮断言渲染成一个符号：没写 expect 留空，通过 ✓，失败 ✗。
+func expectCell(row evalRow) string {
+	if row.ExpectFails == nil {
+		return ""
+	}
+	if len(row.ExpectFails) == 0 {
+		return tr("cli.eval.expect.pass", "✓")
+	}
+	return tr("cli.eval.expect.fail", "✗")
 }
 
 // hitsCell 把一轮的命中渲染成「客套收尾「…」、emoji ×2」。
