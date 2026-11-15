@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	"wen/internal/stylecheck"
 )
@@ -21,6 +22,7 @@ type evalJSON struct {
 	Schema          int            `json:"schema"`
 	Name            string         `json:"name"`
 	Model           string         `json:"model"`
+	Start           string         `json:"start,omitempty"` // 虚拟时钟的起点，用来判断两次是不是同一个场景
 	Compactions     int            `json:"compactions"`
 	AutoCompactions int            `json:"auto_compactions"`
 	Turns           []evalJSONTurn `json:"turns"`
@@ -56,12 +58,21 @@ type evalJudgeDelta struct {
 	BaseRelation, CurRelation int
 }
 
+// startOf 把时钟起点写成 JSON 里的形式，零值不写。
+func startOf(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
 // evalJSONOf 把运行结果转成可落盘、可对比的形状。
 func evalJSONOf(r evalResult) evalJSON {
 	out := evalJSON{
 		Schema:          evalJSONSchema,
 		Name:            r.Name,
 		Model:           r.Model,
+		Start:           startOf(r.ClockFrom),
 		Compactions:     r.Compactions,
 		AutoCompactions: r.AutoCompactions,
 	}

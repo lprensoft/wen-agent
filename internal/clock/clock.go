@@ -45,10 +45,8 @@ func With(ctx context.Context, c Clock) context.Context {
 	return context.WithValue(ctx, ctxKey{}, c)
 }
 
-// From 返回 ctx 里的钟，没有时返回 nil。
-//
-// 给「插件自己也有一个可替换的钟」这类地方用：ctx 里的钟优先，没有就用插件自己的。
-func From(ctx context.Context) Clock {
+// from 返回 ctx 里的钟，没有时返回 nil。
+func from(ctx context.Context) Clock {
 	if ctx == nil {
 		return nil
 	}
@@ -60,10 +58,18 @@ func From(ctx context.Context) Clock {
 //
 // 回退是常态而不是异常：生产路径上没有任何地方装钟，绝大多数调用都会走这一条。
 func Now(ctx context.Context) time.Time {
-	if c := From(ctx); c != nil {
+	return NowOr(ctx, time.Now)
+}
+
+// NowOr 取 ctx 里的钟，没有时返回 fallback 的时间。
+//
+// 给「插件自己也有一个可替换的钟」的地方用（日程、身体感知）：规则只有一条，
+// ctx 里的钟优先，插件自己的兜底。生产里两者都是系统时间，测试替换的是后者。
+func NowOr(ctx context.Context, fallback func() time.Time) time.Time {
+	if c := from(ctx); c != nil {
 		return c.Now()
 	}
-	return time.Now()
+	return fallback()
 }
 
 // Manual 是一条手动推进的时间线，评测用它把「隔了三天」压进几秒钟。

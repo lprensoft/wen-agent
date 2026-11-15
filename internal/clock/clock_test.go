@@ -72,6 +72,22 @@ func TestManualAdvance(t *testing.T) {
 	}
 }
 
+// NowOr 是「ctx 优先、插件自己的钟兜底」这条规则的唯一定义。
+func TestNowOr(t *testing.T) {
+	fixed := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+	fallback := func() time.Time { return fixed }
+	// 没有钟时用兜底
+	if got := NowOr(context.Background(), fallback); !got.Equal(fixed) {
+		t.Fatalf("没有钟时应当用兜底，得到 %v", got)
+	}
+	// 有钟时压过兜底
+	later := fixed.Add(72 * time.Hour)
+	ctx := With(context.Background(), NewManual(later))
+	if got := NowOr(ctx, fallback); !got.Equal(later) {
+		t.Fatalf("有钟时应当用它，得到 %v", got)
+	}
+}
+
 // 同一条时间线会被并发的几路读到，推进时也不能读到撕裂的时间。
 func TestManualConcurrent(t *testing.T) {
 	m := NewManual(time.Unix(0, 0))

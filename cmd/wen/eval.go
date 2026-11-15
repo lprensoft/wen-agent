@@ -126,6 +126,9 @@ func runEval(args []string) error {
 		if err := checkBaselineTurns(sc, base); err != nil {
 			return err
 		}
+		if cur := startOf(sc.startAt()); base.Start != "" && base.Start != cur {
+			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_clock", "注意：基线从 %s 开始，本次从 %s 开始；场景不同，命中与评分未必可比\n", base.Start, cur))
+		}
 		if model := rt.current.ProviderName + "/" + rt.current.ModelID; base.Model != "" && base.Model != model {
 			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_model", "注意：基线用的是 %s，本次是 %s；评分与命中都可能不可比\n", base.Model, model))
 		}

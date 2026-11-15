@@ -301,14 +301,8 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 	return strings.Join(parts, "\n\n"), nil
 }
 
-// nowOf 取本轮的时间：ctx 里有钟就用它（评测据此推进时间线），没有就用插件自己的
-// 钟——生产路径两者都是系统时间，测试替换的也是后者。
-func (p *Plugin) nowOf(ctx context.Context) time.Time {
-	if c := clock.From(ctx); c != nil {
-		return c.Now()
-	}
-	return p.now()
-}
+// nowOf 取本轮的时间：ctx 里的钟优先，没有用插件自己的。
+func (p *Plugin) nowOf(ctx context.Context) time.Time { return clock.NowOr(ctx, p.now) }
 
 // sleepinessLine 算出本轮的困意并渲染成一行；关着、不到一档时返回空串。
 //

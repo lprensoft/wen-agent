@@ -102,15 +102,9 @@ func New(lookup people.Lookup) *Plugin {
 	}
 }
 
-// nowOf 取本轮的时间：ctx 里有钟就用它（评测据此推进时间线），没有就用插件自己的
-// 钟——生产路径两者都是系统时间，测试替换的也是后者。后台循环没有 ctx，仍是插件
-// 自己的钟，因为那几条判断驱动的是真实定时器。
-func (p *Plugin) nowOf(ctx context.Context) time.Time {
-	if c := clock.From(ctx); c != nil {
-		return c.Now()
-	}
-	return p.now()
-}
+// nowOf 取本轮的时间：ctx 里的钟优先，没有用插件自己的。后台循环没有 ctx，仍是
+// 插件自己的钟，因为那几条判断驱动的是真实定时器。
+func (p *Plugin) nowOf(ctx context.Context) time.Time { return clock.NowOr(ctx, p.now) }
 
 func (p *Plugin) Name() string { return "agenda" }
 
