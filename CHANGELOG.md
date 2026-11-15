@@ -9,6 +9,32 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v1.3.0] - 2026-11-15
+
+### 新增
+
+- 设置页新增「角色状态」：只读列出角色的记忆、日程、关系、心情、健康、现场与心里话；其他人格的状态折叠显示，不下发到对话
+- 聊天页顶部新增「此刻」一行：显示角色此刻在哪、心情与下次开口的时间，点击进入角色状态
+- 会话列表新增未读标记：心跳、定时任务或 IM 让角色主动开口后，不必刷新或切换会话才能发现
+- 设置页「通用」新增桌面通知：页面不在前台时弹一条系统通知，点击直接回到那个会话
+
+---
+
+### Added
+
+- New Character state section in settings: a read-only view of the character's memories, schedule, relationship, mood, health, presence and unspoken thoughts; other personas' state is collapsed and never enters the conversation
+- New "Now" strip at the top of the chat: where the character is, their mood and when they will speak next; click it to open Character state
+- Unread markers in the session list: when the character speaks on its own (heartbeat, scheduled tasks or an IM channel), you no longer need to refresh or switch sessions to notice
+- New desktop notifications in General settings: a system notification while the page is not in front, and clicking it opens that chat
+
+### 修复
+
+- 修复 Windows 上插件状态偶发保存失败：杀毒软件短暂占用状态文件时，保存会报 `Access is denied`
+
+### Fixed
+
+- Fixed occasional plugin state save failures on Windows: a brief lock on the state file by antivirus software could make saving fail with `Access is denied`
+
 ## [v1.2.0] - 2026-11-10
 
 ### 新增
