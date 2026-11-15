@@ -112,6 +112,9 @@ func runEval(args []string) error {
 		if base.Name != "" && sc.Name != "" && base.Name != sc.Name {
 			return fmt.Errorf(tr("cli.eval.err.baseline_name", "基线来自另一个脚本（%s），不能与 %s 对比"), base.Name, sc.Name)
 		}
+		if err := checkBaselineTurns(sc, base); err != nil {
+			return err
+		}
 		if model := rt.current.ProviderName + "/" + rt.current.ModelID; base.Model != "" && base.Model != model {
 			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_model", "注意：基线用的是 %s，本次是 %s；评分与命中都可能不可比\n", base.Model, model))
 		}
@@ -393,6 +396,12 @@ func parseScript(raw []byte) (evalScript, error) {
 			return sc, fmt.Errorf(tr("cli.eval.err.seed_tool_empty", "seed[%d]: tool 不能为空"), i+1)
 		}
 		sc.Seed[i].Tool = strings.TrimSpace(sd.Tool)
+		// 种子直接构造可见域，绕过了 Manager.DecideScope 的校验；而标签会被拼进
+		// DomainDir 的磁盘路径，所以这里必须自己拦住 "x/../../outside" 这类值。
+		sc.Seed[i].Scope = strings.TrimSpace(sd.Scope)
+		if !plugin.ValidDomainTag(sc.Seed[i].Scope) {
+			return sc, fmt.Errorf(tr("cli.eval.err.seed_scope", "seed[%d]: 可见域 %q 不合法，只允许小写字母开头的 [a-z0-9_]"), i+1, sd.Scope)
+		}
 	}
 	says := 0
 	for i, st := range sc.Turns {

@@ -21,6 +21,20 @@ func TestDomainDir(t *testing.T) {
 	}
 }
 
+// 标签会被拼进磁盘路径，凡是能改变目录层级的字符都必须判为非法。
+func TestValidDomainTag(t *testing.T) {
+	for _, tag := range []string{"", "inner", "a1_b"} {
+		if !ValidDomainTag(tag) {
+			t.Errorf("%q 应当合法", tag)
+		}
+	}
+	for _, tag := range []string{"x/../../../../outside", `x\..\outside`, "..", "Inner", "a-b", "-a", "域"} {
+		if ValidDomainTag(tag) {
+			t.Errorf("%q 应当非法", tag)
+		}
+	}
+}
+
 func TestReadDomainsPutsWriteFirst(t *testing.T) {
 	// 写入域排在最前：同名数据在多个域都存在时以正在写入的那个为准
 	got := ReadDomains("", Scope{Write: "inner", Read: []string{"outer", "inner"}})

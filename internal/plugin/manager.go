@@ -641,7 +641,7 @@ func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
 		if sc.IsZero() {
 			continue
 		}
-		if sc.Write != "" && !validName.MatchString(sc.Write) {
+		if !ValidDomainTag(sc.Write) {
 			i18n.Logf(m.lang(), "log.plugin.scope_bad_tag", "插件 %q 返回了非法的可见域标签 %q，已忽略", e.name, sc.Write)
 			continue
 		}

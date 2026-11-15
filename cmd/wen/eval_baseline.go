@@ -126,6 +126,29 @@ func loadEvalJSON(path string) (evalJSON, error) {
 	return b, nil
 }
 
+// checkBaselineTurns 在开跑前确认基线与脚本问的是同一串问题。
+//
+// 只按 index 配对不够：脚本名不改而问题改了、中间插了一句，就会拿答 A 的数字去比
+// 答 B 的数字——既可能凭空报出退化，也可能把真的退化放过去。轮次对不上时没有任何
+// 可比的数，明确报错让人重新生成基线，比给一份看似正常的对比有用。
+func checkBaselineTurns(sc evalScript, base evalJSON) error {
+	var says []string
+	for _, st := range sc.Turns {
+		if st.Say != "" {
+			says = append(says, st.Say)
+		}
+	}
+	if len(says) != len(base.Turns) {
+		return fmt.Errorf(tr("cli.eval.err.baseline_turns", "基线有 %d 轮，脚本有 %d 句 say，不能对比；用 --json 重新生成基线"), len(base.Turns), len(says))
+	}
+	for i, say := range says {
+		if b := base.Turns[i].Say; b != say {
+			return fmt.Errorf(tr("cli.eval.err.baseline_say", "基线第 %d 轮问的是「%s」，脚本问的是「%s」，不能对比；用 --json 重新生成基线"), i+1, clipLine(b, 24), clipLine(say, 24))
+		}
+	}
+	return nil
+}
+
 // compareEvalBaseline 找出确定性指标的退化。判据刻意保守：只认「命中变多」「句数
 // 明显变多」「新增断言失败」，字数与演绎占比波动大，不拿来判回归。
 func compareEvalBaseline(cur, base evalJSON) ([]string, *evalJudgeDelta) {

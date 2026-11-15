@@ -229,6 +229,11 @@ func TestParseScriptSeedsAndExpects(t *testing.T) {
 		"负的句数上限":       `{"turns":[{"say":"a","expect":{"max_sentences":-1}}]}`,
 		"空断言词":         `{"turns":[{"say":"a","expect":{"must_include":[" "]}}]}`,
 		"空工具名":         `{"seed":[{"tool":"  "}],"turns":[{"say":"a"}]}`,
+		// 可见域会被拼进磁盘路径，脚本里写坏了不能等到落盘时才发现。
+		"越界可见域":    `{"seed":[{"tool":"update_relationship","scope":"x/../../../../outside"}],"turns":[{"say":"a"}]}`,
+		"带反斜杠的可见域": `{"seed":[{"tool":"update_relationship","scope":"x\\..\\outside"}],"turns":[{"say":"a"}]}`,
+		"大写的可见域":   `{"seed":[{"tool":"update_relationship","scope":"Inner"}],"turns":[{"say":"a"}]}`,
+		"只有点的可见域":  `{"seed":[{"tool":"update_relationship","scope":".."}],"turns":[{"say":"a"}]}`,
 	}
 	for name, raw := range bad {
 		if _, err := parseScript([]byte(raw)); err == nil {
@@ -297,6 +302,31 @@ func TestCompareEvalBaseline(t *testing.T) {
 	cur.Turns = append(cur.Turns, evalJSONTurn{Index: 2, Sentences: 9})
 	if regs, _ := compareEvalBaseline(cur, base); len(regs) != 2 {
 		t.Fatalf("新增轮次不该算退化: %v", regs)
+	}
+}
+
+// 基线只按 index 配对是不够的：脚本名不变改了问题，就会拿两道不同的题比数字。
+func TestCheckBaselineTurns(t *testing.T) {
+	sc := evalScript{Turns: []evalStep{{Say: "睡了吗"}, {Compact: true}, {Say: "今天累吗"}}}
+	base := evalJSON{Turns: []evalJSONTurn{{Index: 1, Say: "睡了吗"}, {Index: 2, Say: "今天累吗"}}}
+	if err := checkBaselineTurns(sc, base); err != nil {
+		t.Fatalf("轮次一致时不该报错: %v", err)
+	}
+
+	changed := base
+	changed.Turns = []evalJSONTurn{{Index: 1, Say: "睡了吗"}, {Index: 2, Say: "明天见"}}
+	if err := checkBaselineTurns(sc, changed); err == nil {
+		t.Error("问题改过时应当报错")
+	}
+
+	short := evalJSON{Turns: []evalJSONTurn{{Index: 1, Say: "睡了吗"}}}
+	if err := checkBaselineTurns(sc, short); err == nil {
+		t.Error("基线少一轮时应当报错")
+	}
+
+	long := evalJSON{Turns: []evalJSONTurn{{Index: 1, Say: "睡了吗"}, {Index: 2, Say: "今天累吗"}, {Index: 3, Say: "晚安"}}}
+	if err := checkBaselineTurns(sc, long); err == nil {
+		t.Error("基线多一轮时应当报错")
 	}
 }
 

@@ -20,6 +20,14 @@ func DomainDir(base, tag string) string {
 	return base + "-" + tag
 }
 
+// ValidDomainTag 报告一个可见域标签是否合法：空标签是共享域，其余与插件名同规。
+// 标签会被拼进持久化目录（见 DomainDir），所以路径分隔符、点与反斜杠都不允许。
+//
+// DecideScope 用它挡住插件裁决出来的标签；脚本预置这类绕开裁决的入口也得自己校验。
+func ValidDomainTag(tag string) bool {
+	return tag == "" || validName.MatchString(tag)
+}
+
 // ReadDomains 返回本轮应当读取的可见域标签，本轮写入域排在最前——同名数据在多个域
 // 里都存在时，以本轮正在写入的那个为准。
 //

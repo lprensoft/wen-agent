@@ -1998,6 +1998,7 @@
   "cli.eval.err.baseline_read": "failed to read the baseline: %w",
   "cli.eval.err.baseline_schema": "the baseline schema is %d; this build only supports %d",
   "cli.eval.err.expect_empty": "turns[%d]: an expectation contains an empty string",
+  "cli.eval.err.seed_scope": "seed[%d]: the visibility domain %q is not valid; only [a-z0-9_] starting with a lowercase letter is allowed",
   "cli.eval.err.expect_hits_neg": "turns[%d]: max_hits[%q] cannot be negative",
   "cli.eval.err.expect_not_say": "turns[%d]: expect can only be used on say",
   "cli.eval.err.expect_rule": "turns[%d]: unknown hit rule %q",
@@ -2025,5 +2026,7 @@
   "cli.eval.seed.done": "Seeded %d state entries\n",
   "cli.eval.baseline_model": "Note: the baseline used %s while this run used %s; scores and hits may not be comparable\\n",
   "cli.eval.err.baseline_name": "the baseline comes from another script (%s); it cannot be compared with %s",
+  "cli.eval.err.baseline_say": "turn %d of the baseline asked \"%s\" while the script asks \"%s\"; they cannot be compared (regenerate the baseline with --json)",
+  "cli.eval.err.baseline_turns": "the baseline has %d turns while the script has %d say steps; they cannot be compared (regenerate the baseline with --json)",
   "cli.eval.gate.ok_plain": "- Gate: passed (deterministic checks)\\n"
 }
