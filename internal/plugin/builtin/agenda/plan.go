@@ -90,38 +90,41 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
 	if st == nil || s.runTurn == nil {
 		return
 	}
-	// 等到真正要跑的时候再算一次「今天」。等待、重试与模型调用都可能跨过日界，
-	// 按触发那一刻的日期排表会排到昨天；这几秒里别人排好的今天也要让出来。
-	today := s.today(p.nowOf(ctx)).Format(dateLayout)
-	if pl, err := st.LoadPlan(); err == nil {
-		if pl.Date == today {
-			return
-		}
-		if pl.Attempts.Date == today && pl.Attempts.Count >= defMaxPlanAttempts {
-			return
-		}
-	}
 	nctx := plugin.WithScope(ctx, plugin.Scope{Write: tag})
-	p.pruneCommitments(nctx, st, sid, today)
-
-	cs, err := st.LoadCommitments()
-	if err != nil {
-		i18n.Logf(p.langOf(), "log.agenda.read_commitments_failed", "agenda: 读取约定失败: %v", err)
-		return
-	}
-	var todayCs []Commitment
-	for _, c := range cs {
-		if c.Date == today {
-			todayCs = append(todayCs, c)
-		}
-	}
-	sortCommitments(todayCs)
-	input := buildPlanPrompt(s.lang, p.nowOf(ctx), todayCs)
 
 	for attempt := 0; ; attempt++ {
+		// 每次尝试前都重算「今天」，并重读日程表：忙重试可能隔上几秒甚至跨过日界，
+		// 前台也可能在这期间把新一天的日程排好了。拿上一次的日期与输入重试，会排
+		// 到昨天，还会覆盖别人刚排的表。
+		now := p.nowOf(ctx)
+		today := s.today(now).Format(dateLayout)
+		if pl, err := st.LoadPlan(); err == nil {
+			if pl.Date == today {
+				return
+			}
+			if pl.Attempts.Date == today && pl.Attempts.Count >= defMaxPlanAttempts {
+				return
+			}
+		}
+		p.pruneCommitments(nctx, st, sid, today)
+
+		cs, err := st.LoadCommitments()
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.agenda.read_commitments_failed", "agenda: 读取约定失败: %v", err)
+			return
+		}
+		var todayCs []Commitment
+		for _, c := range cs {
+			if c.Date == today {
+				todayCs = append(todayCs, c)
+			}
+		}
+		sortCommitments(todayCs)
+		input := buildPlanPrompt(s.lang, now, todayCs)
+
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)
 		tctx = plugin.WithEphemeralInput(tctx)
-		_, err := s.runTurn(tctx, sid, input)
+		_, err = s.runTurn(tctx, sid, input)
 		cancel()
 		switch {
 		case err == nil:

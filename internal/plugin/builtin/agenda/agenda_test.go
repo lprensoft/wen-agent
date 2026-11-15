@@ -696,6 +696,31 @@ func TestPlanYieldsToNewDayPlanAcrossBoundary(t *testing.T) {
 	}
 }
 
+// 忙重试之间同样可能跨日界、也可能被前台排好：重试前要重新核对，不能拿旧输入
+// 再叫一次模型。
+func TestPlanRechecksBeforeBusyRetry(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.clk.set(at(4, 59))
+	h.p.busyRetry = 50 * time.Millisecond
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		// 模拟前台在重试间隙把新的一天排好了
+		h.clk.set(at(5, 1))
+		if _, err := h.tool("set_day_plan").Execute(context.Background(),
+			json.RawMessage(`{"items":[{"title":"原来的安排","start":"09:00","end":"10:00","flex":"可挪"}]}`)); err != nil {
+			t.Error(err)
+		}
+		return "", plugin.ErrSessionBusy
+	}
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 1 {
+		t.Fatalf("重试前发现当天已有安排就该退出，实际调用了 %d 次", got)
+	}
+	if pl := h.plan(t); len(pl.Items) != 1 || pl.Items[0].Title != "原来的安排" {
+		t.Fatalf("原有的表被改写了：%+v", pl.Items)
+	}
+}
+
 // 等待触发那轮收尾的几秒里，今天已经被排好了：不再起轮次，更不覆盖。
 func TestPlanSkippedWhenPlannedWhileWaiting(t *testing.T) {
 	h := newHarness(t, true, nil)
