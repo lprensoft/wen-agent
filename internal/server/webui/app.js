@@ -1426,7 +1426,8 @@ async function loadPinnedState() {
     for (const p of plugins) {
       for (const s of p.sections || []) {
         if (!s.pinned || !s.summary) continue;
-        if (!s.global && s.domain !== domain) continue;
+        // Domain 带 omitempty：单人格时后端根本不下发这个字段，undefined 要按空域处理。
+        if (!s.global && (s.domain || "") !== domain) continue;
         items.push(s);
       }
     }
