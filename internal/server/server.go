@@ -58,6 +58,10 @@ func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *
 	// 接上会话注记的实时出口。后台工作产生的注记本来只能进日志——轮次的事件流
 	// 在它跑完之前就关了。
 	a.SetNoticeSink(s.notices.publish)
+	// 轮次结束也推一条：会话列表据此标未读，页面不可见时弹通知。
+	a.SetTurnSink(func(sid string, ev plugin.TurnEndEvent) {
+		s.notices.publishTurn(sid, ev.EndedAt, ev.Interactive, ev.FinalText)
+	})
 	return s
 }
 

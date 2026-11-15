@@ -20,7 +20,7 @@
 | GET | `/api/plugins/{name}/actions/{key}` | 轮询该操作的进展：状态、说明文字与一张可选 PNG（只经内存下发，不落盘） |
 | GET | `/api/status` | 模型配置与插件状态行；带 `session_id` 查询参数时附上该会话的用量 |
 | GET | `/api/state` | 启用插件的只读状态快照（记忆索引、今日安排、现场等），按功能分组；带 `lang` 查询参数；`pinned=1` 只返回置顶块。内容含记忆、日程、关系、心情、健康、现场与心里话这类私人文本，响应带 `Cache-Control: no-store`，不进入模型上下文 |
-| GET | `/api/events` | 常驻 SSE 流，推送会话注记（后台任务在会话里留下的、模型看不到的一行说明） |
+| GET | `/api/events` | 常驻 SSE 流，推送两类事件：`notice`（后台任务在会话里留下的、模型看不到的一行说明）与 `turn`（一轮结束，只带会话 id、时间与一小段预览，界面据此标未读、在页面不可见时弹桌面通知） |
 | GET | `/api/models` | 提供商与模型配置（`api_key` 只返回掩码） |
 | PUT | `/api/models` | 整档保存；请求里 `api_key` 留空表示不修改 |
 | PUT | `/api/models/current` | `{"provider","model"}` 切换当前模型，立即热生效 |

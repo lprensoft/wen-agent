@@ -310,6 +310,11 @@ func (s *Store) SetUsage(id string, u *Usage) error {
 	return s.updateMeta(id, func(m *Meta) { m.LastUsage = u })
 }
 
+// SetLastMessage 更新 meta 行记录的最近一条消息时间（含机器轮次与注记）。
+func (s *Store) SetLastMessage(id string, t time.Time) error {
+	return s.updateMeta(id, func(m *Meta) { m.LastMessageAt = &t })
+}
+
 // SetLastActive 更新 meta 行记录的最近真人交互时间。
 func (s *Store) SetLastActive(id string, t time.Time) error {
 	return s.updateMeta(id, func(m *Meta) { m.LastActiveAt = &t })

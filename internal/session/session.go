@@ -27,7 +27,11 @@ type Meta struct {
 	// 机器自发的轮次（定时触发等）不更新它，「最近活跃会话」据此判定。
 	// 旧会话没有该字段，使用方应回落到 CreatedAt。
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
-	LastUsage    *Usage     `json:"last_usage,omitempty"`
+	// LastMessageAt 是最近一条消息落盘的时间，含机器自发的轮次与后台注记。
+	// 与 LastActiveAt 不同：那个只记真人交互，这个用来判断界面上有没有新内容。
+	// 旧会话没有该字段，界面按「没有未读」处理。
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
+	LastUsage     *Usage     `json:"last_usage,omitempty"`
 	// Tag 是生成该标题的那一轮消息所属的可见域标签（空串 = 共享）。
 	// 标题取自首条用户消息，因此它和消息一样需要归属，否则会话检索会把不可读域的
 	// 内容通过标题漏出去。

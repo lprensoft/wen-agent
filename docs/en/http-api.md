@@ -20,7 +20,7 @@
 | GET | `/api/plugins/{name}/actions/{key}` | Polls that action's progress: its state, its explanatory text and an optional PNG (delivered from memory, never written to disk) |
 | GET | `/api/status` | The model configuration and the plugins' status lines; with a `session_id` query parameter, that session's usage as well |
 | GET | `/api/state` | Read-only state snapshot of enabled plugins (memory index, today's plan, presence, ...), grouped by category; accepts a `lang` query parameter; `pinned=1` returns only pinned sections. The content includes memories, plans, relationships, mood, health, presence and unspoken thoughts, so the response carries `Cache-Control: no-store` and never enters the model context |
-| GET | `/api/events` | A long-lived SSE stream carrying session notices (the lines background work leaves in a session that the model never sees) |
+| GET | `/api/events` | A long-lived SSE stream carrying two kinds of event: `notice` (the lines background work leaves in a session that the model never sees) and `turn` (a turn just finished; it carries only the session id, the time and a short preview, which the UI uses to mark unread sessions and to raise a desktop notification while the page is hidden) |
 | GET | `/api/models` | Provider and model configuration (`api_key` is returned masked) |
 | PUT | `/api/models` | Saves the whole document; an empty `api_key` in the request means "leave it alone" |
 | PUT | `/api/models/current` | `{"provider","model"}` switches the current model, effective immediately |

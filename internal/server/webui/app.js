@@ -123,6 +123,54 @@ langSeg.addEventListener("click", (e) => {
 });
 markLangSeg();
 
+// ---------- 通用设置：桌面通知 ----------
+// 通知权限只能由用户手势触发，所以「开」这一下同时申请授权；被拒绝就退回关闭，
+// 并说明去浏览器站点设置里改。开关只存本机：换设备各开各的。
+
+const notifySeg = $("#notify-seg");
+const notifyDesc = $("#notify-desc");
+
+function notifySetting() {
+  return localStorage.getItem("wen-notify") === "on" ? "on" : "off";
+}
+
+function markNotifySeg() {
+  // 页面与脚本可能不是同一版本（浏览器缓存了旧 HTML）：缺元素就整块跳过，
+  // 不能让一个新控件把整个脚本带崩。
+  if (!notifySeg || !notifyDesc) return;
+  const on = notifySetting() === "on";
+  for (const btn of notifySeg.querySelectorAll(".seg-btn")) {
+    btn.classList.toggle("active", (btn.dataset.notify === "on") === on);
+  }
+  if (!("Notification" in window)) {
+    notifyDesc.textContent = t("settings.notify.unsupported");
+  } else if (on && Notification.permission !== "granted") {
+    notifyDesc.textContent = t("settings.notify.blocked");
+  } else {
+    notifyDesc.textContent = t("settings.notify.desc");
+  }
+}
+
+if (notifySeg) notifySeg.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn) return;
+  if (btn.dataset.notify === "on") {
+    if (!("Notification" in window)) {
+      markNotifySeg();
+      return;
+    }
+    if (Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    localStorage.setItem("wen-notify", Notification.permission === "granted" ? "on" : "off");
+  } else {
+    localStorage.setItem("wen-notify", "off");
+  }
+  markNotifySeg();
+});
+
+markNotifySeg();
+
 // ---------- 输入框工具条上的弹出菜单 ----------
 // 筛选与模型切换共用一套开合逻辑：同时最多开一个，点击别处或按 Esc 关闭。
 
@@ -401,21 +449,138 @@ function renderMarkdown(el, text) {
   }
 }
 
+// ---------- 未读 ----------
+// 已读位置存在浏览器而不是服务端：同一份会话可能同时开在几台设备上，服务端只存一个
+// 「已读」会被另一台覆盖。代价是换设备或清缓存后旧会话会重新算一次未读。
+const READ_KEY = "wen-read-at";
+
+function readAtMap() {
+  try {
+    return JSON.parse(localStorage.getItem(READ_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function readAtOf(id) {
+  const m = readAtMap();
+  return id in m ? m[id] : null;
+}
+
+// parseTS 解析服务端时间。Go 的 RFC3339Nano 小数位不定长，有的浏览器只认三位，
+// 先截到毫秒再交给 Date.parse；解析不出来按 0 处理（当作没有时间戳）。
+function parseTS(s) {
+  if (!s) return 0;
+  const ts = Date.parse(String(s).replace(/(\.\d{3})\d+/, "$1"));
+  return ts > 0 ? ts : 0;
+}
+
+// setReadAt 直接写已读位置；0 也是有效值，用来给还没有消息的旧会话立基线。
+function setReadAt(id, ts) {
+  const m = readAtMap();
+  m[id] = ts;
+  try {
+    localStorage.setItem(READ_KEY, JSON.stringify(m));
+  } catch {
+    // 存不下就算了：下次打开这个会话会再标一次
+  }
+}
+
+// markRead 把已读位置推到最后一条消息的时间戳上。只用服务端给的时间，不掺本地
+// 时钟：浏览器快几分钟时，用 Date.now() 会把接下来那几分钟的消息一起吞掉。
+function markRead(id, ts) {
+  if (!id || !(ts > 0)) return;
+  setReadAt(id, ts);
+}
+
+// forgetRead 在删除会话时清掉位置，别让一个 id 永远留在 localStorage 里。
+function forgetRead(id) {
+  const m = readAtMap();
+  if (!(id in m)) return;
+  delete m[id];
+  try {
+    localStorage.setItem(READ_KEY, JSON.stringify(m));
+  } catch {
+    // 同上
+  }
+}
+
+// 首屏加载时已经存在的会话都算「之前看过」；此后才出现的会话（心跳新建、IM 新开）
+// 不能靠基线把它们的头一条消息冲掉，否则永远差一个未读点。
+let readBaselineReady = false;
+
+// hasUnread：机器自发的一轮也算新内容。last_message_at 在轮次收尾与写注记时更新，
+// 旧会话没有这个字段，基线记 0。
+function hasUnread(meta) {
+  const at = readAtOf(meta.id);
+  const ts = parseTS(meta.last_message_at);
+  if (at === null) {
+    if (readBaselineReady) {
+      // 首屏之后才出现的会话（IM 新开、心跳新建）：基线记 0，而且这一次就按
+      // 未读返回——否则要等下一次刷新，通常是 30 秒后的轮询。
+      setReadAt(meta.id, 0);
+      return ts > 0;
+    }
+    // 首屏已有的会话按当前进度立基线，否则一升级满列表都是未读点。
+    setReadAt(meta.id, ts);
+    return false;
+  }
+  return ts > at;
+}
+
+// readMarkOf 取这次拉回来的快照应该把已读推到哪。用 meta 上的 last_message_at——
+// 它与未读判定是同一个基准；服务端在轮次收尾时才写它，比最后一条消息的 TS 晚几毫秒，
+// 只拿消息 TS 会让刚看完的会话永远差一点点、反复亮未读。快照里若已含更新的消息，
+// 取两者较大值。
+function readMarkOf(data) {
+  const msgs = (data && data.messages) || [];
+  const fromMeta = data && data.meta ? parseTS(data.meta.last_message_at) : 0;
+  const fromLast = msgs.length ? parseTS(msgs[msgs.length - 1].ts) : 0;
+  return Math.max(fromMeta, fromLast);
+}
+
+// chatVisible 判断聊天区是不是真的在用户眼前：标签页可见，而且没有被设置页盖住。
+// 已读只在内容真的显示之后推进，否则「开着设置页放一会儿」会悄悄读掉消息。
+function chatVisible() {
+  return !document.hidden && settingsView.classList.contains("hidden");
+}
+
+// 会话标题缓存，供桌面通知用；列表刷新时顺手更新。
+const sessionTitles = new Map();
+
 // ---------- Session 列表 ----------
 
+let sessionsSeq = 0; // 列表刷新的序号，防止慢的旧响应盖掉新状态
+
 async function loadSessions() {
+  const seq = ++sessionsSeq;
   const res = await fetch("/api/sessions");
   const metas = await res.json();
+  // 事件流、定时器与用户操作都可能同时拉起刷新：只让最后一次落地。
+  if (seq !== sessionsSeq) return;
   sessionListEl.innerHTML = "";
   for (const m of metas) {
+    const label = m.title || t("session.untitled");
+    sessionTitles.set(m.id, label);
+    // 当前会话且聊天区在眼前时不需要未读点；已读由真正把内容画出来的地方推进。
+    const viewing = m.id === currentSession && chatVisible();
+    const unread = !viewing && hasUnread(m);
     const li = document.createElement("li");
-    li.className = "session-item" + (m.id === currentSession ? " active" : "");
+    li.className = "session-item" + (m.id === currentSession ? " active" : "") + (unread ? " unread" : "");
     li.dataset.id = m.id;
 
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = m.title || t("session.untitled");
+    title.textContent = label;
     li.appendChild(title);
+
+    if (unread) {
+      const dot = document.createElement("span");
+      dot.className = "unread-dot";
+      dot.title = t("session.unread");
+      dot.setAttribute("aria-label", t("session.unread"));
+      li.appendChild(dot);
+    }
 
     const del = document.createElement("button");
     del.className = "btn-del";
@@ -431,6 +596,8 @@ async function loadSessions() {
         clearMessages();
         loadPinnedState();
       }
+      forgetRead(m.id);
+      sessionTitles.delete(m.id);
       loadSessions();
     });
     li.appendChild(del);
@@ -438,6 +605,7 @@ async function loadSessions() {
     li.addEventListener("click", () => selectSession(m.id));
     sessionListEl.appendChild(li);
   }
+  readBaselineReady = true;
 }
 
 async function newSession() {
@@ -471,6 +639,9 @@ async function selectSession(id, internal = false) {
   currentDomain = domainOf(data.messages);
   renderHistory(data.messages);
   renderedFp = historyFp(data.messages);
+  if (chatVisible() && data.messages.length) {
+    markRead(id, readMarkOf(data));
+  }
   loadSessions();
   loadPinnedState();
 }
@@ -503,13 +674,20 @@ function historyFp(msgs) {
 
 async function syncCurrentSession() {
   if (!currentSession || busy) return;
+  const sid = currentSession;
   try {
-    const res = await fetch(`/api/sessions/${currentSession}`);
-    if (!res.ok) return;
+    const res = await fetch(`/api/sessions/${sid}`);
+    // 期间用户切了会话：这份内容已经不属于当前的聊天区，丢掉。
+    if (!res.ok || currentSession !== sid) return;
     const data = await res.json();
     // 域先更新：refreshFp 也会把指纹对齐，轮询随即因指纹相同提前返回，
     // 否则聊天里切换人格后 currentDomain 会一直停在上一个人格。
     currentDomain = domainOf(data.messages);
+    // 内容已经在屏幕上（或正要画上去）：已读推到最后一条。放在指纹判断之前，
+    // 指纹相同也说明这些内容早已渲染过，同样算看过。
+    if (chatVisible() && data.messages.length) {
+      markRead(sid, readMarkOf(data));
+    }
     const fp = historyFp(data.messages);
     if (fp === renderedFp) return;
     renderHistory(data.messages);
@@ -522,11 +700,16 @@ async function syncCurrentSession() {
 // 静默校准指纹（内容已经在流式过程中渲染到界面上，不需要重画）
 async function refreshFp() {
   if (!currentSession) return;
+  const sid = currentSession;
   try {
-    const res = await fetch(`/api/sessions/${currentSession}`);
-    if (!res.ok) return;
+    const res = await fetch(`/api/sessions/${sid}`);
+    if (!res.ok || currentSession !== sid) return;
     const data = await res.json();
     currentDomain = domainOf(data.messages);
+    // 这一轮的内容是流式画上去的，不用重画；但它确实已经看过了。
+    if (chatVisible() && data.messages.length) {
+      markRead(sid, readMarkOf(data));
+    }
     renderedFp = historyFp(data.messages);
     loadPinnedState();
   } catch { /* 忽略 */ }
@@ -540,7 +723,11 @@ setInterval(() => {
   if (!document.hidden) loadPinnedState();
 }, 60000);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) loadPinnedState();
+  if (document.hidden) return;
+  loadPinnedState();
+  // 回到页面：先把这一轮错过的内容画出来（它会顺手推进已读），再刷列表。
+  if (currentSession && !busy) syncCurrentSession();
+  loadSessions();
 });
 
 // ---------- 消息渲染 ----------
@@ -1724,6 +1911,12 @@ function closeSettings() {
   settingsView.classList.add("hidden");
   // 设置页里也能改当前模型，回到聊天界面时把工具条上的显示对齐
   loadModelSwitcher();
+  // 被盖住期间到达的内容还没画出来，也就不该算已读：回聊天时先同步再刷列表。
+  if (currentSession && !busy) {
+    syncCurrentSession().finally(() => loadSessions());
+  } else {
+    loadSessions();
+  }
 }
 
 // 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
@@ -3188,6 +3381,7 @@ $("#btn-new").addEventListener("click", () => {
 // 装完调一次的设置，为它清空正在写的一段话不值当。
 function retranslate() {
   markLangSeg();
+  markNotifySeg();
   setSending(busy);
   applyChatWidth(chatWidthSetting);
   renderModelLabel();
@@ -3229,11 +3423,50 @@ setInterval(() => {
 }, 30000);
 inputEl.focus();
 
-// ---- 会话注记的实时通道 ----
+// ---- 后台事件的实时通道 ----
 //
-// /api/chat 的事件流一轮就关，而后台工作（记忆提炼这类）在那之后才跑完。这里订阅
-// 一条常驻流，任何会话上产生的注记都即时推过来，按当前会话筛选后追加到消息区。
-// 注记同时已经落盘，所以断线期间漏掉的内容刷新页面就能补齐——不需要补发机制。
+// /api/chat 的事件流一轮就关，而后台工作（记忆提炼、心跳主动开口这类）在那之后才
+// 跑完。这里订阅一条常驻流，服务端推两种事件：
+//   notice —— 已落盘的会话注记，按当前会话筛选后追加到消息区；
+//   turn   —— 一轮结束，只带会话 id、时间与一小段预览，用来标未读、弹通知。
+// 内容都已经落盘，断线期间漏掉的东西刷新页面就能补齐——不需要补发机制。
+
+// handleTurn 处理「一轮结束」：当前会话在前台就把内容取回来、顺手标已读，
+// 人不在这个页面上时再弹一条桌面通知。
+function handleTurn(n) {
+  const viewing = n.session_id === currentSession && !document.hidden;
+  // 后台回复不在流式里，必须真正拉回来重画。只对齐指纹会让五秒轮询以为
+  // 内容已经上屏，于是这条消息一直不显示。
+  if (viewing && !busy) syncCurrentSession();
+  loadSessions();
+  // 只有聊天区不在眼前时才提醒：切到别的标签、最小化、窗口被挡住，或设置页
+  // 正盖着它。人就看着聊天时，消息本身已经在屏幕上，再弹通知只会吵。
+  if (!chatVisible() || !document.hasFocus()) notifyTurn(n);
+}
+
+// notifyTurn 弹一条桌面通知。开关与授权都在浏览器本地：通知是这台设备的事，
+// 不该跟着服务端配置走。
+function notifyTurn(n) {
+  if (localStorage.getItem("wen-notify") !== "on") return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  let note;
+  try {
+    note = new Notification(sessionTitles.get(n.session_id) || t("session.untitled"), {
+      body: n.preview || t("notify.body"),
+      // 同一会话的通知互相替换，不在系统通知里堆一列
+      tag: n.session_id,
+    });
+  } catch {
+    // 某些浏览器在没有安全上下文时会抛错：通知失败不该影响会话列表
+    return;
+  }
+  note.onclick = () => {
+    window.focus();
+    selectSession(n.session_id);
+    note.close();
+  };
+}
+
 function subscribeNotices() {
   const es = new EventSource("/api/events");
   es.addEventListener("notice", (e) => {
@@ -3243,9 +3476,24 @@ function subscribeNotices() {
     } catch {
       return;
     }
-    if (!n.content || n.session_id !== currentSession) return;
+    if (!n.content) return;
+    // 注记同样更新了那个会话的 last_message_at：列表刷一下，未读点才跟得上，
+    // 不管这条注记是不是当前会话的。
+    loadSessions();
+    if (n.session_id !== currentSession) return;
     addSysBlock(n.content, "notice");
+    if (chatVisible()) markRead(n.session_id, parseTS(n.ts));
   });
+  es.addEventListener("turn", (e) => {
+    let n;
+    try {
+      n = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (n.session_id) handleTurn(n);
+  });
+
   // EventSource 自带重连；这里只在彻底关闭时兜一次底
   es.addEventListener("error", () => {
     if (es.readyState === EventSource.CLOSED) setTimeout(subscribeNotices, 5000);
