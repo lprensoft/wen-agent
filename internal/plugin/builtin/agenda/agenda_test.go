@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/plugin"
 )
@@ -625,6 +626,28 @@ func (h *harness) waitPlanning() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 触发那一轮的时间线要贯穿整条规划链：排的是哪一天、注入的「现在」、规划轮次
+// 里读到的时钟，都该是同一刻，而不是插件的系统钟。
+func TestPlanFollowsTurnClock(t *testing.T) {
+	h := newHarness(t, true, nil)
+	sep22 := time.Date(2026, 8, 22, 8, 0, 0, 0, time.Local)
+	var seen time.Time
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		seen = clock.Now(ctx)
+		return "", nil
+	}
+	ctx := clock.With(context.Background(), clock.Func(func() time.Time { return sep22 }))
+	h.p.OnTurnEnd(ctx, plugin.TurnEndEvent{SessionID: "s1", EndedAt: sep22})
+	in := recvInput(t, h)
+	if !strings.Contains(in, "08-22") {
+		t.Fatalf("规划应排这一轮时间线上的那一天：\n%s", in)
+	}
+	h.waitPlanning()
+	if !seen.Equal(sep22) {
+		t.Fatalf("规划轮次的 ctx 没带上时间线：%v", seen)
 	}
 }
 

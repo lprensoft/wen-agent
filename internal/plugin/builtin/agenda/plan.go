@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
@@ -28,7 +29,13 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	if st == nil {
 		return
 	}
-	today := s.today(p.now()).Format(dateLayout)
+	// 用这一轮结束的时刻算「今天」：评测的时间线可能不在系统时间上，按 p.now()
+	// 判断会去排另一天的表，而那一轮写下的消息也落在另一条时间线上。
+	now := ev.EndedAt
+	if now.IsZero() {
+		now = p.nowOf(ctx)
+	}
+	today := s.today(now).Format(dateLayout)
 	pl, err := st.LoadPlan()
 	if err != nil {
 		i18n.Logf(p.langOf(), "log.agenda.read_plan_failed", "agenda: 读取日程表失败: %v", err)
@@ -48,7 +55,9 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	}
 	p.planning[tag] = true
 	p.wg.Add(1)
-	pctx := p.ctx
+	// 整条规划链固定在触发那一刻：日期、注入的「现在」、以及规划轮次写下的消息
+	// 都按同一条时间线走。取系统时间的后台 ctx 会让它们各自漂回机器时间。
+	pctx := clock.With(p.ctx, clock.Func(func() time.Time { return now }))
 	p.mu.Unlock()
 	go p.runPlan(pctx, tag, ev.SessionID, today)
 }
@@ -92,7 +101,7 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 		}
 	}
 	sortCommitments(todayCs)
-	input := buildPlanPrompt(s.lang, p.now(), todayCs)
+	input := buildPlanPrompt(s.lang, p.nowOf(ctx), todayCs)
 
 	for attempt := 0; ; attempt++ {
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)

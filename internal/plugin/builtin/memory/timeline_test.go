@@ -280,3 +280,17 @@ func TestRenderEntryWithoutFacts(t *testing.T) {
 		t.Fatalf("坏日期渲染不符: %q", got)
 	}
 }
+
+// 日期按时刻自己的时区算。同一个瞬间在东八区已经是 3 月 2 日，在 UTC-5 还是
+// 3 月 1 日；换算到本机时区会让两者变成同一天，日界就跟「当前时间」对不上了。
+func TestDayOfUsesTimesOwnZone(t *testing.T) {
+	instant := time.Date(2026, 3, 1, 16, 30, 0, 0, time.UTC)
+	east := instant.In(time.FixedZone("", 8*3600))  // 2026-03-02 00:30
+	west := instant.In(time.FixedZone("", -5*3600)) // 2026-03-01 11:30
+	if got := dayOf(east); got != "2026-03-02" {
+		t.Errorf("东八区应归 3 月 2 日，得到 %q", got)
+	}
+	if got := dayOf(west); got != "2026-03-01" {
+		t.Errorf("西五区应归 3 月 1 日，得到 %q", got)
+	}
+}

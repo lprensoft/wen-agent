@@ -84,7 +84,12 @@ type timelineFile struct {
 	Entries []timelineEntry `json:"entries,omitempty"`
 }
 
-func dayOf(t time.Time) string { return t.Local().Format("2006-01-02") }
+// dayOf 取的是这个时刻**自己所处时区**的日期，不换算到本机时区。
+//
+// 换成本机时区在评测里会错：脚本的时间线可能带 +08:00 偏移，而机器跑在 UTC，
+// 凌晨 00:30 就被归到前一天，日记的日界与「当前时间」对不上，同一份脚本换台
+// 机器还会换一种归档。生产里消息时间戳本来就是本机时区的，两种写法结果相同。
+func dayOf(t time.Time) string { return t.Format("2006-01-02") }
 
 // ---------- 当日缓冲 ----------
 
