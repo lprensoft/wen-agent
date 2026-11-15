@@ -148,7 +148,7 @@ func TestEnglishUserFacingHasNoChinese(t *testing.T) {
 
 	// 角色状态页同样走 internal/i18n。只扫静态字段：Value / Detail / Meta
 	// 是运行时事实（记忆正文、地点、时间），本就可能是中文，不能拿来判漏译。
-	for _, ps := range m.State(i18n.LangEN).Plugins {
+	for _, ps := range m.State(i18n.LangEN, false).Plugins {
 		for _, sec := range ps.Sections {
 			if han := hanIn(sec.Title); han != "" {
 				t.Errorf("插件 %s 的状态块标题里有中文 %q: %s", ps.Name, han, sec.Title)

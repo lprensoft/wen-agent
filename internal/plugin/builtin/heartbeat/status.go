@@ -11,8 +11,12 @@ import (
 // 只报「大致」——心跳会被真人对话重置、被动态判定改写，报到秒既没有意义也会误导。
 func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.Lock()
-	cur, dynamic, lastBeat := p.cur, p.dynamic, p.lastBeat
+	cur, dynamic := p.cur, p.dynamic
 	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
+	var next time.Time
+	if cur > 0 {
+		next, _, _, _ = p.nextBeatAt(time.Now())
+	}
 	p.mu.Unlock()
 
 	if cur <= 0 { // 尚未 Init（理论上不会被问到），没有可报的节奏
@@ -36,7 +40,7 @@ func (p *Plugin) StatusLines(lang string) []string {
 			humanDur(lang, until), humanDur(lang, cur), mode)}
 	}
 	return []string{i18n.Tf(lang, "plugin.heartbeat.status.line", "💓 心跳：每 %s（%s），%s",
-		humanDur(lang, cur), mode, nextBeatDesc(lang, lastBeat.Add(cur)))}
+		humanDur(lang, cur), mode, nextBeatDesc(lang, next))}
 }
 
 // nextBeatDesc 描述下次心跳的时机。已到期说明轮次正忙或刚被叫醒，此时报「即将」

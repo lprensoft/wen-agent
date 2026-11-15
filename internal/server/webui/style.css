@@ -250,6 +250,33 @@ body {
 /* ---------- 聊天区 ---------- */
 /* 消息区与输入框共用一个栏宽：定宽居中而非百分比内边距——按百分比算，
    超宽屏上行长仍然失控。两者取同一个变量，保证左右永远对齐。 */
+/* 聊天页顶部一行「此刻」：pinned 状态的摘要，点击进入角色状态。 */
+.chat-state {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 8px var(--chat-gutter);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-state:hover { color: var(--text); background: var(--bg); }
+.chat-state.hidden { display: none; }
+.chat-state-label { flex-shrink: 0; color: var(--text-dim); }
+.chat-state-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat {
   --chat-gutter: max(16px, calc((100% - var(--chat-width)) / 2));
   --composer-h: 96px; /* 由 JS 按输入框实测高度覆盖，这里只是首屏前的初值 */

@@ -29,6 +29,8 @@ Lets the character speak first. On an interval it wakes the model and runs a ful
 | `min_minutes` / `max_minutes` | 5 / 120 | The bounds on dynamic adjustment; a value outside the range is clamped and the model is told so |
 | `sleep_compact_percent` | 30 | The threshold for tidying up the context while the character sleeps: only once context use reaches this share of the auto-compaction point; 0 = never. Each tidy-up is a real model call |
 
+- **Character state page and chat strip**: read-only interval, context and next wake-up; the strip at the top of the chat shows "next in about ..." or "asleep".
+
 ## Scheduled tasks (scheduler plugin)
 
 The model can create scheduled tasks during a conversation (one-off / recurring / daily). When the time comes, a turn runs in the background and its result is written into the most recently active session — the same rule the heartbeat uses. On by default.

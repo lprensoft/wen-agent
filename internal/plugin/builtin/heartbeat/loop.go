@@ -53,57 +53,60 @@ func (p *Plugin) loop(ctx context.Context) {
 	}
 }
 
-// nextBeatLocked 推算下一次心跳时刻：常规是「上次心跳 + 当前间隔」，暂停把它
-// 压后到暂停结束——暂停不改间隔本身，到点后按原节奏继续。调用方需持有 p.mu。
-//
-// 公告板上有待说的开口理由时，把下一拍提前到「上次心跳 + 最快间隔」：理由驱动的
-// 开口不该等满一个常规周期，「刚下起雨」等一小时再说就凉了。只在动态节奏下提前
-// （固定节奏的含义就是雷打不动）；暂停仍然压过一切——睡着的人不为一场雨叫醒，
-// 理由等不到那时自会过期。
-//
-// 忙也压后：忙碌公告板上别的写入方（日程的活动）宣布了「重忙」或「不回」时，下一拍
-// 推到忙完之后再留 busyGrace——人在开会时不会主动找你聊天，有开口理由也一样等着。
-// 「轻忙」不算：能随时回的人也能随手发一句。同样只在动态节奏下生效。
+// nextBeatLocked 推算下一次心跳时刻，并顺手更新忙碌观察。调用方需持有 p.mu。
+// 实际的推算在 nextBeatAt；状态查询走那一条只读路径，不能在这里留下副作用。
 func (p *Plugin) nextBeatLocked() time.Time {
-	now := time.Now()
-	next := p.lastBeat.Add(p.cur)
+	next, seen, until, ended := p.nextBeatAt(time.Now())
+	p.busySeen, p.busyUntil, p.busyEndedAt = seen, until, ended
+	return next
+}
+
+// nextBeatAt 按调度器的真实规则计算 now 时刻的下一拍：常规是「上次心跳 + 当前间隔」，
+// 公告板有待说理由时提前到最快间隔，重忙时压到忙完之后再加缓冲，暂停压过一切。
+// 它只读插件与公告板，不写任何字段——状态行与状态页可以用它得到与调度器一致的时间，
+// 而不会因为一次「查看」改变忙碌观察。
+func (p *Plugin) nextBeatAt(now time.Time) (next time.Time, busySeen bool, busyUntil, busyEndedAt time.Time) {
+	busySeen, busyUntil, busyEndedAt = p.busySeen, p.busyUntil, p.busyEndedAt
+	next = p.lastBeat.Add(p.cur)
 	if p.dynamic && cue.Pending(now) {
 		if c := p.lastBeat.Add(p.minIv); c.Before(next) {
 			next = c
 		}
 	}
 	if p.dynamic {
-		if t := p.busyHoldoffLocked(now); t.After(next) {
-			next = t
+		var hold time.Time
+		hold, busySeen, busyUntil, busyEndedAt = p.busyHoldoffAt(now)
+		if hold.After(next) {
+			next = hold
 		}
 	}
 	if p.pausedUntil.After(next) {
-		return p.pausedUntil
+		return p.pausedUntil, busySeen, busyUntil, busyEndedAt
 	}
-	return next
+	return next, busySeen, busyUntil, busyEndedAt
 }
 
-// busyHoldoffLocked 返回因为忙而不该早于的时刻（不受限时为零值），并顺手记下忙何时结束。
-// 调用方需持有 p.mu。
+// busyHoldoffAt 返回因为忙而不该早于的时刻（不受限时为零值），同时算出更新后的忙碌
+// 观察值但不写回。调用方需持有 p.mu。
 //
 // 缓冲不能只靠公告板上的状态算：日程到点或提前做完时会 Clear，叫醒循环来重算的那一刻
 // 状态已经没了，按「Until + 缓冲」就退回了常规节奏——常规时刻早已过去的话当场就跳，
 // 正好撞上日程收尾的那一轮。所以看到忙的时候记住它，看到它没了的时候记下「结束于何时」
 // （提前结束取此刻，自然到点取 Until），缓冲从那里起算。只在内存里：重启丢掉的只是
 // 一次缓冲，启动本来就有宽限期。
-func (p *Plugin) busyHoldoffLocked(now time.Time) time.Time {
+func (p *Plugin) busyHoldoffAt(now time.Time) (hold time.Time, busySeen bool, busyUntil, busyEndedAt time.Time) {
+	busySeen, busyUntil, busyEndedAt = p.busySeen, p.busyUntil, p.busyEndedAt
 	if st, ok := availability.CurrentExcept(now, availSource); ok && st.Level >= availability.Heavy {
-		p.busySeen, p.busyUntil = true, st.Until
-		return st.Until.Add(busyGrace)
+		return st.Until.Add(busyGrace), true, st.Until, busyEndedAt
 	}
-	if p.busySeen {
-		p.busySeen = false
-		p.busyEndedAt = minTime(now, p.busyUntil)
+	if busySeen {
+		busySeen = false
+		busyEndedAt = minTime(now, busyUntil)
 	}
-	if p.busyEndedAt.IsZero() {
-		return time.Time{}
+	if busyEndedAt.IsZero() {
+		return time.Time{}, busySeen, busyUntil, busyEndedAt
 	}
-	return p.busyEndedAt.Add(busyGrace)
+	return busyEndedAt.Add(busyGrace), busySeen, busyUntil, busyEndedAt
 }
 
 func minTime(a, b time.Time) time.Time {

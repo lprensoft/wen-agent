@@ -16,6 +16,9 @@ const stateMaxRows = 10
 // 表按可见域分开，一块对应一条故事线的一天；状态页是主人看的，所以枚举全部域，
 // 每块挂 Domain 标签，由界面折叠其它人格。约定同理，单独一块。
 func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
+	if q.PinnedOnly {
+		return nil
+	}
 	s := p.snapshot()
 	if s.base == "" {
 		return nil

@@ -108,6 +108,8 @@ Half of a stable personality is a stable attitude toward one particular person. 
 - **Only "between us" is recorded**: who you are, what you like, what you have been through are still facts for roleplay's "about me" and for memory, and "lately" keeps only one current line, used for judging tone. Off-limits subjects hold only the few that have hardened into things never to be touched again — there are only five slots, and an unwillingness stated once belongs in long-term memory's `边界` category. This records what is not touched now; that records why the line was drawn then. Stored once per visibility scope with no merging: the relationship belongs to the persona, so the outer persona being an old friend and the inner one being a lover both hold at once.
 - **Reset in one click**: the gear on the settings page has "reset the relationship state", covering the separate copies each persona keeps. It cannot be undone.
 
+- **Character state page**: read-only view of stage, names, latest change, bonds, how they are doing, and dates.
+
 ## Unspoken thoughts (unspoken plugin)
 
 People have things they never said out loud: they say it is fine, they remember it anyway, and they can hold onto it for three days. The model has nowhere to put that, so by the next turn it really is fine. This plugin gives the character a bounded list — what it actually thinks of you, what it is holding back, what it is waiting for, what it has decided not to bring up for now — one line each with "N days ago", injected every turn as a `[心里话]` block. The criteria require that these **never be read out and never be written into `【】`**, while shaping the attitude, the tone and the subtext. On by default, hard-depends on `roleplay`.
@@ -121,6 +123,8 @@ People have things they never said out loud: they say it is fine, they remember 
 |---|---|---|
 | `max_entries` | 8 | The cap on entries (1-20); when full, the oldest is let go automatically |
 | `max_inject_bytes` | 1024 | The byte limit on the injected list |
+
+- **Character state page**: read-only list of unspoken thoughts, collapsed by default.
 
 ## Reading (bookshelf plugin)
 
@@ -191,6 +195,8 @@ The character's state should be changed by interaction and should also settle on
 | `decay_per_hour` | 5 | Points drifting back toward calm per hour; 0 means no decay |
 | `max_delta_per_call` | 30 | The cap on the absolute value of one adjustment. Lower it to make feelings change gradually, so one sentence cannot go from happy to devastated |
 
+- **Character state page and chat strip**: read-only mood and its cause; the strip at the top of the chat shows the mood summary.
+
 ## Health (health plugin)
 
 People catch a chill now and then, get headaches, eat something bad; a character is healthy forever — not by design, but because there is nowhere to record it. This plugin gives the character a state of health: whether it falls ill, with what, how badly, roughly for how long and how it is handling it, all judged and recorded by the model on the turn it happens, as the story requires. From there the severity rises, peaks and falls along an illness curve on its own, with recovery speed set by the treatment (toughing it out is slow, medicine is moderate, seeing a doctor is fast), computed from the time it was stored when it is read. The principle is that **code handles time and the model handles judgement**: this is not an illness simulator, there are no random events and there is no HP bar — what is injected each turn is a situation ("day 2 of a cold, gone from miserable to a little under the weather (took medicine), probably another two or three days"), not a number. On by default, hard-depends on `roleplay`.
@@ -207,6 +213,8 @@ People catch a chill now and then, get headaches, eat something bad; a character
 | `cooldown_days` | 7 | Days after recovery before a new condition may be registered (1-60) |
 | `max_conditions` | 2 | The most conditions tracked at once (1-3) |
 | `max_severity` | Miserable | The severity ceiling: a little under the weather / miserable / laid up. Anything the model reports above it is clamped and the model is told |
+
+- **Character state page**: read-only view of conditions still running their course and how they are being handled.
 
 ## Presence (presence plugin)
 

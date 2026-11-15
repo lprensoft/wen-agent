@@ -45,6 +45,8 @@
 
       // ---- 聊天区 ----
       "chat.empty": "新建或选择一个会话开始对话",
+      "chat.state.prefix": "此刻：",
+      "chat.state.openTitle": "打开角色状态",
       "chat.placeholder": "输入消息，Enter 发送，Shift+Enter 换行",
       "chat.send": "发送",
       "chat.attachTitle": "添加图片",
@@ -161,6 +163,7 @@
       "settings.state.more": "还有 {n} 条",
       "settings.state.truncated": "内容过多，部分已省略。",
       "settings.state.domain": "域：{name}",
+      "settings.state.shared": "共享",
       "settings.state.others": "其它域（{n}）",
       "settings.plugins.loadFailed": "加载插件列表失败：{msg}",
       "settings.plugins.configure": "配置",
@@ -317,6 +320,8 @@
 
       // ---- 聊天区 ----
       "chat.empty": "Start a new chat, or pick one from the list",
+      "chat.state.prefix": "Now: ",
+      "chat.state.openTitle": "Open character state",
       "chat.placeholder": "Type a message. Enter sends, Shift+Enter adds a line",
       "chat.send": "Send",
       "chat.attachTitle": "Attach images",
@@ -441,6 +446,7 @@
       "settings.state.more": "{n} more",
       "settings.state.truncated": "Too much to show; some content was omitted.",
       "settings.state.domain": "Domain: {name}",
+      "settings.state.shared": "Shared",
       "settings.state.others": "Other domains ({n})",
       "settings.plugins.loadFailed": "Couldn't load the plugin list: {msg}",
       "settings.plugins.configure": "Configure",

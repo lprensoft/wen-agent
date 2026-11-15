@@ -31,6 +31,9 @@ type StateReporter interface {
 // 都是加字段，三十多个实现不用改签名。
 type StateQuery struct {
 	Lang string // 按请求判定，不要插件自己存语言
+	// PinnedOnly 表示这次只要会进聊天页顶部那一行的块。插件可以据此跳过
+	// 明显不会被用到的磁盘读取；核心仍会再过滤一次，防止实现忽略它。
+	PinnedOnly bool
 }
 
 // StateSection 是状态页上的一块，通常对应插件里的一个概念。
@@ -43,6 +46,15 @@ type StateSection struct {
 	// Domain 是可见域标签，核心不解释。单人格用户永远看不到它；
 	// 有多个人格时前端在块上挂一个 chip，并把其它域折叠起来。
 	Domain string `json:"domain,omitempty"`
+	// Pinned 表示这一块的 Summary 值得进聊天页顶部那一行「此刻」。
+	// 由插件自己判断，核心与前端只按注册顺序取前几条。
+	Pinned bool `json:"pinned,omitempty"`
+	// PinnedOrder 决定聊天页顶部那一行里的先后，小的在前；0 按注册顺序排。
+	PinnedOrder int `json:"pinned_order,omitempty"`
+	// Collapsed 表示这一块在状态页里默认收起（如心里话）。
+	// Global 表示这一块不属于任何一个可见域（如心跳），任何人格下都该显示。
+	Global    bool `json:"global,omitempty"`
+	Collapsed bool `json:"collapsed,omitempty"`
 	// UpdatedAt 是这份状态最后一次变化的时刻，零值表示不知道（前端不显示）。
 	// 不是查询时刻：天气、现场、心情都可能停在几小时前，读的人要知道。
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
@@ -105,12 +117,16 @@ const (
 //
 // 与 List / StatusLines 一样：锁内只取插件实例，锁外再调插件代码；单个插件
 // panic 只少一块，不影响整页。分类的译名在管理侧完成，与 /api/plugins 同源。
-func (m *Manager) State(lang string) StateSnapshot {
+func (m *Manager) State(lang string, pinnedOnly bool) StateSnapshot {
 	out := StateSnapshot{Plugins: []PluginState{}}
 	total := 0
 	for _, e := range enabledAs[StateReporter](m) {
 		var secs []StateSection
-		safely(m.lang(), e.name, "State", func() { secs = e.impl.State(StateQuery{Lang: lang}) })
+		q := StateQuery{Lang: lang, PinnedOnly: pinnedOnly}
+		safely(m.lang(), e.name, "State", func() { secs = e.impl.State(q) })
+		if pinnedOnly {
+			secs = pinnedSections(secs)
+		}
 		secs, truncated := clampState(secs)
 		if len(secs) == 0 {
 			// 整块都被上限丢掉了：没有地方挂「已截断」，报到总标记上，
@@ -138,6 +154,17 @@ func (m *Manager) State(lang string) StateSnapshot {
 			Sections:    secs,
 			Truncated:   truncated,
 		})
+	}
+	return out
+}
+
+// pinnedSections 只保留会进聊天页顶部那一行的块。
+func pinnedSections(in []StateSection) []StateSection {
+	out := make([]StateSection, 0, len(in))
+	for _, s := range in {
+		if s.Pinned {
+			out = append(out, s)
+		}
 	}
 	return out
 }

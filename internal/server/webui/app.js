@@ -427,7 +427,9 @@ async function loadSessions() {
       await fetch(`/api/sessions/${m.id}`, { method: "DELETE" });
       if (currentSession === m.id) {
         currentSession = null;
+        currentDomain = "";
         clearMessages();
+        loadPinnedState();
       }
       loadSessions();
     });
@@ -444,6 +446,7 @@ async function newSession() {
   currentSession = meta.id;
   currentDomain = "";
   clearMessages();
+  loadPinnedState();
   renderedFp = historyFp([]);
   await loadSessions();
   inputEl.focus();
@@ -457,12 +460,19 @@ async function selectSession(id, internal = false) {
   currentSession = id;
   currentDomain = "";
   const res = await fetch(`/api/sessions/${id}`);
-  if (!res.ok) { await loadSessions(); return; }
+  if (!res.ok) {
+    currentSession = null;
+    currentDomain = "";
+    loadPinnedState();
+    await loadSessions();
+    return;
+  }
   const data = await res.json();
   currentDomain = domainOf(data.messages);
   renderHistory(data.messages);
   renderedFp = historyFp(data.messages);
   loadSessions();
+  loadPinnedState();
 }
 
 // ---------- 当前会话的后台同步 ----------
@@ -505,6 +515,7 @@ async function syncCurrentSession() {
     renderHistory(data.messages);
     renderedFp = fp;
     scrollBottom();
+    loadPinnedState();
   } catch { /* 网络抖动下次再试 */ }
 }
 
@@ -517,10 +528,20 @@ async function refreshFp() {
     const data = await res.json();
     currentDomain = domainOf(data.messages);
     renderedFp = historyFp(data.messages);
+    loadPinnedState();
   } catch { /* 忽略 */ }
 }
 
 setInterval(syncCurrentSession, 5000);
+
+// 「此刻」里的相对时间会过期：心跳的「下次约」、心情的回落都随时间变。
+// 页面不可见时不发请求，回到页面时立刻补一次。
+setInterval(() => {
+  if (!document.hidden) loadPinnedState();
+}, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadPinnedState();
+});
 
 // ---------- 消息渲染 ----------
 
@@ -1321,7 +1342,10 @@ async function loadSettingsPlugins() {
 const stateEl = $("#settings-state");
 const stateMetaEl = $("#state-meta");
 const stateRefreshBtn = $("#btn-state-refresh");
+const chatStateEl = $("#chat-state");
+const chatStateTextEl = $("#chat-state-text");
 let stateLoading = false;
+let pinnedStateLoading = false;
 
 // relativeTime 用浏览器自带的复数与语序规则，不另造一套「N 分钟前」的字典。
 function relativeTime(iso) {
@@ -1352,6 +1376,73 @@ async function loadState() {
   }
 }
 
+// stateDomainFor 选状态页要展开的那一个可见域：有当前会话的域就只认它，
+// 没有会话信息时才退到共享域或最近更新的一块。
+function stateDomainFor(plugins) {
+  // 有当前人格就只认它；没有当前人格时才退回共享域或最近更新的域。
+  if (currentDomain !== "") return currentDomain;
+
+  let hasShared = false;
+  const domains = new Set();
+  for (const p of plugins) {
+    for (const s of p.sections || []) {
+      if (s.domain) domains.add(s.domain);
+      else hasShared = true;
+    }
+  }
+  if (hasShared) return "";
+
+  let latest = 0;
+  let domain = "";
+  for (const p of plugins) {
+    for (const s of p.sections || []) {
+      const ts = Date.parse(s.updated_at || "") || 0;
+      if (s.domain && ts >= latest) {
+        latest = ts;
+        domain = s.domain;
+      }
+    }
+  }
+  if (!domain) domain = domains.values().next().value || "";
+  return domain;
+}
+
+async function loadPinnedState() {
+  if (!chatStateEl || pinnedStateLoading) return;
+  if (!currentSession) {
+    chatStateEl.classList.add("hidden");
+    return;
+  }
+  pinnedStateLoading = true;
+  try {
+    const res = await fetch(withLang("/api/state?pinned=1"));
+    if (!res.ok) throw new Error("state");
+    const snap = await res.json();
+    const plugins = (snap && snap.plugins) || [];
+    // 顶部条只认当前人格：当前域即使为空（共享域）也不去借别的人格的状态。
+    // 没有当前会话时上面已经返回了，所以这里 currentDomain 是权威值。
+    const domain = currentDomain;
+    const items = [];
+    for (const p of plugins) {
+      for (const s of p.sections || []) {
+        if (!s.pinned || !s.summary) continue;
+        // Domain 带 omitempty：单人格时后端根本不下发这个字段，undefined 要按空域处理。
+        if (!s.global && (s.domain || "") !== domain) continue;
+        items.push(s);
+      }
+    }
+    items.sort((a, b) => (a.pinned_order || 999) - (b.pinned_order || 999));
+    const text = items.slice(0, 3).map((s) => s.summary).join(" · ");
+    chatStateTextEl.textContent = text;
+    chatStateEl.classList.toggle("hidden", !text);
+    chatStateEl.title = text;
+  } catch {
+    chatStateEl.classList.add("hidden");
+  } finally {
+    pinnedStateLoading = false;
+  }
+}
+
 function renderState(snap) {
   if (!stateEl) return;
   stateEl.textContent = "";
@@ -1369,40 +1460,22 @@ function renderState(snap) {
     return;
   }
 
-  // 当前域优先取当前会话最后一条消息的标签；没有会话或该域不在快照里时，
-  // 退到最近更新的一块所属域。只影响折叠，不影响返回什么。
-  const domains = new Set();
-  let hasShared = false;
-  for (const p of plugins) {
-    for (const s of p.sections || []) {
-      if (s.domain) domains.add(s.domain);
-      else hasShared = true;
-    }
-  }
-  let domain = currentDomain;
-  const known = domain === "" ? hasShared : domains.has(domain);
-  if (!known) {
-    domain = "";
-    let latest = 0;
-    for (const p of plugins) {
-      for (const s of p.sections || []) {
-        const ts = Date.parse(s.updated_at || "") || 0;
-        if (s.domain && ts >= latest) {
-          latest = ts;
-          domain = s.domain;
-        }
-      }
-    }
-    if (!domain) domain = domains.values().next().value || "";
-  }
+  // 当前域只影响折叠，不影响返回什么。
+  const domain = stateDomainFor(plugins);
 
   const primary = [];
   const others = [];
   for (const p of plugins) {
     const sections = (p.sections || []).filter((s) => s && s.title);
     if (!sections.length) continue;
-    const keep = sections.filter((s) => !s.domain || s.domain === domain);
-    const rest = sections.filter((s) => s.domain && s.domain !== domain);
+    const keep = [];
+    const rest = [];
+    for (const s of sections) {
+      // 空域在人格启用后是旧共享库留下的状态，不再属于当前人格；
+      // 只有标了 global 的心跳等真正全局块可以跨人格显示。
+      if (s.global || (domain === "" ? !s.domain : s.domain === domain)) keep.push(s);
+      else rest.push(s);
+    }
     if (keep.length) primary.push({ ...p, sections: keep });
     if (rest.length) others.push(...rest);
   }
@@ -1464,7 +1537,7 @@ function renderStateSection(s, showDomain = false) {
   const det = document.createElement("details");
   det.className = "state-block";
   const rows = s.rows || [];
-  det.open = rows.length <= 8;
+  det.open = !s.collapsed && rows.length <= 8;
 
   const sum = document.createElement("summary");
   const title = document.createElement("span");
@@ -1481,10 +1554,12 @@ function renderStateSection(s, showDomain = false) {
 
   const meta = document.createElement("span");
   meta.className = "state-block-meta";
-  if (showDomain && s.domain) {
+  if (showDomain && !s.global) {
     const chip = document.createElement("span");
     chip.className = "state-domain";
-    chip.textContent = t("settings.state.domain", { name: s.domain });
+    chip.textContent = s.domain
+      ? t("settings.state.domain", { name: s.domain })
+      : t("settings.state.shared");
     meta.append(chip);
   }
   if (s.updated_at) {
@@ -1552,6 +1627,12 @@ function renderStateRow(r) {
 }
 
 if (stateRefreshBtn) stateRefreshBtn.addEventListener("click", loadState);
+if (chatStateEl) {
+  chatStateEl.addEventListener("click", () => {
+    showSettingsSection("state");
+    openSettings();
+  });
+}
 
 // 左侧栏目与右侧 section 按 data-section 对应
 function showSettingsSection(name) {
@@ -3111,6 +3192,7 @@ function retranslate() {
   applyChatWidth(chatWidthSetting);
   renderModelLabel();
   loadSessions();
+  loadPinnedState();
   if (currentSession && !busy) {
     renderedFp = ""; // 指纹作废，让同步把消息区按新语言整体重画
     syncCurrentSession();
@@ -3127,6 +3209,7 @@ function retranslate() {
 I18N.onChange(retranslate);
 
 loadSessions();
+loadPinnedState();
 
 // 左下角的版本号：取自 /api/status，取不到就不显示，不影响使用
 fetch("/api/status")
