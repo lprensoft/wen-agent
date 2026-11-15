@@ -242,7 +242,7 @@ func TestTimelineRecordsDayFacts(t *testing.T) {
 	s := p.snapshot()
 	yesterday := time.Now().AddDate(0, 0, -1)
 	p.appendDayBuf(s, "", turnAt(yesterday, "我加班到十一点", "那我等你"))
-	p.runTimeline(s)
+	p.runTimeline(s, time.Now())
 
 	if asked != dayOf(yesterday) {
 		t.Fatalf("问的日期不对: %q，期望 %q", asked, dayOf(yesterday))
@@ -260,7 +260,7 @@ func TestTimelineWithoutDayFacts(t *testing.T) {
 	s := p.snapshot()
 	yesterday := time.Now().AddDate(0, 0, -1)
 	p.appendDayBuf(s, "", turnAt(yesterday, "在吗", "在"))
-	p.runTimeline(s)
+	p.runTimeline(s, time.Now())
 
 	block := p.timelineBlock(context.Background(), s)
 	want := dayOf(yesterday) + " " + weekdayName("", yesterday) + "，普通的一天"

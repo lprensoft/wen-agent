@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -57,7 +57,7 @@ func (a *Agent) AppendNotice(ctx context.Context, sessionID, text string) error 
 		Kind:    session.KindNotice,
 		Tag:     plugin.ScopeFrom(ctx).Write,
 		Origin:  plugin.TurnOriginFrom(ctx),
-		TS:      time.Now(),
+		TS:      clock.Now(ctx),
 	}
 	if err := a.store.Append(sessionID, m); err != nil {
 		return err

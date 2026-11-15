@@ -15,6 +15,7 @@ internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者
 internal/plugin/builtin/ 内置插件（注册顺序见 cmd/wen/main.go 的 builtinPlugins）
 internal/agentplugin/    Agent Plugins 1.0 客户端（读取外源插件包、技能与 MCP 声明）
 internal/imbot/          消息通道的公共骨架（分发 / 命令 / 会话绑定 / 确认代理 / 通道路由）
+internal/clock/          可替换的「现在几点」：跟着 context 走，评测据此推进时间线
 internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前取走
 internal/availability/   「忙碌状态」公告板：日程在活动进行中写，心跳与消息通道读
 internal/stylecheck/     「助手腔」检测规则与字数 / 句数 / 演绎占比度量，纯函数，style_watch 与 wen eval 共用
@@ -59,7 +60,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `FailureTranslator`（`TranslateFailure()`）——轮次失败时把失败转成一句正常回复的机会（`roleplay` 据此把内容拦截演成角色的走神）。单所有者、按逆注册序征询，只在真人在场的轮次尝试；转译文本以正常助手消息落盘，原始错误转入会话注记；配置类错误（`llm.IsConfigError`）必须放行原样报出。
 - `NoticeObserver`（`OnNotice()`）——会话注记落盘并送达 Web 界面之后收到广播（IM 通道据此把后台工作的说明推给绑定用户）。事件携带的是已截断的落盘文本。
 
-插件之间还有几样共享的基础设施，核心不知道它们：`internal/imbot`（消息通道骨架，见下）、`internal/cue`（「开口理由」公告板——产生方按**事件**投递而不是按状态投递，同 (Source, Key) 幂等覆盖，必须带过期时刻；心跳开口前取走全部未过期的理由。只存内存，检测状态的权威在产生方自己的持久化里）与 `internal/availability`（「忙碌状态」公告板——存状态不存事件，每个写入方只有一条，查询不清、靠到期时刻自然过期；日程在活动进行中写，心跳与消息通道据此把下一拍压后或延后处理入站消息。同样只存内存，重启后由日程从当天的表重建）；`internal/skillroots` 则让用户自己写的技能与外源插件包里的技能进同一份清单。
+插件之间还有几样共享的基础设施，核心不知道它们：`internal/imbot`（消息通道骨架，见下）、`internal/cue`（「开口理由」公告板——产生方按**事件**投递而不是按状态投递，同 (Source, Key) 幂等覆盖，必须带过期时刻；心跳开口前取走全部未过期的理由。只存内存，检测状态的权威在产生方自己的持久化里）与 `internal/availability`（「忙碌状态」公告板——存状态不存事件，每个写入方只有一条，查询不清、靠到期时刻自然过期；日程在活动进行中写，心跳与消息通道据此把下一拍压后或延后处理入站消息。同样只存内存，重启后由日程从当天的表重建）；`internal/skillroots` 则让用户自己写的技能与外源插件包里的技能进同一份清单；`internal/clock` 让「现在几点」跟着 context 走——时间戳、日界、衰减都读它，缺省是系统时间，评测换成一条自己推进的时间线，而耗时仍用真实时间。
 
 `InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`Sessions`（会话的只读窄查询：最近活跃的会话、某会话是否还在）、`SessionDir`（会话目录，只给需要读会话正文的检索与归档类插件）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `RunTurnImages` / `RunTurnMedia` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、带图片跑一轮、带图片与文件跑一轮、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`DayFacts`（问某一天有什么可说的，汇总各插件的回答）、`Notice`（往会话里留一行只给人看的说明）、`Lang`（这个进程的语言，插件在 `Init` 里存下，此后提示词、工具描述、状态行与日志都按它取）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
 

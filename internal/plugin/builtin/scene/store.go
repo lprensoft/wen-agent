@@ -77,6 +77,11 @@ func (s *Store) load() ([]Scene, error) {
 // Save 记录一条场景。replace 为 false 时拒绝覆盖同名条目；覆盖保留原记录时间与
 // 原有位置——场景的先后顺序承载着舞台展开的脉络，更新描述不应把它挪到末尾。
 func (s *Store) Save(in Scene, replace bool) (Scene, error) {
+	return s.SaveAt(in, replace, time.Now())
+}
+
+// SaveAt 与 Save 相同，但记录时刻由调用方给出。
+func (s *Store) SaveAt(in Scene, replace bool, now time.Time) (Scene, error) {
 	name, err := normalizeName(s.lang, in.Name)
 	if err != nil {
 		return Scene{}, err
@@ -97,7 +102,6 @@ func (s *Store) Save(in Scene, replace bool) (Scene, error) {
 		return Scene{}, err
 	}
 
-	now := time.Now()
 	out := Scene{Name: name, Detail: detail, Created: now, Updated: now}
 	if i := indexOf(scenes, name); i >= 0 {
 		if !replace {

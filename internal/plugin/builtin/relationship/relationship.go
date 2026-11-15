@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -31,14 +32,13 @@ type Plugin struct {
 
 	// 日子提醒的投递记录：cuedDay 是记录所属的日期，cued 是当天投出过的提醒（含已经
 	// 被心跳取走的）。整个刷新在 cueMu 内串行进行，见 refreshDateCues。只在内存里，
-	// 重启后当天会再投一次——代价是一句可能重复的提醒，换来不必为它落盘。clock 供测试替换。
+	// 重启后当天会再投一次——代价是一句可能重复的提醒，换来不必为它落盘。
 	cueMu   sync.Mutex
 	cuedDay string
 	cued    map[string]bool
-	clock   func() time.Time
 }
 
-func New() *Plugin { return &Plugin{clock: time.Now} }
+func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "relationship" }
 
@@ -96,7 +96,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || !ok {
 		return "", err
 	}
-	body := renderSnapshot(lang, snap, p.clock())
+	body := renderSnapshot(lang, snap, clock.Now(ctx))
 	if body == "" {
 		return "", nil
 	}
@@ -197,7 +197,7 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, _ plugin.TurnEndEvent) {
 	if plugin.ScopeFrom(ctx).Write != "" {
 		return
 	}
-	now := p.clock()
+	now := clock.Now(ctx)
 	p.cueMu.Lock()
 	done := p.cuedDay == now.Format(dateLayout)
 	p.cueMu.Unlock()

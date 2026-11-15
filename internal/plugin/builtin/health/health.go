@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -189,7 +190,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if store == nil {
 		return "", nil
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 	snap, err := store.Current(now)
 	if err != nil {
 		return "", err

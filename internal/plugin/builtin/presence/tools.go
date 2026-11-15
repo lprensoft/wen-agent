@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -73,7 +73,7 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if store == nil {
 		return "", errNotReady(t.p.snapshotLang())
 	}
-	updated, cleared, err := store.Apply(changes, time.Now())
+	updated, cleared, err := store.Apply(changes, clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

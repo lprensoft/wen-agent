@@ -34,6 +34,9 @@ type StateQuery struct {
 	// PinnedOnly 表示这次只要会进聊天页顶部那一行的块。插件可以据此跳过
 	// 明显不会被用到的磁盘读取；核心仍会再过滤一次，防止实现忽略它。
 	PinnedOnly bool
+	// Now 是这次查询的时刻：同一页上的「N 小时前」都该按同一个时刻算，
+	// 也让评测能把整块状态摆到一条推进过的时间线上。由核心填写，插件不要自己取钟。
+	Now time.Time
 }
 
 // StateSection 是状态页上的一块，通常对应插件里的一个概念。
@@ -122,7 +125,7 @@ func (m *Manager) State(lang string, pinnedOnly bool) StateSnapshot {
 	total := 0
 	for _, e := range enabledAs[StateReporter](m) {
 		var secs []StateSection
-		q := StateQuery{Lang: lang, PinnedOnly: pinnedOnly}
+		q := StateQuery{Lang: lang, PinnedOnly: pinnedOnly, Now: time.Now()}
 		safely(m.lang(), e.name, "State", func() { secs = e.impl.State(q) })
 		if pinnedOnly {
 			secs = pinnedSections(secs)

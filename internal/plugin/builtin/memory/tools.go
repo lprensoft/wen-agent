@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -202,13 +203,13 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		return "", errNotReady(cfg.lang)
 	}
 
-	e, err := store.Save(Entry{
+	e, err := store.SaveAt(Entry{
 		Name:        a.Name,
 		Description: a.Description,
 		Type:        a.Type,
 		Content:     a.Content,
 		Decay:       cfg.decay && a.Decay,
-	}, a.Mode == "replace")
+	}, a.Mode == "replace", clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

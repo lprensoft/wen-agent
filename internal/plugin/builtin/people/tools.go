@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -90,7 +90,7 @@ func (t *upsertTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	res, err := store.Upsert(Update{
 		Name: a.Name, Relation: a.Relation, Profile: a.Profile,
 		Closeness: a.Closeness, MetNow: a.MetNow, LastNote: a.LastNote, Lately: a.Lately,
-	}, time.Now(), Limits{MaxPeople: s.maxPeople})
+	}, clock.Now(ctx), Limits{MaxPeople: s.maxPeople})
 	if err != nil {
 		return "", err
 	}
@@ -174,7 +174,7 @@ func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	}
 
 	kw := strings.ToLower(strings.TrimSpace(a.Keyword))
-	now := time.Now()
+	now := clock.Now(ctx)
 	var b strings.Builder
 	matched := 0
 	for _, p := range ps {

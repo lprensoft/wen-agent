@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -75,7 +76,7 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if store == nil {
 		return "", errNotReady(lang)
 	}
-	now := t.p.clock()
+	now := clock.Now(ctx)
 	updated, cleared, err := store.Apply(Update{
 		Stage: a.Stage, MyCall: a.MyCall, TheirCall: a.TheirCall,
 		Recent: a.Recent, Bonds: a.Bonds, TheirNow: a.TheirNow,

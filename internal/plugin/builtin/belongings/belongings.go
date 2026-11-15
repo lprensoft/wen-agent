@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -153,7 +154,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		return "", err
 	}
 	return stateHeaderFor(s.lang) + "\n" +
-		renderContainers(s.lang, cs, s.maxInjectBytes, time.Now()), nil
+		renderContainers(s.lang, cs, s.maxInjectBytes, clock.Now(ctx)), nil
 }
 
 // ---------- 按可见域分库 ----------

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"wen/internal/stylecheck"
 )
@@ -111,7 +112,7 @@ func TestRenderEvalReport(t *testing.T) {
 		"| 1 | 晚上好 |",
 		"客套开场「好的，」、客套收尾「希望这对你有帮助」",
 		"| — | （压缩） |",
-		"| — | （间隔 8 小时，仅记录，不改系统时间） |",
+		"| — | （时间推进 8 小时） |",
 		"| 2 | 醒了吗 \\| 在吗 |", // 竖线转义
 		"| — | （自动压缩） |",
 		"### 第 1 轮",
@@ -237,6 +238,40 @@ func TestParseScriptSeedsAndExpects(t *testing.T) {
 	}
 	for name, raw := range bad {
 		if _, err := parseScript([]byte(raw)); err == nil {
+			t.Errorf("%s 应当报错", name)
+		}
+	}
+}
+
+// 虚拟时钟的两个入口：脚本起点与种子的「几小时前」。写错在解析时就该拦住。
+func TestParseScriptClockFields(t *testing.T) {
+	raw := `{"start":"2026-03-01T08:00:00+08:00","seed":[{"tool":"save_memory","args":{},"ago_hours":72}],"turns":[{"say":"a"}]}`
+	sc, err := parseScript([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 3, 1, 8, 0, 0, 0, time.FixedZone("", 8*3600))
+	if got := sc.startAt(); !got.Equal(want) {
+		t.Fatalf("startAt = %v，期望 %v", got, want)
+	}
+	if sc.Seed[0].AgoHours != 72 {
+		t.Fatalf("ago_hours = %v", sc.Seed[0].AgoHours)
+	}
+
+	// 不写 start 就从当下开始，不该报错也不该是零值。
+	sc, err = parseScript([]byte(`{"turns":[{"say":"a"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.startAt().IsZero() {
+		t.Error("没写 start 时应当回落到当下")
+	}
+
+	for name, bad := range map[string]string{
+		"start 不是 RFC3339": `{"start":"3 月 1 日","turns":[{"say":"a"}]}`,
+		"负的 ago_hours":     `{"seed":[{"tool":"save_memory","ago_hours":-1}],"turns":[{"say":"a"}]}`,
+	} {
+		if _, err := parseScript([]byte(bad)); err == nil {
 			t.Errorf("%s 应当报错", name)
 		}
 	}

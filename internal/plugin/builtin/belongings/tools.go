@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -132,7 +132,7 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		remove = append(remove, Change{Name: it.Name, Qty: it.Qty})
 	}
 
-	res, err := store.Apply(a.Container, add, remove, time.Now(),
+	res, err := store.Apply(a.Container, add, remove, clock.Now(ctx),
 		Limits{MaxContainers: s.maxContainers, MaxItemsPerContainer: s.maxItems})
 	if err != nil {
 		return "", err

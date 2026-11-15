@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -56,7 +56,7 @@ func (t *keepTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if store == nil {
 		return "", errNotReady(s.lang)
 	}
-	res, err := store.Keep(a.Text, time.Now(), s.maxEntries)
+	res, err := store.Keep(a.Text, clock.Now(ctx), s.maxEntries)
 	if err != nil {
 		return "", err
 	}

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -390,7 +391,7 @@ func (p *Plugin) visibleState(ctx context.Context) (BodyState, bool, error) {
 	if s.base == "" {
 		return BodyState{}, false, nil
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 
 	var out BodyState
 	var latest time.Time

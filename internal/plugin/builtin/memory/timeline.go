@@ -166,7 +166,7 @@ func saveDayBuf(lang, dir string, f dayBufFile) {
 
 // runTimeline 把各域缓冲里早于今天的日子逐个收束成时间线记录。在后台 goroutine
 // 中执行，一天触发一次（由 OnTurnEnd 的 lastTimeline 判定）。
-func (p *Plugin) runTimeline(s settings) {
+func (p *Plugin) runTimeline(s settings, now time.Time) {
 	defer func() {
 		p.turnMu.Lock()
 		p.timelining = false
@@ -176,7 +176,7 @@ func (p *Plugin) runTimeline(s settings) {
 	if complete == nil || s.ctx == nil || s.libBase == "" {
 		return
 	}
-	today := dayOf(time.Now())
+	today := dayOf(now)
 
 	// 零值 Scope：枚举磁盘上已存在的全部域，每个域各自收束（与淡忘清扫同一口径）
 	for _, tag := range plugin.ReadDomains(s.libBase, plugin.Scope{}) {

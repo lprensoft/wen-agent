@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -108,7 +108,7 @@ func (t *recordTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if store == nil {
 		return "", errNotReady(s.lang)
 	}
-	local, err := store.Record(touches)
+	local, err := store.RecordAt(touches, clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +185,7 @@ func (t *adjustStateTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", errNotReady(s.lang)
 	}
 	st, appliedA, appliedF, err := store.Apply(a.ArousalDelta, a.FatigueDelta,
-		s.stateMaxDelta, s.arousalDecay, s.fatigueDecay, a.Reason, time.Now())
+		s.stateMaxDelta, s.arousalDecay, s.fatigueDecay, a.Reason, clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

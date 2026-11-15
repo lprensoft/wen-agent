@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -626,7 +627,7 @@ func (p *Plugin) recallBlock(ctx context.Context, s settings, input string, entr
 	// 想起来就算用到：不刷新的话，一条天天自然浮现的记忆照样会走到淡忘。
 	// 与 recall_memory 同一口径，只在开了淡忘时写——没人读这个时间就不值得为它写盘。
 	if s.decay {
-		now := time.Now()
+		now := clock.Now(ctx)
 		for _, h := range hits[:n] {
 			if store := p.storeFor(h.entry.Domain); store != nil {
 				_, _ = store.Touch(h.entry.Name, now)

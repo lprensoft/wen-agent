@@ -73,9 +73,16 @@ func (s *Store) load() ([]PartState, error) {
 	return states, nil
 }
 
-// Record 累加若干次接触，返回本库内更新后的状态（顺序与传入的部位一致）。
-// 同一部位在一次调用里出现多次只算一次：计数没有回退手段，一次幻觉不该能加上几十次。
+// Record 用当前时间累加若干次接触。
 func (s *Store) Record(touches []Touch) ([]PartState, error) {
+	return s.RecordAt(touches, time.Now())
+}
+
+// RecordAt 与 Record 相同，但接触发生的时刻由调用方给出：它是这条记录开始衰减的
+// 起点，可能早于保存这一刻（评测预置一条「两小时前」的接触）。
+//
+// 同一部位在一次调用里出现多次只算一次：计数没有回退手段，一次幻觉不该能加上几十次。
+func (s *Store) RecordAt(touches []Touch, now time.Time) ([]PartState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	states, err := s.load()
@@ -83,7 +90,6 @@ func (s *Store) Record(touches []Touch) ([]PartState, error) {
 		return nil, err
 	}
 
-	now := time.Now()
 	var (
 		out  []PartState
 		done = map[string]bool{}

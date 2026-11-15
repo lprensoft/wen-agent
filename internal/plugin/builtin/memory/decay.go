@@ -21,7 +21,7 @@ import (
 // 由 OnTurnEnd 按天触发一次——遗忘是以天计的过程，不值得为它起定时器。
 //
 // 刻意不按可见域过滤：清扫不产生任何对模型可见的输出，维护动作本来就该覆盖全库。
-func (p *Plugin) runSweep(s settings) {
+func (p *Plugin) runSweep(s settings, now time.Time) {
 	defer func() {
 		p.turnMu.Lock()
 		p.sweeping = false
@@ -31,7 +31,6 @@ func (p *Plugin) runSweep(s settings) {
 		return
 	}
 
-	now := time.Now()
 	blurBefore := now.AddDate(0, 0, -s.blurDays)
 	forgetBefore := now.AddDate(0, 0, -s.forgetDays)
 

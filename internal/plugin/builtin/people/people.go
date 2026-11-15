@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -141,7 +142,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		return "", err
 	}
 	return stateHeaderFor(s.lang) + "\n" +
-		renderPeople(s.lang, ps, s.maxInjectBytes, time.Now()), nil
+		renderPeople(s.lang, ps, s.maxInjectBytes, clock.Now(ctx)), nil
 }
 
 // ---------- 给其它插件的只读查询 ----------

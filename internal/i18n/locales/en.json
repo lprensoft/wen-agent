@@ -112,6 +112,7 @@
   "cli.eval.aborted": "aborted",
   "cli.eval.aborted_judge": "aborted before judging",
   "cli.eval.avg": "- Average length: %d characters, average share in action passages: %d%%\n",
+  "cli.eval.clock": "- Virtual clock: %s → %s\n",
   "cli.eval.compactions": ", %d compactions (%d asked for by the script, %d automatic)",
   "cli.eval.duration": "- Elapsed: %s\n",
   "cli.eval.err.bad_json": "not valid script JSON: %w",
@@ -2027,6 +2028,8 @@
   "cli.eval.baseline_model": "Note: the baseline used %s while this run used %s; scores and hits may not be comparable\\n",
   "cli.eval.err.baseline_name": "the baseline comes from another script (%s); it cannot be compared with %s",
   "cli.eval.err.baseline_say": "turn %d of the baseline asked \"%s\" while the script asks \"%s\"; they cannot be compared (regenerate the baseline with --json)",
+  "cli.eval.err.bad_start": "start is not a valid RFC 3339 time (for example 2026-03-01T08:00:00+08:00): %w",
+  "cli.eval.err.seed_ago_neg": "seed[%d]: ago_hours cannot be negative",
   "cli.eval.err.baseline_turns": "the baseline has %d turns while the script has %d say steps; they cannot be compared (regenerate the baseline with --json)",
   "cli.eval.gate.ok_plain": "- Gate: passed (deterministic checks)\\n"
 }
