@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -219,7 +219,7 @@ func (a *Agent) compact(ctx context.Context, targets []ModelTarget, opts Options
 		})
 		// 摘要是 pinned 的、永不参与裁剪，因此它里面的时段描述会一直留在上下文里。
 		// 不带时间锚的话，那些描述会被当成「现在」，压缩越多这种错位越顽固。
-		now := time.Now()
+		now := clock.Now(ctx)
 		content := prompt.T(opts.Lang, "prompt.core.summary_prefix", summaryPrefixZH) + summary +
 			prompt.Tf(opts.Lang, "prompt.core.summary_anchor", summaryAnchorZH, formatNow(opts.Lang, now))
 		if len(notes) > 0 {

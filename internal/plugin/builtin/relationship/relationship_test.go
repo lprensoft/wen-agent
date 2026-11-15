@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/plugin"
 )
@@ -28,6 +29,11 @@ func scopedCtx(tag string) context.Context {
 		return context.Background()
 	}
 	return plugin.WithScope(context.Background(), plugin.Scope{Write: tag, Read: []string{tag}})
+}
+
+// atNow 把固定的「现在」装进 ctx：插件的时间都从 ctx 取。
+func atNow(ctx context.Context, now time.Time) context.Context {
+	return clock.With(ctx, clock.Func(func() time.Time { return now }))
 }
 
 func exec(t *testing.T, p *Plugin, ctx context.Context, args string) string {
@@ -464,21 +470,20 @@ func TestRenderDatesTodayAndTomorrow(t *testing.T) {
 func TestDateCuesSharedScopeOnce(t *testing.T) {
 	p := newTestPlugin(t)
 	now := day(2026, 5, 12)
-	p.clock = func() time.Time { return now }
 	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
 	for _, tag := range []string{"", "inner"} {
 		_, _, _ = p.storeFor(tag).Apply(Update{AddDate: &DateArg{What: "生日" + tag, Date: "05-12"}}, now)
 	}
-	p.OnTurnEnd(scopedCtx("inner"), plugin.TurnEndEvent{})
+	p.OnTurnEnd(atNow(scopedCtx("inner"), now), plugin.TurnEndEvent{})
 	if cue.Pending(now) {
 		t.Fatal("里人格的日子不该投开口理由")
 	}
-	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	p.OnTurnEnd(atNow(scopedCtx(""), now), plugin.TurnEndEvent{})
 	got := cue.Take(now)
 	if len(got) != 1 || !strings.Contains(got[0].Text, "「生日」") || got[0].Source != "relationship" {
 		t.Fatalf("表人格的日子应投一条：%+v", got)
 	}
-	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	p.OnTurnEnd(atNow(scopedCtx(""), now), plugin.TurnEndEvent{})
 	if cue.Pending(now) {
 		t.Error("同一天不该再投")
 	}
@@ -510,17 +515,16 @@ func TestCorrectedStageDateIsNotDuplicated(t *testing.T) {
 func TestChangingDatesWithdrawsStaleCues(t *testing.T) {
 	p := newTestPlugin(t)
 	now := day(2026, 5, 12)
-	p.clock = func() time.Time { return now }
 	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
 	tool := p.Tools()[0]
 	exec := func(args string) {
 		t.Helper()
-		if _, err := tool.Execute(scopedCtx(""), json.RawMessage(args)); err != nil {
+		if _, err := tool.Execute(atNow(scopedCtx(""), now), json.RawMessage(args)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	exec(`{"add_date":{"what":"对方生日","date":"05-12"}}`)
-	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	p.OnTurnEnd(atNow(scopedCtx(""), now), plugin.TurnEndEvent{})
 	if !cue.Pending(now) {
 		t.Fatal("前提：今天的生日提醒已投出")
 	}
@@ -546,16 +550,15 @@ func TestChangingDatesWithdrawsStaleCues(t *testing.T) {
 func TestConsumedCueIsNotReposted(t *testing.T) {
 	p := newTestPlugin(t)
 	now := day(2026, 5, 12)
-	p.clock = func() time.Time { return now }
 	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
 	exec := func(args string) {
 		t.Helper()
-		if _, err := p.Tools()[0].Execute(scopedCtx(""), json.RawMessage(args)); err != nil {
+		if _, err := p.Tools()[0].Execute(atNow(scopedCtx(""), now), json.RawMessage(args)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	exec(`{"add_date":{"what":"对方生日","date":"05-12"}}`)
-	p.OnTurnEnd(scopedCtx(""), plugin.TurnEndEvent{})
+	p.OnTurnEnd(atNow(scopedCtx(""), now), plugin.TurnEndEvent{})
 	if got := cue.Take(now); len(got) != 1 {
 		t.Fatalf("前提：生日提醒投出并被心跳取走：%+v", got)
 	}
@@ -570,7 +573,6 @@ func TestConsumedCueIsNotReposted(t *testing.T) {
 func TestConcurrentRefreshesEndConsistent(t *testing.T) {
 	p := newTestPlugin(t)
 	now := day(2026, 5, 12)
-	p.clock = func() time.Time { return now }
 	t.Cleanup(func() { cue.Take(now.AddDate(1, 0, 0)) })
 	store := p.storeFor("")
 	for i := 0; i < 200; i++ {

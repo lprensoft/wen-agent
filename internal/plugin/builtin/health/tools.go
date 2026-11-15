@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -82,7 +83,7 @@ func (t *setTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	if store == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 	onset := now.Add(time.Duration(a.OnsetHours * float64(time.Hour)))
 	c, err := store.Add(a.Name, a.Severity, onset, a.Days, a.Care, now, s.limits())
 	if err != nil {
@@ -156,7 +157,7 @@ func (t *updateTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if store == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 	c, changes, err := store.Apply(a.Name, Update{Care: a.Care, Severity: a.Severity, Recovered: a.Recovered}, now, s.limits())
 	if err != nil {
 		return "", err

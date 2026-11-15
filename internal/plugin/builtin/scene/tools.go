@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -59,7 +60,7 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if store == nil {
 		return "", errNotReady(t.p.snapshot().lang)
 	}
-	sc, err := store.Save(Scene{Name: a.Name, Detail: a.Detail}, a.Mode == "replace")
+	sc, err := store.SaveAt(Scene{Name: a.Name, Detail: a.Detail}, a.Mode == "replace", clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

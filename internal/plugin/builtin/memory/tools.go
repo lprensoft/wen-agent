@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -202,13 +202,13 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		return "", errNotReady(cfg.lang)
 	}
 
-	e, err := store.Save(Entry{
+	e, err := store.SaveAt(Entry{
 		Name:        a.Name,
 		Description: a.Description,
 		Type:        a.Type,
 		Content:     a.Content,
 		Decay:       cfg.decay && a.Decay,
-	}, a.Mode == "replace")
+	}, a.Mode == "replace", clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}
@@ -315,7 +315,7 @@ func (t *recallTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	}
 	// 读到就算用到：不刷新的话，一条天天被翻出来看的记忆照样会走到淡忘
 	if s.decay {
-		_, _ = store.Touch(e.Name, time.Now())
+		_, _ = store.Touch(e.Name, clock.Now(ctx))
 	}
 
 	var b strings.Builder

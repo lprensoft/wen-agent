@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/people"
@@ -100,6 +101,10 @@ func New(lookup people.Lookup) *Plugin {
 		planSubmitted:   map[string]bool{},
 	}
 }
+
+// nowOf 取本轮的时间：ctx 里的钟优先，没有用插件自己的。后台循环没有 ctx，仍是
+// 插件自己的钟，因为那几条判断驱动的是真实定时器。
+func (p *Plugin) nowOf(ctx context.Context) time.Time { return clock.NowOr(ctx, p.now) }
 
 func (p *Plugin) Name() string { return "agenda" }
 

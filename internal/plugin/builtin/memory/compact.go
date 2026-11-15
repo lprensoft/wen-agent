@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -32,7 +33,7 @@ func (p *Plugin) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string,
 			"当前没有可用的模型，跳过记忆提炼"))
 	}
 
-	res, err := p.extractMemories(ctx, s, complete, serializeHistory(s.lang, ev.History, s.maxExtractBytes))
+	res, err := p.extractMemories(ctx, s, complete, serializeHistory(s.lang, ev.History, s.maxExtractBytes), clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

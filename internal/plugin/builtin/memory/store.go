@@ -202,9 +202,17 @@ func findEntry(entries []Entry, name string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// Save 写入一条记忆。replace 为 false 时拒绝覆盖已存在的同名条目；
-// 覆盖前会把原文件另存为 .bak。返回最终落盘的条目。
+// Save 用当前时间写入一条记忆。需要把这次写入放到另一条时间线上（评测预置
+// 一条「三天前记住的」）时用 SaveAt。
 func (s *Store) Save(e Entry, replace bool) (Entry, error) {
+	return s.SaveAt(e, replace, time.Now())
+}
+
+// SaveAt 与 Save 相同，但写入时刻由调用方给出。
+//
+// 时间戳要单独传：它是这条记忆的年龄，决定什么时候被淡忘、在索引里排多前，
+// 而保存这件事可能发生在「现在」以外的时刻——评测预置、以后的导入都会用到。
+func (s *Store) SaveAt(e Entry, replace bool, now time.Time) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -239,7 +247,6 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.exists", "已存在同名记忆 %q，如需覆盖请把 mode 设为 replace"), old.Name)
 	}
 
-	now := time.Now()
 	e.Updated = now
 	e.LastUsed = now  // 写入本身就是一次「用到」
 	e.Blurred = false // 正文是刚写进来的，不再是塌缩后的残余

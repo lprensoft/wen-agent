@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -56,7 +56,7 @@ func (t *adjustTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if store == nil {
 		return "", errNotReady(s.lang)
 	}
-	st, applied, err := store.Apply(a.Delta, s.maxDelta, s.decayPerHour, a.Reason, time.Now())
+	st, applied, err := store.Apply(a.Delta, s.maxDelta, s.decayPerHour, a.Reason, clock.Now(ctx))
 	if err != nil {
 		return "", err
 	}

@@ -202,7 +202,7 @@ func TestSweepBlursThenArchives(t *testing.T) {
 	backdate(t, s, "半年前说过的事", 180)
 	backdate(t, s, "永久记着的事", 400)
 
-	p.runSweep(p.snapshot())
+	p.runSweep(p.snapshot(), time.Now())
 
 	if e, _ := s.Get("刚说过的事"); e.Blurred {
 		t.Error("刚提过的记忆不该淡忘")
@@ -227,7 +227,7 @@ func TestSweepSkippedWhenDecayOff(t *testing.T) {
 
 	saveDecaying(t, s, "标了淡忘但开关是关的", true)
 	backdate(t, s, "标了淡忘但开关是关的", 400)
-	p.runSweep(p.snapshot())
+	p.runSweep(p.snapshot(), time.Now())
 
 	if _, err := s.Get("标了淡忘但开关是关的"); err != nil {
 		t.Error("关闭淡忘后不该动任何记忆")
@@ -243,7 +243,7 @@ func TestSweepCoversAllDomains(t *testing.T) {
 	backdate(t, inner, "里侧该忘的事", 180)
 
 	// 清扫不产生任何对模型可见的输出，维护动作本来就该覆盖全库
-	p.runSweep(p.snapshot())
+	p.runSweep(p.snapshot(), time.Now())
 	if _, err := inner.Get("里侧该忘的事"); err == nil {
 		t.Error("带可见域标签的库也应被清扫")
 	}

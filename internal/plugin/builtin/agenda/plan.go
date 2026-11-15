@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
@@ -28,7 +29,13 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	if st == nil {
 		return
 	}
-	today := s.today(p.now()).Format(dateLayout)
+	// 用这一轮结束的时刻算「今天」：评测的时间线可能不在系统时间上，按 p.now()
+	// 判断会去排另一天的表，而那一轮写下的消息也落在另一条时间线上。
+	now := ev.EndedAt
+	if now.IsZero() {
+		now = p.nowOf(ctx)
+	}
+	today := s.today(now).Format(dateLayout)
 	pl, err := st.LoadPlan()
 	if err != nil {
 		i18n.Logf(p.langOf(), "log.agenda.read_plan_failed", "agenda: 读取日程表失败: %v", err)
@@ -48,15 +55,21 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	}
 	p.planning[tag] = true
 	p.wg.Add(1)
+	// 把这一轮的时间线带进后台，但只带「钟」不冻结「时刻」：规划可能等上几秒、
+	// 重试几次，甚至跨过日界，拿触发那一刻的日期去排表会排到昨天，还会盖掉已经
+	// 存在的今天。生产路径的 ctx 里没有钟，后台照旧用系统时间。
 	pctx := p.ctx
+	if c := clock.From(ctx); c != nil {
+		pctx = clock.With(pctx, c)
+	}
 	p.mu.Unlock()
-	go p.runPlan(pctx, tag, ev.SessionID, today)
+	go p.runPlan(pctx, tag, ev.SessionID)
 }
 
 // runPlan 跑一次规划轮次：等触发那轮彻底收尾，清掉已过期的约定，再以【规划今天】
 // 为一次性输入起轮次。会话忙限次重试；其它失败与「轮次成功但没提交表」各计一次
 // 尝试，达到上限就留一条会话注记。
-func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
+func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
 	defer p.wg.Done()
 	defer func() {
 		p.mu.Lock()
@@ -78,31 +91,47 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 		return
 	}
 	nctx := plugin.WithScope(ctx, plugin.Scope{Write: tag})
-	p.pruneCommitments(nctx, st, sid, today)
-
-	cs, err := st.LoadCommitments()
-	if err != nil {
-		i18n.Logf(p.langOf(), "log.agenda.read_commitments_failed", "agenda: 读取约定失败: %v", err)
-		return
-	}
-	var todayCs []Commitment
-	for _, c := range cs {
-		if c.Date == today {
-			todayCs = append(todayCs, c)
-		}
-	}
-	sortCommitments(todayCs)
-	input := buildPlanPrompt(s.lang, p.now(), todayCs)
 
 	for attempt := 0; ; attempt++ {
+		// 每次尝试前都重算「今天」，并重读日程表：忙重试可能隔上几秒甚至跨过日界，
+		// 前台也可能在这期间把新一天的日程排好了。拿上一次的日期与输入重试，会排
+		// 到昨天，还会覆盖别人刚排的表。
+		now := p.nowOf(ctx)
+		today := s.today(now).Format(dateLayout)
+		if pl, err := st.LoadPlan(); err == nil {
+			if pl.Date == today {
+				return
+			}
+			if pl.Attempts.Date == today && pl.Attempts.Count >= defMaxPlanAttempts {
+				return
+			}
+		}
+		p.pruneCommitments(nctx, st, sid, today)
+
+		cs, err := st.LoadCommitments()
+		if err != nil {
+			i18n.Logf(p.langOf(), "log.agenda.read_commitments_failed", "agenda: 读取约定失败: %v", err)
+			return
+		}
+		var todayCs []Commitment
+		for _, c := range cs {
+			if c.Date == today {
+				todayCs = append(todayCs, c)
+			}
+		}
+		sortCommitments(todayCs)
+		input := buildPlanPrompt(s.lang, now, todayCs)
+
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)
 		tctx = plugin.WithEphemeralInput(tctx)
-		_, err := s.runTurn(tctx, sid, input)
+		_, err = s.runTurn(tctx, sid, input)
 		cancel()
 		switch {
 		case err == nil:
 			pl, lerr := st.LoadPlan()
-			if lerr == nil && pl.Date == today {
+			// 模型调用本身也可能跨过日界：表排在今天或更晚都算排成了，
+			// 只有「还是旧的那一天 / 压根没排」才记一次失败。
+			if lerr == nil && pl.Date >= today {
 				return
 			}
 			p.countAttempt(nctx, st, sid, today, "模型没有提交日程表")

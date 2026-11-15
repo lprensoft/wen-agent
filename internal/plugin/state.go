@@ -34,6 +34,26 @@ type StateQuery struct {
 	// PinnedOnly 表示这次只要会进聊天页顶部那一行的块。插件可以据此跳过
 	// 明显不会被用到的磁盘读取；核心仍会再过滤一次，防止实现忽略它。
 	PinnedOnly bool
+	// queriedAt 是这次查询的时刻：同一页上的「N 小时前」都该按同一个时刻算。
+	// 用 Now() 取，不要直接读字段。
+	queriedAt time.Time
+}
+
+// Now 返回这次查询的时刻。同一页上的相对时间都按它算，于是天气、心情、现场
+// 不会各按各的钟差上几毫秒；由核心填写。
+//
+// 零值时退回系统时间：直接构造 StateQuery 的测试与将来别的调用方不必关心这个字段，
+// 而把它当公元元年的钟去算衰减会让每一块状态都显示成「很久以前」。
+func (q StateQuery) Now() time.Time {
+	if q.queriedAt.IsZero() {
+		return time.Now()
+	}
+	return q.queriedAt
+}
+
+// NewStateQuery 组装一次状态查询。核心用它把查询时刻统一下来。
+func NewStateQuery(lang string, pinnedOnly bool, now time.Time) StateQuery {
+	return StateQuery{Lang: lang, PinnedOnly: pinnedOnly, queriedAt: now}
 }
 
 // StateSection 是状态页上的一块，通常对应插件里的一个概念。
@@ -122,7 +142,7 @@ func (m *Manager) State(lang string, pinnedOnly bool) StateSnapshot {
 	total := 0
 	for _, e := range enabledAs[StateReporter](m) {
 		var secs []StateSection
-		q := StateQuery{Lang: lang, PinnedOnly: pinnedOnly}
+		q := NewStateQuery(lang, pinnedOnly, time.Now())
 		safely(m.lang(), e.name, "State", func() { secs = e.impl.State(q) })
 		if pinnedOnly {
 			secs = pinnedSections(secs)

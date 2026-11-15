@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -86,6 +87,12 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	// 可见域必须当场从 ctx 取：广播用的是本轮的 ctx，它在轮次返回后立即被取消，
 	// 之后再问就什么也拿不到了。
 	scope := plugin.ScopeFrom(ctx)
+	// 背景工作（提炼、清扫、日切）都按这一轮结束的时刻算：它们跑在轮次之后，
+	// 拿系统时间就成了另一条时间线，与刚写下的时间戳对不上。
+	now := ev.EndedAt
+	if now.IsZero() {
+		now = clock.Now(ctx)
+	}
 	key := windowKey{session: ev.SessionID, tag: scope.Write}
 
 	p.turnMu.Lock()
@@ -131,17 +138,17 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 		// 先收束昨天，再把本轮追加进今天的缓冲——反过来会把新一天的第一轮
 		// 也算进「昨天」。多天缓冲对并发追加是安全的：收束只取早于今天的日子。
 		if dayFlush {
-			p.runTimeline(s)
+			p.runTimeline(s, now)
 		}
 		if s.timeline {
 			p.appendDayBuf(s, scope.Write, ev)
 		}
 		p.persistWindows(dir, snapshot, marks, seq)
 		if ripe != nil {
-			p.runExtract(s, key, ripe)
+			p.runExtract(s, key, ripe, now)
 		}
 		if sweep {
-			p.runSweep(s)
+			p.runSweep(s, now)
 		}
 	}()
 }
@@ -222,7 +229,7 @@ func (p *Plugin) takeLocked(key windowKey, w *window, s settings) *window {
 }
 
 // runExtract 跑一次定期提炼。在后台 goroutine 中执行。
-func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
+func (p *Plugin) runExtract(s settings, key windowKey, w *window, now time.Time) {
 	defer func() {
 		p.turnMu.Lock()
 		delete(p.extracting, key)
@@ -237,7 +244,7 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 	ctx, cancel := context.WithTimeout(plugin.WithScope(s.ctx, w.scope), extractTimeout)
 	defer cancel()
 
-	res, err := p.extractMemories(ctx, s, complete, w.text(s.lang, turnExtractBytes))
+	res, err := p.extractMemories(ctx, s, complete, w.text(s.lang, turnExtractBytes), now)
 	if err != nil {
 		if ctx.Err() == nil { // 取消与超时是正常收尾，不值得记一行错误
 			i18n.Logf(s.lang, "log.memory.extract_failed", "记忆提炼：本轮失败：%v", err)

@@ -242,7 +242,7 @@ func TestTimelineRecordsDayFacts(t *testing.T) {
 	s := p.snapshot()
 	yesterday := time.Now().AddDate(0, 0, -1)
 	p.appendDayBuf(s, "", turnAt(yesterday, "我加班到十一点", "那我等你"))
-	p.runTimeline(s)
+	p.runTimeline(s, time.Now())
 
 	if asked != dayOf(yesterday) {
 		t.Fatalf("问的日期不对: %q，期望 %q", asked, dayOf(yesterday))
@@ -260,7 +260,7 @@ func TestTimelineWithoutDayFacts(t *testing.T) {
 	s := p.snapshot()
 	yesterday := time.Now().AddDate(0, 0, -1)
 	p.appendDayBuf(s, "", turnAt(yesterday, "在吗", "在"))
-	p.runTimeline(s)
+	p.runTimeline(s, time.Now())
 
 	block := p.timelineBlock(context.Background(), s)
 	want := dayOf(yesterday) + " " + weekdayName("", yesterday) + "，普通的一天"
@@ -278,5 +278,19 @@ func TestRenderEntryWithoutFacts(t *testing.T) {
 	// 日期认不出来时只写日期本身，不猜星期几
 	if got := renderEntry("", timelineEntry{Date: "不是日期", Summary: "x"}); got != "不是日期，x" {
 		t.Fatalf("坏日期渲染不符: %q", got)
+	}
+}
+
+// 日期按时刻自己的时区算。同一个瞬间在东八区已经是 3 月 2 日，在 UTC-5 还是
+// 3 月 1 日；换算到本机时区会让两者变成同一天，日界就跟「当前时间」对不上了。
+func TestDayOfUsesTimesOwnZone(t *testing.T) {
+	instant := time.Date(2026, 3, 1, 16, 30, 0, 0, time.UTC)
+	east := instant.In(time.FixedZone("", 8*3600))  // 2026-03-02 00:30
+	west := instant.In(time.FixedZone("", -5*3600)) // 2026-03-01 11:30
+	if got := dayOf(east); got != "2026-03-02" {
+		t.Errorf("东八区应归 3 月 2 日，得到 %q", got)
+	}
+	if got := dayOf(west); got != "2026-03-01" {
+		t.Errorf("西五区应归 3 月 1 日，得到 %q", got)
 	}
 }

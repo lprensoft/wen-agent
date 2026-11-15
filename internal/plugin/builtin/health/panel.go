@@ -17,7 +17,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	if s.base == "" {
 		return nil
 	}
-	now := time.Now()
+	now := q.Now()
 
 	var out []plugin.StateSection
 	for _, tag := range plugin.ReadDomains(s.base, plugin.Scope{}) {

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -91,7 +92,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	}
 	lang := p.snapshotLang()
 	return prompt.T(lang, "prompt.presence.state_header", stateHeaderZH) + "\n" +
-		renderSnapshot(lang, snap, time.Now()), nil
+		renderSnapshot(lang, snap, clock.Now(ctx)), nil
 }
 
 // storeFor 返回某个可见域的快照库（惰性创建）。未初始化时返回 nil。

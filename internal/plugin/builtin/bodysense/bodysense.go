@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -279,7 +280,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 	}
 	var parts []string
 	if len(views) > 0 {
-		parts = append(parts, statesHeaderFor(s.lang)+"\n"+renderViews(s.lang, views, s.maxInjectBytes))
+		parts = append(parts, statesHeaderFor(s.lang)+"\n"+renderViews(s.lang, views, s.maxInjectBytes, clock.Now(ctx)))
 	}
 	st, ok, err := p.visibleState(ctx)
 	if err != nil {
@@ -291,7 +292,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 			lines = append(lines, line)
 		}
 	}
-	if line := p.sleepinessLine(s, ev.SessionID); line != "" {
+	if line := p.sleepinessLine(ctx, s, ev.SessionID); line != "" {
 		lines = append(lines, line)
 	}
 	if len(lines) > 0 {
@@ -300,11 +301,14 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 	return strings.Join(parts, "\n\n"), nil
 }
 
+// nowOf 取本轮的时间：ctx 里的钟优先，没有用插件自己的。
+func (p *Plugin) nowOf(ctx context.Context) time.Time { return clock.NowOr(ctx, p.now) }
+
 // sleepinessLine 算出本轮的困意并渲染成一行；关着、不到一档时返回空串。
 //
 // 会话用量取不到（没有状态通道、会话不存在、窗口未配置）时负载按 0 算，困意只剩
 // 钟点那一半——宁可少报，不凭空让角色犯困。「一阵困意」按档位掷一次骰子，带冷却。
-func (p *Plugin) sleepinessLine(s settings, sessionID string) string {
+func (p *Plugin) sleepinessLine(ctx context.Context, s settings, sessionID string) string {
 	if !s.sleepiness {
 		return ""
 	}
@@ -314,7 +318,7 @@ func (p *Plugin) sleepinessLine(s settings, sessionID string) string {
 			load = info.CompactLoad()
 		}
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	sl := computeSleepiness(load, s.sleepOnset, now.Hour())
 	level := sleepinessLevel(sl.Score)
 	if level == 0 {
@@ -390,7 +394,7 @@ func (p *Plugin) visibleState(ctx context.Context) (BodyState, bool, error) {
 	if s.base == "" {
 		return BodyState{}, false, nil
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 
 	var out BodyState
 	var latest time.Time
@@ -518,11 +522,11 @@ func (p *Plugin) visibleViews(ctx context.Context) ([]view, int, error) {
 // renderViews 按预算渲染累计记录，分四级降级：
 // 全列（次数 + 阶段 + 私密度）→ 去掉次数只留阶段 → 按阶段归并 → 只注明部位数。
 // 阶段词才是模型真正要用的信息，次数与时间是辅助，所以先砍后者。
-func renderViews(lang string, views []view, maxBytes int) string {
-	if out, ok := fit(renderFull(lang, views), maxBytes); ok {
+func renderViews(lang string, views []view, maxBytes int, now time.Time) string {
+	if out, ok := fit(renderFull(lang, views, now), maxBytes); ok {
 		return out
 	}
-	if out, ok := fit(renderStages(lang, views), maxBytes); ok {
+	if out, ok := fit(renderStages(lang, views, now), maxBytes); ok {
 		return out
 	}
 	if out, ok := fit(renderGrouped(lang, views), maxBytes); ok {
@@ -539,25 +543,25 @@ func fit(s string, maxBytes int) (string, bool) {
 	return s, true
 }
 
-func renderFull(lang string, views []view) string {
+func renderFull(lang string, views []view, now time.Time) string {
 	var b strings.Builder
 	for _, v := range views {
 		fmt.Fprintf(&b, prompt.T(lang, "prompt.body_sense.render.full_line", "- %s：%d 次（%s）· %s")+"\n",
 			v.Name, v.Count, v.Stage.For(lang), privacyLabel(lang, v.Privacy))
 	}
-	if line := lastTouchLine(lang, views); line != "" {
+	if line := lastTouchLine(lang, views, now); line != "" {
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderStages(lang string, views []view) string {
+func renderStages(lang string, views []view, now time.Time) string {
 	var b strings.Builder
 	for _, v := range views {
 		fmt.Fprintf(&b, prompt.T(lang, "prompt.body_sense.render.stage_line", "- %s：%s · %s")+"\n",
 			v.Name, v.Stage.For(lang), privacyLabel(lang, v.Privacy))
 	}
-	if line := lastTouchLine(lang, views); line != "" {
+	if line := lastTouchLine(lang, views, now); line != "" {
 		b.WriteString(line + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -580,9 +584,9 @@ func renderGrouped(lang string, views []view) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// lastTouchLine 给出最近一次接触。间隔由落盘时记下的真实时间戳与当前时间作差算得，
+// lastTouchLine 给出最近一次接触。间隔由落盘时记下的时间戳与查询时刻作差算得，
 // 不含推测；时间戳为零值（旧文件、手改坏的文件）时整行不出现，不回落到别的字段。
-func lastTouchLine(lang string, views []view) string {
+func lastTouchLine(lang string, views []view, now time.Time) string {
 	var latest view
 	for _, v := range views {
 		if !v.Last.IsZero() && v.Last.After(latest.Last) {
@@ -596,7 +600,7 @@ func lastTouchLine(lang string, views []view) string {
 	if latest.LastAct != "" {
 		out = append(out, latest.LastAct)
 	}
-	if gap := time.Since(latest.Last); gap < time.Minute {
+	if gap := now.Sub(latest.Last); gap < time.Minute {
 		out = append(out, prompt.T(lang, "prompt.body_sense.render.just_now", "刚刚"))
 	} else {
 		out = append(out, prompt.Tf(lang, "prompt.body_sense.render.ago", "%s前", prompt.Duration(lang, gap)))

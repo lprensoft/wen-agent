@@ -153,7 +153,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil {
 		return "", err
 	}
-	return renderPrompt(s.lang, pl, cs, ps, p.now(), s), nil
+	return renderPrompt(s.lang, pl, cs, ps, p.nowOf(ctx), s), nil
 }
 
 // renderPrompt 按预算渲染两块注入，分级降级：去掉已做项的经历 → 已做项压成条数 →

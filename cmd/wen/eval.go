@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wen/internal/agent"
+	"wen/internal/clock"
 	"wen/internal/config"
 	"wen/internal/plugin"
 	"wen/internal/stylecheck"
@@ -24,6 +25,11 @@ import (
 // 几句」固定成脚本，跑完给出两类数字：每轮的助手腔命中与字数（纯规则，可重复），
 // 以及模型对「像不像同一个人 / 语气是否一致 / 关系是否连续」的三项打分（模型打的，
 // 看趋势不看绝对值）。本期只测量，不据此改任何行为。
+
+// maxClockHours 限制脚本能把时钟推多远。五十年的小时数已经远超任何脚本的需要；
+// 而再往上（约二百九十二年）换算成 time.Duration 就会溢出成负数，时钟反而往回走，
+// 脚本作者看不出哪里错了。
+const maxClockHours = 24 * 366 * 50
 
 // judgeTimeout 是评判那一次模型调用的上限。
 const judgeTimeout = 3 * time.Minute
@@ -95,8 +101,13 @@ func runEval(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 整场评测跑在一条可以自己推进的时间线上：种子可以写在「三天前」，轮次之间的
+	// gap_hours 真的把时钟拨过去。真实路径没有这条线，插件读到的仍是系统时间。
+	clk := clock.NewManual(sc.startAt())
+	ctx = clock.With(ctx, clk)
+
 	if len(sc.Seed) > 0 {
-		if err := runSeeds(ctx, rt, sc.Seed); err != nil {
+		if err := runSeeds(ctx, rt, clk, sc.Seed); err != nil {
 			return err
 		}
 		fmt.Fprint(os.Stderr, trf("cli.eval.seed.done", "预置状态：%d 条\n", len(sc.Seed)))
@@ -115,12 +126,15 @@ func runEval(args []string) error {
 		if err := checkBaselineTurns(sc, base); err != nil {
 			return err
 		}
+		if cur := startOf(sc.startAt()); base.Start != "" && base.Start != cur {
+			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_clock", "注意：基线从 %s 开始，本次从 %s 开始；场景不同，命中与评分未必可比\n", base.Start, cur))
+		}
 		if model := rt.current.ProviderName + "/" + rt.current.ModelID; base.Model != "" && base.Model != model {
 			fmt.Fprint(os.Stderr, trf("cli.eval.baseline_model", "注意：基线用的是 %s，本次是 %s；评分与命中都可能不可比\n", base.Model, model))
 		}
 	}
 
-	res := runScript(ctx, rt, sc, os.Stderr)
+	res := runScript(ctx, rt, sc, clk, os.Stderr)
 	if *baselinePath != "" {
 		res.BaselinePath = *baselinePath
 		res.Regressions, res.JudgeDelta = compareEvalBaseline(evalJSONOf(res), base)
@@ -164,9 +178,9 @@ func evalSuppressed(p plugin.Plugin) bool {
 // runSeeds 在开跑之前把预置状态写进评测环境。
 //
 // 走插件自己的工具而不是直接写状态文件：不复制十几个插件的落盘格式，种子也走真实
-// 的写入路径；以后加插件不用改这里。代价是暂时表达不了「三天前」这类时间，那要等
-// 虚拟时钟。
-func runSeeds(ctx context.Context, rt *runtime, seeds []evalSeed) error {
+// 的写入路径；以后加插件不用改这里。带 ago_hours 的种子把时钟拨回那一刻再写入，
+// 于是「三天前记住的」在库里就是三天前的：淡忘、索引排序、快照里的「N 天前」都对得上。
+func runSeeds(ctx context.Context, rt *runtime, clk *clock.Manual, seeds []evalSeed) error {
 	for i, sd := range seeds {
 		tool, ok := rt.plugins.FindTool(sd.Tool)
 		if !ok {
@@ -184,7 +198,13 @@ func runSeeds(ctx context.Context, rt *runtime, seeds []evalSeed) error {
 		if sd.Scope != "" {
 			c = plugin.WithScope(c, plugin.Scope{Write: sd.Scope, Read: []string{sd.Scope}})
 		}
-		if _, err := tool.Execute(c, args); err != nil {
+		at := clk.Now()
+		if sd.AgoHours > 0 {
+			clk.Set(at.Add(-time.Duration(sd.AgoHours * float64(time.Hour))))
+		}
+		_, err := tool.Execute(c, args)
+		clk.Set(at) // 无论成败都拨回来：后面的种子与轮次都从脚本的起点继续
+		if err != nil {
 			return fmt.Errorf(tr("cli.eval.err.seed_failed", "seed[%d]（%s）失败: %w"), i+1, sd.Tool, err)
 		}
 	}
@@ -192,11 +212,13 @@ func runSeeds(ctx context.Context, rt *runtime, seeds []evalSeed) error {
 }
 
 // runScript 跑完整个脚本并收集结果。progress 收每轮的进度提示，可为 nil。
-func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.File) evalResult {
+func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manual, progress *os.File) evalResult {
 	res := evalResult{
-		Name:      sc.Name,
-		Model:     rt.current.ProviderName + "/" + rt.current.ModelID,
-		StartedAt: time.Now(),
+		Name:       sc.Name,
+		Model:      rt.current.ProviderName + "/" + rt.current.ModelID,
+		StartedAt:  time.Now(),
+		ClockFrom:  clk.Now(),
+		ClockFixed: !sc.start.IsZero(),
 	}
 	res.Persona, res.Samples, res.HasRoleplay = roleplayTexts(rt.plugins)
 
@@ -243,10 +265,12 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, progress *os.Fil
 			}
 			res.Rows = append(res.Rows, row)
 		case step.GapHours > 0:
+			clk.Advance(time.Duration(step.GapHours * float64(time.Hour)))
 			res.Rows = append(res.Rows, evalRow{Kind: rowGap, GapHours: step.GapHours})
 		}
 	}
 	res.Duration = time.Since(res.StartedAt)
+	res.ClockTo = clk.Now()
 
 	if ctx.Err() != nil {
 		res.Judge.Err = tr("cli.eval.aborted_judge", "已中断，未评判")
@@ -347,10 +371,23 @@ func clipLine(s string, max int) string {
 
 // evalScript 是脚本文件的形状。
 type evalScript struct {
-	Name        string     `json:"name"`
+	Name string `json:"name"`
+	// Start 是虚拟时钟的起点（RFC3339）。不写就从当下开始；写了才能让报告里的
+	// 日期与「今天是几号」这类判断每次运行都一致。
+	Start       string     `json:"start,omitempty"`
 	Seed        []evalSeed `json:"seed,omitempty"`
 	Turns       []evalStep `json:"turns"`
 	JudgePoints []string   `json:"judge_points,omitempty"`
+
+	start time.Time // Start 解析后的值，零值表示脚本没写
+}
+
+// startAt 返回虚拟时钟的起点。
+func (s evalScript) startAt() time.Time {
+	if s.start.IsZero() {
+		return time.Now()
+	}
+	return s.start
 }
 
 // evalSeed 是一条预置状态：用插件的某个工具往评测环境里写一条。
@@ -361,6 +398,9 @@ type evalSeed struct {
 	Tool  string         `json:"tool"`
 	Args  map[string]any `json:"args,omitempty"`
 	Scope string         `json:"scope,omitempty"` // 可见域；空 = 共享
+	// AgoHours 让这条状态写在现在之前多少小时：72 就是「三天前记住的」。
+	// 淡忘、索引排序、快照里的「N 天前」都按这个时刻算。
+	AgoHours float64 `json:"ago_hours,omitempty"`
 }
 
 // evalExpect 是一轮回复的确定性断言。全部为空表示不断言。
@@ -391,6 +431,13 @@ func parseScript(raw []byte) (evalScript, error) {
 	if len(sc.Turns) == 0 {
 		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_turns", "turns 为空"))
 	}
+	if s := strings.TrimSpace(sc.Start); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return sc, fmt.Errorf(tr("cli.eval.err.bad_start", "start 不是合法的 RFC3339 时间（如 2026-03-01T08:00:00+08:00）: %w"), err)
+		}
+		sc.start = t
+	}
 	for i, sd := range sc.Seed {
 		if strings.TrimSpace(sd.Tool) == "" {
 			return sc, fmt.Errorf(tr("cli.eval.err.seed_tool_empty", "seed[%d]: tool 不能为空"), i+1)
@@ -401,6 +448,12 @@ func parseScript(raw []byte) (evalScript, error) {
 		sc.Seed[i].Scope = strings.TrimSpace(sd.Scope)
 		if !plugin.ValidDomainTag(sc.Seed[i].Scope) {
 			return sc, fmt.Errorf(tr("cli.eval.err.seed_scope", "seed[%d]: 可见域 %q 不合法，只允许小写字母开头的 [a-z0-9_]"), i+1, sd.Scope)
+		}
+		if sd.AgoHours < 0 {
+			return sc, fmt.Errorf(tr("cli.eval.err.seed_ago_neg", "seed[%d]: ago_hours 不能为负"), i+1)
+		}
+		if sd.AgoHours > maxClockHours {
+			return sc, fmt.Errorf(tr("cli.eval.err.seed_ago_long", "seed[%d]: ago_hours 超过 %d 小时"), i+1, maxClockHours)
 		}
 	}
 	says := 0
@@ -416,6 +469,9 @@ func parseScript(raw []byte) (evalScript, error) {
 		if st.GapHours != 0 {
 			if st.GapHours < 0 {
 				return sc, fmt.Errorf(tr("cli.eval.err.neg_gap", "turns[%d]: gap_hours 不能为负"), i)
+			}
+			if st.GapHours > maxClockHours {
+				return sc, fmt.Errorf(tr("cli.eval.err.gap_long", "turns[%d]: gap_hours 超过 %d 小时"), i, maxClockHours)
 			}
 			n++
 		}

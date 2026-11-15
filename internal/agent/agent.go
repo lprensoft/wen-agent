@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -279,7 +280,7 @@ func (a *Agent) RunTurnWithMedia(ctx context.Context, sessionID, input string, i
 }
 
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, files []llm.FilePart, emit func(Event)) (string, error) {
-	startedAt := time.Now()
+	startedAt := clock.Now(ctx)
 	targets, opts := a.snapshot()
 
 	meta, history, err := a.store.Get(sessionID)
@@ -333,7 +334,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 	if ephemeral {
 		userKind = session.KindEphemeral
 	}
-	if err := a.appendKind(sessionID, userMsg, scope.Write, origin, userKind); err != nil {
+	if err := a.appendKind(ctx, sessionID, userMsg, scope.Write, origin, userKind); err != nil {
 		return "", err
 	}
 	// 只有真人交互的轮次才算「活跃」：机器自发的轮次若也计入，
@@ -454,7 +455,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 				UserInput:   userInput,
 				FinalText:   text,
 				StartedAt:   startedAt,
-				EndedAt:     time.Now(),
+				EndedAt:     clock.Now(ctx),
 			})
 			return text, nil
 		}
@@ -479,7 +480,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 			ResponsesOrigin: r.rawOrigin,
 			ToolCalls:       r.toolCalls,
 		}
-		if err := a.append(sessionID, assistant, scope.Write, origin); err != nil {
+		if err := a.append(ctx, sessionID, assistant, scope.Write, origin); err != nil {
 			return "", err
 		}
 		msgs = append(msgs, assistant)
@@ -510,7 +511,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 				UserInput:   userInput,
 				FinalText:   r.content,
 				StartedAt:   startedAt,
-				EndedAt:     time.Now(),
+				EndedAt:     clock.Now(ctx),
 			})
 			return r.content, nil
 		}
@@ -527,7 +528,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
 			toolMsg := llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID}
-			if err := a.append(sessionID, toolMsg, scope.Write, origin); err != nil {
+			if err := a.append(ctx, sessionID, toolMsg, scope.Write, origin); err != nil {
 				return "", err
 			}
 			msgs = append(msgs, toolMsg)
@@ -691,7 +692,7 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 		out = "\n\n" + text
 	}
 	emit(Event{Type: EventDelta, Content: out})
-	if err := a.append(sessionID, llm.Message{Role: llm.RoleAssistant, Content: text}, tag, origin); err != nil {
+	if err := a.append(ctx, sessionID, llm.Message{Role: llm.RoleAssistant, Content: text}, tag, origin); err != nil {
 		// 落不了盘就退回原始错误：界面已经流出的台词与历史会不一致，
 		// 但那是磁盘故障级别的场景，一致性让位于把问题报出来。
 		return "", false
@@ -932,10 +933,12 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
 // append 落盘一条消息。tag 是本轮的可见域标签，一轮内的 user / assistant / tool
 // 消息必须使用同一个值，否则 tool_use 与 tool_result 会被过滤拆散。
 // origin 是本轮的发起方（同样整轮一致），空串 = 前台界面。
-func (a *Agent) append(sessionID string, msg llm.Message, tag, origin string) error {
-	return a.appendKind(sessionID, msg, tag, origin, "")
+func (a *Agent) append(ctx context.Context, sessionID string, msg llm.Message, tag, origin string) error {
+	return a.appendKind(ctx, sessionID, msg, tag, origin, "")
 }
 
-func (a *Agent) appendKind(sessionID string, msg llm.Message, tag, origin, kind string) error {
-	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Kind: kind, Tag: tag, Origin: origin, TS: time.Now()})
+// appendKind 用 ctx 里的钟给消息盖时间戳。历史里的「距上一条消息」与日界线都由
+// 这些时间戳推出来，因此只要换了钟，「隔了三天再开口」就不必另写一套逻辑。
+func (a *Agent) appendKind(ctx context.Context, sessionID string, msg llm.Message, tag, origin, kind string) error {
+	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Kind: kind, Tag: tag, Origin: origin, TS: clock.Now(ctx)})
 }

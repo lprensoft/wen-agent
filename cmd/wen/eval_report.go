@@ -19,7 +19,7 @@ const (
 	rowSay         = "say"          // 一轮对话
 	rowCompact     = "compact"      // 脚本要求的压缩
 	rowAutoCompact = "auto_compact" // 上下文到阈值后自动触发的压缩
-	rowGap         = "gap"          // 脚本里标注的时间间隔（只记录）
+	rowGap         = "gap"          // 脚本里的时间跳步：虚拟时钟向前推进这么久
 )
 
 // evalRow 是报告里的一行。
@@ -65,9 +65,15 @@ type evalResult struct {
 	SetupErr        string
 	StartedAt       time.Time
 	Duration        time.Duration
-	BaselinePath    string          // 给了 --baseline 时，对比文件的路径
-	Regressions     []string        // 与基线相比退化的确定性指标
-	JudgeDelta      *evalJudgeDelta // 评分变化，只作趋势
+	// ClockFrom / ClockTo 是这条虚拟时间线的起止，报告里写成一行。
+	// ClockFixed 表示脚本写死了起点：没有跳步时也要把它说出来，否则报告读不出
+	// 这一场是深夜还是清晨。
+	ClockFrom    time.Time
+	ClockTo      time.Time
+	ClockFixed   bool
+	BaselinePath string          // 给了 --baseline 时，对比文件的路径
+	Regressions  []string        // 与基线相比退化的确定性指标
+	JudgeDelta   *evalJudgeDelta // 评分变化，只作趋势
 }
 
 // turnFailed 报告是否真的有轮次没跑成。断言失败不算：话已经说出来了，只是不合预期。
@@ -293,6 +299,9 @@ func parseJudge(raw string) (evalJudge, error) {
 
 // ---------- Markdown 报告 ----------
 
+// clockText 把虚拟时刻写成一行能读的日期：一天之内的跨度看时分，跨天看日期。
+func clockText(t time.Time) string { return t.Format("2006-01-02 15:04") }
+
 // renderEvalReport 把结果渲染成 Markdown。
 func renderEvalReport(r evalResult) string {
 	var b strings.Builder
@@ -337,6 +346,11 @@ func renderEvalReport(r evalResult) string {
 	}
 	if r.Duration > 0 {
 		b.WriteString(trf("cli.eval.duration", "- 用时：%s\n", r.Duration.Round(time.Second)))
+	}
+	if r.ClockTo.After(r.ClockFrom) {
+		b.WriteString(trf("cli.eval.clock", "- 虚拟时钟：%s → %s\n", clockText(r.ClockFrom), clockText(r.ClockTo)))
+	} else if r.ClockFixed {
+		b.WriteString(trf("cli.eval.clock_from", "- 虚拟时钟：从 %s 开始\n", clockText(r.ClockFrom)))
 	}
 	if r.turnFailed() {
 		b.WriteString(tr("cli.eval.had_failure", "- **有轮次失败**，其后的步骤未执行\n"))
@@ -403,7 +417,7 @@ func renderEvalReport(r evalResult) string {
 		case rowAutoCompact:
 			b.WriteString(tr("cli.eval.row.auto_compact", "| — | （自动压缩） | | | | | |\n"))
 		case rowGap:
-			b.WriteString(trf("cli.eval.row.gap", "| — | （间隔 %s，仅记录，不改系统时间） | | | | | |\n", humanHours(uiLang, row.GapHours)))
+			b.WriteString(trf("cli.eval.row.gap", "| — | （时间推进 %s） | | | | | |\n", humanHours(uiLang, row.GapHours)))
 		}
 	}
 
@@ -422,7 +436,7 @@ func renderEvalReport(r evalResult) string {
 		case rowCompact, rowAutoCompact:
 			b.WriteString(tr("cli.eval.mark_compact", "\n---\n*此处做过一次压缩*\n"))
 		case rowGap:
-			b.WriteString(trf("cli.eval.mark_gap", "\n---\n*此处隔了 %s（仅记录）*\n", humanHours(uiLang, row.GapHours)))
+			b.WriteString(trf("cli.eval.mark_gap", "\n---\n*此处过了 %s*\n", humanHours(uiLang, row.GapHours)))
 		}
 	}
 	return b.String()

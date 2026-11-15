@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"wen/internal/clock"
+	"wen/internal/plugin"
 	"wen/internal/stylecheck"
 )
 
@@ -111,7 +116,7 @@ func TestRenderEvalReport(t *testing.T) {
 		"| 1 | 晚上好 |",
 		"客套开场「好的，」、客套收尾「希望这对你有帮助」",
 		"| — | （压缩） |",
-		"| — | （间隔 8 小时，仅记录，不改系统时间） |",
+		"| — | （时间推进 8 小时） |",
 		"| 2 | 醒了吗 \\| 在吗 |", // 竖线转义
 		"| — | （自动压缩） |",
 		"### 第 1 轮",
@@ -125,6 +130,26 @@ func TestRenderEvalReport(t *testing.T) {
 	}
 	if strings.Contains(out, "失败") {
 		t.Error("没有失败的轮次时不该出现「失败」")
+	}
+}
+
+// 写死起点的脚本要能在报告里看出「这一场是深夜」，有跳步时两端都要写出来。
+func TestReportShowsVirtualClock(t *testing.T) {
+	at := time.Date(2026, 3, 1, 23, 30, 0, 0, time.Local)
+	res := evalResult{
+		Name:       "深夜",
+		ClockFrom:  at,
+		ClockTo:    at,
+		ClockFixed: true,
+		Rows:       []evalRow{{Kind: rowSay, Index: 1, Say: "还没睡", Reply: "嗯"}},
+	}
+	if out := renderEvalReport(res); !strings.Contains(out, "虚拟时钟：从 2026-03-01 23:30 开始") {
+		t.Errorf("报告没写出起点：\n%s", out)
+	}
+	res.ClockTo = at.Add(8 * time.Hour)
+	res.ClockFixed = false
+	if out := renderEvalReport(res); !strings.Contains(out, "2026-03-01 23:30 → 2026-03-02 07:30") {
+		t.Errorf("报告没写出跨夜的起止：\n%s", out)
 	}
 }
 
@@ -237,6 +262,89 @@ func TestParseScriptSeedsAndExpects(t *testing.T) {
 	}
 	for name, raw := range bad {
 		if _, err := parseScript([]byte(raw)); err == nil {
+			t.Errorf("%s 应当报错", name)
+		}
+	}
+}
+
+// 虚拟时钟的两个入口：脚本起点与种子的「几小时前」。写错在解析时就该拦住。
+// seedClock 是一个记录「执行时看到的时刻」的工具插件，用来验证种子的时钟。
+type seedClock struct{ at []time.Time }
+
+func (s *seedClock) Name() string                                  { return "seed_clock" }
+func (s *seedClock) Description() string                           { return "test" }
+func (s *seedClock) Init(plugin.InitContext, map[string]any) error { return nil }
+func (s *seedClock) SystemPrompt() string                          { return "" }
+func (s *seedClock) Tools() []plugin.Tool                          { return []plugin.Tool{&seedClockTool{s: s}} }
+
+type seedClockTool struct{ s *seedClock }
+
+func (t *seedClockTool) Name() string            { return "stamp" }
+func (t *seedClockTool) Description() string     { return "test" }
+func (t *seedClockTool) Schema() json.RawMessage { return json.RawMessage("{}") }
+func (t *seedClockTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	t.s.at = append(t.s.at, clock.Now(ctx))
+	return "ok", nil
+}
+
+// 种子写在「几小时前」，且写完把时钟拨回来：后面的轮次从脚本起点继续。
+func TestRunSeedsMovesClockAndRestores(t *testing.T) {
+	sc := &seedClock{}
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	if err := m.Register(sc, plugin.PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.Local)
+	clk := clock.NewManual(start)
+	ctx := clock.With(context.Background(), clk)
+	seeds := []evalSeed{{Tool: "stamp"}, {Tool: "stamp", AgoHours: 72}}
+	if err := runSeeds(ctx, &runtime{plugins: m}, clk, seeds); err != nil {
+		t.Fatal(err)
+	}
+	if len(sc.at) != 2 {
+		t.Fatalf("执行了 %d 次", len(sc.at))
+	}
+	if !sc.at[0].Equal(start) {
+		t.Errorf("第一条种子应当在起点，得到 %v", sc.at[0])
+	}
+	if want := start.Add(-72 * time.Hour); !sc.at[1].Equal(want) {
+		t.Errorf("ago_hours 的种子应当在三天前，得到 %v，期望 %v", sc.at[1], want)
+	}
+	if !clk.Now().Equal(start) {
+		t.Errorf("种子跑完时钟应当拨回起点，得到 %v", clk.Now())
+	}
+}
+
+func TestParseScriptClockFields(t *testing.T) {
+	raw := `{"start":"2026-03-01T08:00:00+08:00","seed":[{"tool":"save_memory","args":{},"ago_hours":72}],"turns":[{"say":"a"}]}`
+	sc, err := parseScript([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 3, 1, 8, 0, 0, 0, time.FixedZone("", 8*3600))
+	if got := sc.startAt(); !got.Equal(want) {
+		t.Fatalf("startAt = %v，期望 %v", got, want)
+	}
+	if sc.Seed[0].AgoHours != 72 {
+		t.Fatalf("ago_hours = %v", sc.Seed[0].AgoHours)
+	}
+
+	// 不写 start 就从当下开始，不该报错也不该是零值。
+	sc, err = parseScript([]byte(`{"turns":[{"say":"a"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.startAt().IsZero() {
+		t.Error("没写 start 时应当回落到当下")
+	}
+
+	for name, bad := range map[string]string{
+		"start 不是 RFC3339": `{"start":"3 月 1 日","turns":[{"say":"a"}]}`,
+		"负的 ago_hours":     `{"seed":[{"tool":"save_memory","ago_hours":-1}],"turns":[{"say":"a"}]}`,
+		"过长的 ago_hours":    `{"seed":[{"tool":"save_memory","ago_hours":1000000}],"turns":[{"say":"a"}]}`,
+		"过长的 gap_hours":    `{"turns":[{"say":"a"},{"gap_hours":1000000}]}`,
+	} {
+		if _, err := parseScript([]byte(bad)); err == nil {
 			t.Errorf("%s 应当报错", name)
 		}
 	}

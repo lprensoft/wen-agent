@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/plugin"
 )
@@ -39,19 +40,19 @@ func (f fakeLookup) Known(_ context.Context, name string) (string, bool) {
 }
 func (f fakeLookup) Names(context.Context) []string { return f.names }
 
-// clock 是可拨动的时钟。
-type clock struct {
+// fakeClock 是可拨动的时钟。
+type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time
 }
 
-func (c *clock) now() time.Time {
+func (c *fakeClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.t
 }
 
-func (c *clock) set(t time.Time) {
+func (c *fakeClock) set(t time.Time) {
 	c.mu.Lock()
 	c.t = t
 	c.mu.Unlock()
@@ -64,7 +65,7 @@ func at(hh, mm int) time.Time {
 
 type harness struct {
 	p        *Plugin
-	clk      *clock
+	clk      *fakeClock
 	calls    atomic.Int32
 	inputs   chan string
 	notices  chan string
@@ -77,7 +78,7 @@ type harness struct {
 // 宽限拨到很长，让循环什么都不做。
 func newHarness(t *testing.T, running bool, cfg map[string]any) *harness {
 	t.Helper()
-	h := &harness{clk: &clock{t: at(7, 32)}, inputs: make(chan string, 16), notices: make(chan string, 16),
+	h := &harness{clk: &fakeClock{t: at(7, 32)}, inputs: make(chan string, 16), notices: make(chan string, 16),
 		sessions: fakeSessions{id: "s1"}}
 	h.p = New(fakeLookup{names: []string{"林舟", "母亲", "老陈"}})
 	h.p.now = h.clk.now
@@ -625,6 +626,113 @@ func (h *harness) waitPlanning() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 触发那一轮的时间线要贯穿整条规划链：排的是哪一天、注入的「现在」、规划轮次
+// 里读到的时钟，都该是同一刻，而不是插件的系统钟。
+func TestPlanFollowsTurnClock(t *testing.T) {
+	h := newHarness(t, true, nil)
+	sep22 := time.Date(2026, 8, 22, 8, 0, 0, 0, time.Local)
+	var seen time.Time
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		seen = clock.Now(ctx)
+		return "", nil
+	}
+	ctx := clock.With(context.Background(), clock.Func(func() time.Time { return sep22 }))
+	h.p.OnTurnEnd(ctx, plugin.TurnEndEvent{SessionID: "s1", EndedAt: sep22})
+	in := recvInput(t, h)
+	if !strings.Contains(in, "08-22") {
+		t.Fatalf("规划应排这一轮时间线上的那一天：\n%s", in)
+	}
+	h.waitPlanning()
+	if !seen.Equal(sep22) {
+		t.Fatalf("规划轮次的 ctx 没带上时间线：%v", seen)
+	}
+}
+
+// 规划真正跑起来时可能已经跨过日界：日期要在执行时重算，不能冻结在触发那一刻，
+// 否则表会存到昨天，甚至盖掉已经存在的今天。
+func TestPlanRechecksDayWhenItRuns(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.clk.set(at(4, 59)) // 04:59 仍属于「昨天」这个逻辑日
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		h.clk.set(at(5, 1)) // 规划轮次跑起来时已经翻篇
+		_, err := h.tool("set_day_plan").Execute(ctx, json.RawMessage(`{"items":[{"title":"晨跑","start":"07:00","end":"07:30","flex":"可挪"}]}`))
+		return "", err
+	}
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	recvInput(t, h)
+	h.waitPlanning()
+	pl := h.plan(t)
+	if pl.Date != "2026-08-21" {
+		t.Fatalf("应排到新的一天，得到 %q", pl.Date)
+	}
+	if pl.Attempts.Count != 0 {
+		t.Fatalf("跨日界排成不该记失败：%+v", pl.Attempts)
+	}
+}
+
+// 触发时还没到今天，但规划真正跑起来时已经跨过日界、并且新的一天早有安排：
+// 这一轮必须让开，不能拿昨天那次的理由去覆盖今天的表。
+func TestPlanYieldsToNewDayPlanAcrossBoundary(t *testing.T) {
+	h := newHarness(t, true, nil)
+	// 先在新的一天排好一张表，再把钟拨回触发时刻
+	h.clk.set(at(5, 1))
+	if _, err := h.tool("set_day_plan").Execute(context.Background(),
+		json.RawMessage(`{"items":[{"title":"原来的安排","start":"09:00","end":"10:00","flex":"可挪"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.set(at(4, 59))
+	h.p.planSettle = 100 * time.Millisecond
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	h.clk.set(at(5, 1)) // 等它醒来时，日界已经翻篇
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 0 {
+		t.Fatalf("新的一天已经有表，不该再起 %d 轮规划", got)
+	}
+	if pl := h.plan(t); len(pl.Items) != 1 || pl.Items[0].Title != "原来的安排" {
+		t.Fatalf("原有的表被改写了：%+v", pl.Items)
+	}
+}
+
+// 忙重试之间同样可能跨日界、也可能被前台排好：重试前要重新核对，不能拿旧输入
+// 再叫一次模型。
+func TestPlanRechecksBeforeBusyRetry(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.clk.set(at(4, 59))
+	h.p.busyRetry = 50 * time.Millisecond
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		// 模拟前台在重试间隙把新的一天排好了
+		h.clk.set(at(5, 1))
+		if _, err := h.tool("set_day_plan").Execute(context.Background(),
+			json.RawMessage(`{"items":[{"title":"原来的安排","start":"09:00","end":"10:00","flex":"可挪"}]}`)); err != nil {
+			t.Error(err)
+		}
+		return "", plugin.ErrSessionBusy
+	}
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 1 {
+		t.Fatalf("重试前发现当天已有安排就该退出，实际调用了 %d 次", got)
+	}
+	if pl := h.plan(t); len(pl.Items) != 1 || pl.Items[0].Title != "原来的安排" {
+		t.Fatalf("原有的表被改写了：%+v", pl.Items)
+	}
+}
+
+// 等待触发那轮收尾的几秒里，今天已经被排好了：不再起轮次，更不覆盖。
+func TestPlanSkippedWhenPlannedWhileWaiting(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.p.planSettle = 100 * time.Millisecond
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	if _, err := h.tool("set_day_plan").Execute(context.Background(),
+		json.RawMessage(`{"items":[{"title":"晨跑","start":"07:00","end":"07:30","flex":"可挪"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 0 {
+		t.Fatalf("已经排好了还起了 %d 轮规划", got)
 	}
 }
 

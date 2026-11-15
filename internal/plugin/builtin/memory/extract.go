@@ -116,7 +116,7 @@ func (r extractResult) names(lang string) []string {
 // extractMemories 用一次独立的模型调用从一段对话中提炼记忆并落盘。
 //
 // ctx 必须已经带上这次提炼所属的可见域：读哪些库、写哪个库全由它决定。
-func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugin.CompleteFunc, dialogue string) (extractResult, error) {
+func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugin.CompleteFunc, dialogue string, now time.Time) (extractResult, error) {
 	var res extractResult
 	store := p.writeStore(ctx)
 	if store == nil {
@@ -152,7 +152,7 @@ func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugi
 		items = items[:s.maxExtract]
 	}
 	for _, it := range items {
-		e, revised, err := p.applyExtracted(s, store, existing, it)
+		e, revised, err := p.applyExtracted(s, store, existing, it, now)
 		if err != nil {
 			continue // 单条非法（如分类取值不对）不影响其余
 		}
@@ -162,12 +162,12 @@ func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugi
 			res.saved = append(res.saved, e)
 		}
 	}
-	res.touched = p.touchMentioned(s, existing, out.Mentioned, res)
+	res.touched = p.touchMentioned(s, existing, out.Mentioned, res, now)
 	return res, nil
 }
 
 // applyExtracted 落盘一条提炼结果，返回它是新增（false）还是修订（true）。
-func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it extracted) (Entry, bool, error) {
+func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it extracted, now time.Time) (Entry, bool, error) {
 	if strings.TrimSpace(it.Name) == "" || strings.TrimSpace(it.Content) == "" {
 		return Entry{}, false, fmt.Errorf("标题或内容为空")
 	}
@@ -187,7 +187,7 @@ func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it e
 
 	old, exists := findEntry(existing, it.Name)
 	if !exists {
-		saved, err := store.Save(e, false)
+		saved, err := store.SaveAt(e, false, now)
 		return saved, false, err
 	}
 	if it.Mode != "replace" {
@@ -201,13 +201,13 @@ func (p *Plugin) applyExtracted(s settings, store *Store, existing []Entry, it e
 		return Entry{}, false, errNotReady(s.lang)
 	}
 	e.Name = old.Name // 沿用原标题，避免大小写或分类前缀的差异生成第二条
-	saved, err := target.Save(e, true)
+	saved, err := target.SaveAt(e, true, now)
 	return saved, true, err
 }
 
 // touchMentioned 刷新对话中被提及的记忆的最后使用时间，返回实际写盘的条数。
 // 本次已新增或修订的条目跳过——它们的时间刚由 Save 更新过。
-func (p *Plugin) touchMentioned(s settings, existing []Entry, mentioned []string, res extractResult) int {
+func (p *Plugin) touchMentioned(s settings, existing []Entry, mentioned []string, res extractResult, now time.Time) int {
 	if !s.decay || len(mentioned) == 0 {
 		return 0 // 不淡忘就没人读这个时间，不值得为它写盘
 	}
@@ -219,7 +219,6 @@ func (p *Plugin) touchMentioned(s settings, existing []Entry, mentioned []string
 		just[strings.ToLower(e.Name)] = true
 	}
 
-	now := time.Now()
 	n := 0
 	for _, name := range mentioned {
 		e, ok := findEntry(existing, name)

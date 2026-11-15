@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -133,7 +133,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if store == nil {
 		return "", nil
 	}
-	st, ok, err := store.Current(s.decayPerHour, time.Now())
+	st, ok, err := store.Current(s.decayPerHour, clock.Now(ctx))
 	if err != nil || !ok {
 		return "", err
 	}

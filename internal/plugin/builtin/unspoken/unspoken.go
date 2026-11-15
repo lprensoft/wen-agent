@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -132,7 +133,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil || len(es) == 0 {
 		return "", err
 	}
-	return stateHeaderFor(s.lang) + "\n" + renderEntries(s.lang, es, s.maxInjectBytes, time.Now()), nil
+	return stateHeaderFor(s.lang) + "\n" + renderEntries(s.lang, es, s.maxInjectBytes, clock.Now(ctx)), nil
 }
 
 // storeFor 返回某个可见域的清单库（惰性创建）。未初始化时返回 nil。

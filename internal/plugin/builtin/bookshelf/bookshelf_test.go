@@ -13,15 +13,22 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 )
+
+// testNow 是所有测试共用的固定时刻；testCtx 把它装进 ctx，插件的时间都从那里取。
+var testNow = time.Date(2026, 10, 25, 15, 0, 0, 0, time.Local)
+
+func testCtx() context.Context {
+	return clock.With(context.Background(), clock.Func(func() time.Time { return testNow }))
+}
 
 func newPlugin(t *testing.T, cfg map[string]any) (*Plugin, string) {
 	t.Helper()
 	dir := t.TempDir()
 	p := New()
-	now := time.Date(2026, 10, 25, 15, 0, 0, 0, time.Local)
-	p.clock = func() time.Time { return now }
+	testNow = time.Date(2026, 10, 25, 15, 0, 0, 0, time.Local)
 	if err := p.Init(plugin.InitContext{StateDir: dir}, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +106,7 @@ func TestReadAdvancesBookmarkAndFinishes(t *testing.T) {
 	p, shelf := newPlugin(t, map[string]any{"passage_runes": 1200})
 	put(t, shelf, "呼兰河传.txt", longBook())
 	read := &readTool{p: p}
-	ctx := context.Background()
+	ctx := testCtx()
 
 	out, err := call(t, read, ctx, map[string]any{"book": "呼兰河"})
 	if err != nil {
@@ -134,13 +141,13 @@ func TestReadAdvancesBookmarkAndFinishes(t *testing.T) {
 func TestInteractiveTurnCannotOpenNewPassage(t *testing.T) {
 	p, shelf := newPlugin(t, nil)
 	put(t, shelf, "边城.txt", longBook())
-	live := plugin.WithInteractive(context.Background())
+	live := plugin.WithInteractive(testCtx())
 	if _, err := call(t, &readTool{p: p}, live, map[string]any{"book": "边城"}); err == nil ||
 		!strings.Contains(err.Error(), "跟前") {
 		t.Fatalf("真人在场时应拒绝读新的一段: %v", err)
 	}
 	// 后台读过一段之后，聊天时可以记印象
-	if _, err := call(t, &readTool{p: p}, context.Background(), map[string]any{"book": "边城"}); err != nil {
+	if _, err := call(t, &readTool{p: p}, testCtx(), map[string]any{"book": "边城"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := call(t, &noteTool{p: p}, live, map[string]any{"note": "渡口写得真静"}); err != nil {
@@ -152,7 +159,7 @@ func TestNoteRequiresReadingAndIsCapped(t *testing.T) {
 	p, shelf := newPlugin(t, nil)
 	put(t, shelf, "小王子.md", longBook())
 	note := &noteTool{p: p}
-	ctx := context.Background()
+	ctx := testCtx()
 	if _, err := call(t, note, ctx, map[string]any{"book": "小王子", "note": "玫瑰"}); err == nil {
 		t.Error("没读过的书不该有印象")
 	}
@@ -180,7 +187,7 @@ func TestBookNameMatching(t *testing.T) {
 	put(t, shelf, "三体2.txt", "乙。")
 	put(t, shelf, "不是书.pdf", "x")
 	read := &readTool{p: p}
-	ctx := context.Background()
+	ctx := testCtx()
 	if _, err := call(t, read, ctx, map[string]any{"book": "三体"}); err == nil || !strings.Contains(err.Error(), "好几本") {
 		t.Errorf("两本都对得上时应要求说全名: %v", err)
 	}
@@ -202,7 +209,7 @@ func TestBooksBeyondTheListAreDiscoverable(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		put(t, shelf, fmt.Sprintf("书%02d.txt", i), "正文。")
 	}
-	ctx := context.Background()
+	ctx := testCtx()
 	// 前八本读完
 	for i := 1; i <= 8; i++ {
 		if _, err := call(t, &readTool{p: p}, ctx, map[string]any{"book": fmt.Sprintf("书%02d", i)}); err != nil {
@@ -235,7 +242,7 @@ func TestCatalogPagesAndQuery(t *testing.T) {
 		put(t, shelf, fmt.Sprintf("书%03d.txt", i), "正文。")
 	}
 	list := &listTool{p: p}
-	ctx := context.Background()
+	ctx := testCtx()
 	last := fmt.Sprintf("《书%03d》", 2*catalogPage+1)
 
 	first, err := call(t, list, ctx, map[string]any{})
@@ -267,7 +274,7 @@ func TestClippedTitlesResolve(t *testing.T) {
 	long := strings.Repeat("长", maxTitleRunes+5)
 	put(t, shelf, long+"上.txt", "上卷。")
 	put(t, shelf, "一本"+long+".txt", "另一本。")
-	ctx := context.Background()
+	ctx := testCtx()
 	shown := clipRunes("一本"+long, maxTitleRunes)
 	if out, err := call(t, &readTool{p: p}, ctx, map[string]any{"book": shown}); err != nil || !strings.Contains(out, "另一本") {
 		t.Fatalf("按注入里的截断名应读得到: %v %s", err, out)
@@ -290,10 +297,10 @@ func TestOversizedBookIsRejectedBeforeReading(t *testing.T) {
 	if _, err := readBounded(filepath.Join(shelf, "大.txt")); err != errTooBig {
 		t.Errorf("超限应返回 errTooBig: %v", err)
 	}
-	if _, err := call(t, &readTool{p: p}, context.Background(), map[string]any{"book": "大"}); err == nil || !strings.Contains(err.Error(), "太大") {
+	if _, err := call(t, &readTool{p: p}, testCtx(), map[string]any{"book": "大"}); err == nil || !strings.Contains(err.Error(), "太大") {
 		t.Errorf("读书应拒绝超限的文件: %v", err)
 	}
-	_ = p.StartAction(context.Background(), actionShelf)
+	_ = p.StartAction(testCtx(), actionShelf)
 	st, _ := p.ActionState(actionShelf)
 	if !strings.Contains(st.Message, "大：太大了") || !strings.Contains(st.Message, "小：约 3 字") {
 		t.Errorf("报表不对: %s", st.Message)
@@ -321,11 +328,11 @@ func TestDecodesGBKAndUTF16(t *testing.T) {
 func TestProgressIsPerScope(t *testing.T) {
 	p, shelf := newPlugin(t, nil)
 	put(t, shelf, "边城.txt", longBook())
-	inner := plugin.WithScope(context.Background(), plugin.Scope{Write: "inner"})
+	inner := plugin.WithScope(testCtx(), plugin.Scope{Write: "inner"})
 	if _, err := call(t, &readTool{p: p}, inner, map[string]any{"book": "边城"}); err != nil {
 		t.Fatal(err)
 	}
-	outer, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	outer, _ := p.TurnPrompt(testCtx(), plugin.TurnEvent{})
 	if strings.Contains(outer, "在读：") {
 		t.Errorf("表面不该知道里面读过: %s", outer)
 	}
@@ -337,7 +344,7 @@ func TestProgressIsPerScope(t *testing.T) {
 
 func TestTurnPrompt(t *testing.T) {
 	p, shelf := newPlugin(t, nil)
-	ctx := context.Background()
+	ctx := testCtx()
 	if got, _ := p.TurnPrompt(ctx, plugin.TurnEvent{}); got != "" {
 		t.Errorf("书架空着时不注入: %q", got)
 	}
@@ -366,7 +373,7 @@ func TestTurnPrompt(t *testing.T) {
 
 func TestShelfAction(t *testing.T) {
 	p, shelf := newPlugin(t, nil)
-	if err := p.StartAction(context.Background(), actionShelf); err != nil {
+	if err := p.StartAction(testCtx(), actionShelf); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := p.ActionState(actionShelf)
@@ -374,7 +381,7 @@ func TestShelfAction(t *testing.T) {
 		t.Errorf("空书架: %+v", st)
 	}
 	put(t, shelf, "边城.txt", "翠翠。")
-	_ = p.StartAction(context.Background(), actionShelf)
+	_ = p.StartAction(testCtx(), actionShelf)
 	st, _ = p.ActionState(actionShelf)
 	if !strings.Contains(st.Message, "边城：约 3 字，还没读") {
 		t.Errorf("报表不对: %s", st.Message)

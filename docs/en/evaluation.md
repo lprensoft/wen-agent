@@ -12,18 +12,18 @@ wen eval docs/eval/night.json --json run.json      # structured result, for the 
 wen eval docs/eval/night.json --baseline run.json  # compare with the last run; exit 1 on deterministic regressions
 ```
 
-A script is a single JSON file. `name` names the report, `seed` preloads state, and `turns` lists the steps in order — `{"say": "what you say"}` is one turn, `{"compact": true}` forces a compaction at that point (to see whether the character survives it), and `{"gap_hours": 8}` only notes "this much time passed here" in the report (it does not change the system clock, and the model cannot see it); optional `judge_points` add extra focus points for the judge. See [`docs/eval/example.json`](eval/example.json).
+A script is a single JSON file. `name` names the report, `start` sets where the virtual clock begins (RFC 3339; defaults to now), `seed` preloads state, and `turns` lists the steps in order — `{"say": "what you say"}` is one turn, `{"compact": true}` forces a compaction at that point (to see whether the character survives it), and `{"gap_hours": 8}` advances the virtual clock by eight hours, so the next turn really is eight hours later (gaps in the history, mood decay and the day boundary all follow it, while the system clock stays put); optional `judge_points` add extra focus points for the judge. See [`docs/eval/example.json`](eval/example.json).
 
 `seed` writes state through the plugins' own tools before the run starts, the same way the model calls them:
 
 ```json
 "seed": [
   {"tool": "save_memory", "args": {"name": "Afraid of cold", "description": "Feels cold below 26°C", "type": "偏好", "content": "..."}},
-  {"tool": "update_relationship", "args": {"stage": "熟悉"}, "scope": "inner"}
+  {"tool": "update_relationship", "args": {"stage": "熟悉"}, "scope": "inner", "ago_hours": 72}
 ]
 ```
 
-`scope` puts the state into one persona; without it the shared domain is used. The value follows the same rules as a plugin name (lowercase `[a-z0-9_]`, starting with a letter) because it is spliced into a data directory, so a bad value is rejected while the script is parsed. Going through the real tools keeps the fields identical to the plugin docs and independent of the on-disk format; the trade-off is that "remembered three days ago" cannot be expressed yet — a virtual clock is still on the roadmap.
+`scope` puts the state into one persona; without it the shared domain is used. The value follows the same rules as a plugin name (lowercase `[a-z0-9_]`, starting with a letter) because it is spliced into a data directory, so a bad value is rejected while the script is parsed. `ago_hours` writes that state as many hours ago as you say — 72 means "remembered three days ago", and decay, index ordering and the "N days ago" notes in snapshots all count from that moment. Going through the real tools keeps the fields identical to the plugin docs and independent of the on-disk format.
 
 `expect` hangs off a `say` step and is a deterministic assertion that does not rely on the judge:
 
@@ -40,4 +40,4 @@ It uses the **same configuration and plugins** as `wen serve` (the same config.y
 
 The report has two halves: the gate and per-turn deterministic metrics (length, sentences, share of action passages, assistant-speak hits, expectation results), then the model's judgement ("reads as one person / tone is consistent / relationship and address are continuous", 1-5 each). With `--baseline` there is a comparison section: more hits, clearly more sentences, or new expectation failures count as regressions; **scores are shown as a trend and never fail the gate**. Before comparing, the run checks that the baseline asks the same questions — a different turn count or a different `say` line is an error rather than a comparison, so edit the script and regenerate the baseline with `--json`.
 
-Limitations: judging is done by a model and varies between runs — use it for trends, not absolute values; assistant-speak detection is a regex heuristic, so a hit is not proof of a bad reply; `gap_hours` does not make the model feel time pass, and the virtual clock is not built yet; `seed` goes through tools, so past timestamps cannot be specified.
+Limitations: judging is done by a model and varies between runs — use it for trends, not absolute values; assistant-speak detection is a regex heuristic, so a hit is not proof of a bad reply; background timers (heartbeat, scheduled items coming due, health reminders) still run on the system clock, so the virtual clock cannot reach them — they drive real timers; `seed` can only place state in the past with `ago_hours`, not at a future moment such as "takes effect in two days".
