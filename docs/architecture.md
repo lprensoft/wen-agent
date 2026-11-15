@@ -52,7 +52,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `Stoppable`（`Stop()`）——停掉自己起的后台活动。禁用、以新配置重新 `Init`、进程退出三处会调用；只做取消与有界等待，不得等整轮对话跑完。起 goroutine 的插件必须实现它，并保证 `Init` 可重入。
 - `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
 - `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用）。
-- `StateReporter`（`State(q)`）——向 Web UI 的「角色状态」页贡献只读快照（记忆索引、今日安排、现场……）。核心只负责收集、分组与限幅，不解释内容；按可见域分块，其它人格域由界面折叠。与 `StatusLines` 同契约（廉价、无副作用），另外要求只读、不调模型、不写盘，且内容绝不进入模型上下文。
+- `StateReporter`（`State(q)`）——向 Web UI 的「角色状态」页贡献只读快照（记忆索引、今日安排、现场……）。核心只负责收集、分组与限幅，不解释内容；按可见域分块，其它人格域由界面折叠。块可声明 `Pinned`（摘要进聊天页顶部那一行）与 `Collapsed`（默认收起），`PinnedOrder` 决定先后；`Manager.State(lang, pinnedOnly)` 只保留置顶块。与 `StatusLines` 同契约（廉价、无副作用），另外要求只读、不调模型、不写盘，且内容绝不进入模型上下文。
 - `DayReporter`（`DayFacts(date)`）——为某一天补一句客观事实（天气插件据此答那天的天气）。谁要用这份汇总，经 `InitContext.DayFacts` 取——按日收束的日记就是这么在正文前加上抬头的。同样是廉价、无副作用的契约，答不上来返回 nil，别编。
 - `Actionable`（`Actions()` / `StartAction()` / `ActionState()`）——声明可在设置页触发的流程（如扫码绑定），状态含说明文字与一张可选 PNG。`StartAction` 应立即返回，长流程放后台并自带超时。
 - `Categorized`（`Category()`）——声明功能分组（基础工具 / 记忆与检索 / 角色演绎 / 后台任务 / 消息通道 / 程序维护），设置页据此分节展示。只影响展示，不影响注册顺序。

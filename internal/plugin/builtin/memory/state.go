@@ -17,6 +17,9 @@ const stateIndexLimit = 30
 // 每块挂 Domain 标签，由界面折叠其它人格。正文不发——索引是标题与一句钩子，
 // 想看全文仍走 recall_memory 或编辑器。
 func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
+	if q.PinnedOnly {
+		return nil
+	}
 	p.mu.RLock()
 	base := p.libBase
 	p.mu.RUnlock()

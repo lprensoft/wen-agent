@@ -57,3 +57,28 @@ func TestStateHandler(t *testing.T) {
 		t.Errorf("category_key = %q，期望 other", body.Plugins[0].CategoryKey)
 	}
 }
+
+func TestStateHandlerPinned(t *testing.T) {
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	p := &stateTestPlugin{name: "mixed", sections: []plugin.StateSection{
+		{Key: "on", Title: "On", Pinned: true, Summary: "pinned"},
+		{Key: "off", Title: "Off"},
+	}}
+	if err := m.Register(p, plugin.PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{plugins: m}
+
+	rec := httptest.NewRecorder()
+	s.state(rec, httptest.NewRequest("GET", "/api/state?pinned=1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var body plugin.StateSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Plugins) != 1 || len(body.Plugins[0].Sections) != 1 || body.Plugins[0].Sections[0].Key != "on" {
+		t.Fatalf("body = %+v", body)
+	}
+}

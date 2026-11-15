@@ -276,7 +276,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // 心里话这类私人文本，因此显式禁掉缓存，别让浏览器或中间层留着。
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, s.plugins.State(reqLang(r)))
+	pinned := r.URL.Query().Get("pinned")
+	writeJSON(w, http.StatusOK, s.plugins.State(reqLang(r), pinned == "1" || pinned == "true"))
 }
 
 // reqLang 判定这一次请求要用哪种语言展示插件元数据。

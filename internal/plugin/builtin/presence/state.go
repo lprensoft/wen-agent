@@ -41,12 +41,14 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			continue
 		}
 		out = append(out, plugin.StateSection{
-			Key:       "presence",
-			Title:     i18n.T(q.Lang, "plugin.presence.state.title", "现场"),
-			Summary:   presenceSummary(rows),
-			Rows:      rows,
-			Domain:    tag,
-			UpdatedAt: latest,
+			Key:         "presence",
+			Title:       i18n.T(q.Lang, "plugin.presence.state.title", "现场"),
+			Summary:     presenceSummary(rows),
+			Rows:        rows,
+			Domain:      tag,
+			Pinned:      true,
+			PinnedOrder: 1,
+			UpdatedAt:   latest,
 		})
 	}
 	if len(out) == 0 {

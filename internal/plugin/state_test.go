@@ -40,7 +40,7 @@ func TestStateCollectsEnabledInOrder(t *testing.T) {
 		}
 	}
 
-	snap := m.State("en")
+	snap := m.State("en", false)
 	if len(snap.Plugins) != 1 || snap.Plugins[0].Name != "on" {
 		t.Fatalf("State = %+v，期望只收到 on", snap)
 	}
@@ -59,7 +59,7 @@ func TestStateIsolatesPanic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snap := m.State("")
+	snap := m.State("", false)
 	if len(snap.Plugins) != 1 || snap.Plugins[0].Name != "good" {
 		t.Fatalf("panic 后 State = %+v，期望只剩 good", snap)
 	}
@@ -77,7 +77,7 @@ func TestStateRowCapDoesNotMutatePlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snap := m.State("")
+	snap := m.State("", false)
 	if len(snap.Plugins) != 1 {
 		t.Fatalf("State = %+v，期望一个插件", snap)
 	}
@@ -102,7 +102,7 @@ func TestStateByteCaps(t *testing.T) {
 	if err := m.Register(big, PluginConfig{Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if snap := m.State(""); len(snap.Plugins) != 0 || !snap.Truncated {
+	if snap := m.State("", false); len(snap.Plugins) != 0 || !snap.Truncated {
 		t.Fatalf("超字节上限后 State = %+v，期望空且标记截断", snap)
 	}
 }
@@ -121,11 +121,32 @@ func TestStateTotalCap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snap := m.State("")
+	snap := m.State("", false)
 	if !snap.Truncated {
 		t.Fatal("期望标记总上限截断")
 	}
 	if len(snap.Plugins) >= 13 {
 		t.Fatalf("总上限没有生效，收到 %d 个插件", len(snap.Plugins))
+	}
+}
+
+// PinnedOnly 只收 Pinned 块，普通查询照旧全收。
+func TestStatePinnedOnly(t *testing.T) {
+	m := NewManager(InitContext{}, "")
+	p := &statePlugin{fakePlugin: fakePlugin{name: "mixed"}, sections: []StateSection{
+		{Key: "on", Title: "On", Pinned: true},
+		{Key: "off", Title: "Off"},
+	}}
+	if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned := m.State("", true)
+	if len(pinned.Plugins) != 1 || len(pinned.Plugins[0].Sections) != 1 || pinned.Plugins[0].Sections[0].Key != "on" {
+		t.Fatalf("PinnedOnly = %+v", pinned)
+	}
+	all := m.State("", false)
+	if len(all.Plugins) != 1 || len(all.Plugins[0].Sections) != 2 {
+		t.Fatalf("全量 State = %+v", all)
 	}
 }
