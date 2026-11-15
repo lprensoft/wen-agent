@@ -252,7 +252,7 @@ func (t *listTool) Execute(ctx context.Context, _ json.RawMessage) (string, erro
 		fmt.Fprintf(&b, prompt.T(s.lang, "prompt.body_sense.render.full_line", "- %s：%d 次（%s）· %s")+"\n",
 			v.Name, v.Count, v.Stage.For(s.lang), privacyLabel(s.lang, v.Privacy))
 	}
-	if line := lastTouchLine(s.lang, views); line != "" {
+	if line := lastTouchLine(s.lang, views, clock.Now(ctx)); line != "" {
 		b.WriteString(line + "\n")
 	}
 	if orphans > 0 {

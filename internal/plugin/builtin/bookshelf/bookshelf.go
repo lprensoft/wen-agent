@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -47,11 +48,9 @@ type Plugin struct {
 
 	actMu    sync.Mutex
 	actState plugin.ActionState
-
-	clock func() time.Time
 }
 
-func New() *Plugin { return &Plugin{clock: time.Now} }
+func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "bookshelf" }
 
@@ -156,7 +155,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		return "", err
 	}
 	idle := !plugin.IsInteractive(ctx) && plugin.TurnOriginFrom(ctx) == "heartbeat"
-	body := render(lang, books, st, p.clock(), idle)
+	body := render(lang, books, st, clock.Now(ctx), idle)
 	return stateHeaderFor(lang) + "\n" + body, nil
 }
 

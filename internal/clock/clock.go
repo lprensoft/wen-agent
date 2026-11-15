@@ -45,14 +45,23 @@ func With(ctx context.Context, c Clock) context.Context {
 	return context.WithValue(ctx, ctxKey{}, c)
 }
 
+// From 返回 ctx 里的钟，没有时返回 nil。
+//
+// 给「插件自己也有一个可替换的钟」这类地方用：ctx 里的钟优先，没有就用插件自己的。
+func From(ctx context.Context) Clock {
+	if ctx == nil {
+		return nil
+	}
+	c, _ := ctx.Value(ctxKey{}).(Clock)
+	return c
+}
+
 // Now 取 ctx 里的钟，没有就用系统时间。
 //
 // 回退是常态而不是异常：生产路径上没有任何地方装钟，绝大多数调用都会走这一条。
 func Now(ctx context.Context) time.Time {
-	if ctx != nil {
-		if c, ok := ctx.Value(ctxKey{}).(Clock); ok && c != nil {
-			return c.Now()
-		}
+	if c := From(ctx); c != nil {
+		return c.Now()
 	}
 	return time.Now()
 }

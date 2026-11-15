@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -124,7 +125,7 @@ func (t *readTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		if err != nil {
 			return openErr(lang, b, err)
 		}
-		now := t.p.clock()
+		now := clock.Now(ctx)
 		pr := st.Books[b.File]
 		if pr == nil {
 			pr = &Progress{Started: now}
@@ -352,7 +353,7 @@ func (t *noteTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		if !pr.Finished.IsZero() {
 			pct = 100
 		}
-		addNote(pr, Note{Text: note, At: t.p.clock(), Percent: pct})
+		addNote(pr, Note{Text: note, At: clock.Now(ctx), Percent: pct})
 		out = prompt.T(lang, "prompt.bookshelf.note.done", "记下了。")
 		return nil
 	})

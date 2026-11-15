@@ -203,22 +203,22 @@ func TestRenderViewsDegrades(t *testing.T) {
 		{Name: "手", Privacy: privacyDaily, Count: 20, Stage: stageUsual, Last: time.Now()},
 		{Name: "腰", Privacy: privacyIntimate, Count: 2, Stage: stageStrange, Last: time.Now()},
 	}
-	full := renderViews("", views, 0)
+	full := renderViews("", views, 0, time.Now())
 	if !strings.Contains(full, "20 次") || !strings.Contains(full, "最近一次接触") {
 		t.Fatalf("不限预算时应当全列:\n%s", full)
 	}
 
-	stages := renderViews("", views, len(renderStages("", views)))
+	stages := renderViews("", views, len(renderStages("", views, time.Now())), time.Now())
 	if strings.Contains(stages, "20 次") || !strings.Contains(stages, "习以为常") {
 		t.Errorf("第二级应当去掉次数只留阶段:\n%s", stages)
 	}
 
-	grouped := renderViews("", views, len(renderGrouped("", views)))
+	grouped := renderViews("", views, len(renderGrouped("", views)), time.Now())
 	if !strings.Contains(grouped, "习以为常：手") || !strings.Contains(grouped, "生疏：腰") {
 		t.Errorf("第三级应当按阶段归并:\n%s", grouped)
 	}
 
-	minimal := renderViews("", views, 10)
+	minimal := renderViews("", views, 10, time.Now())
 	if !strings.Contains(minimal, "共 2 个部位") {
 		t.Errorf("第四级应当只报部位数:\n%s", minimal)
 	}
@@ -227,7 +227,7 @@ func TestRenderViewsDegrades(t *testing.T) {
 // 时间戳为零值（旧文件、手改坏的文件）时整行不出现，不编一个出来。
 func TestLastTouchLineOmittedWhenTimestampMissing(t *testing.T) {
 	views := []view{{Name: "手", Count: 3, Stage: stageStrange}}
-	if line := lastTouchLine("", views); line != "" {
+	if line := lastTouchLine("", views, time.Now()); line != "" {
 		t.Errorf("零值时间戳应当整行不出现，得到 %q", line)
 	}
 }

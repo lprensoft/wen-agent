@@ -193,7 +193,7 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 	if len(a.Items) > s.maxItems {
 		return "", fmt.Errorf("一天最多排 %d 项（现在 %d 项），精简后重试；提示词要求的是 2-4 件事，留大段空白", s.maxItems, len(a.Items))
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	day := s.today(now)
 	today := day.Format(dateLayout)
 
@@ -381,7 +381,7 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 			"没有 id 为 %q 的项，今天的表里有：%s"), a.ID, p.idList(ctx))
 	}
 	st := p.storeFor(loc.tag)
-	now := p.now()
+	now := p.nowOf(ctx)
 	day := s.today(now)
 	today := day.Format(dateLayout)
 
@@ -656,7 +656,7 @@ func (t *addCommitmentTool) Execute(ctx context.Context, args json.RawMessage) (
 	if st == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	day := s.today(now)
 	today := day.Format(dateLayout)
 
@@ -874,7 +874,7 @@ func (t *cancelCommitmentTool) Execute(ctx context.Context, args json.RawMessage
 	p.wakeup()
 	i18n.Logf(t.p.langOf(), "log.agenda.commitment_cancelled", "agenda: 取消约定 %s（%s）：%s", removed.ID, removed.Title, reason)
 	out := prompt.Tf(s.lang, "prompt.agenda.result.commit_cancelled", "已取消约定 %s（%s %s %s）：%s。",
-		removed.ID, fmtDateCN(s.lang, removed.Date, p.now().Location()), removed.Start, removed.Title, reason)
+		removed.ID, fmtDateCN(s.lang, removed.Date, p.nowOf(ctx).Location()), removed.Start, removed.Title, reason)
 	if itemID != "" {
 		out += prompt.Tf(s.lang, "prompt.agenda.result.item_cancelled_too", "今天表里的 %s 一并标为取消。", itemID)
 	}
@@ -912,7 +912,7 @@ func (t *listCommitmentsTool) Execute(ctx context.Context, args json.RawMessage)
 	if st == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	filter := ""
 	if strings.TrimSpace(a.Date) != "" {
 		d, err := parseDate(s.lang, a.Date, now.Location())
@@ -1000,7 +1000,7 @@ func (t *addPromiseTool) Execute(ctx context.Context, args json.RawMessage) (str
 	if st == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	today := s.today(now).Format(dateLayout)
 
 	pr := Promise{Title: squash(a.Title), Note: squash(a.Note),
@@ -1082,7 +1082,7 @@ func (t *settlePromiseTool) Execute(ctx context.Context, args json.RawMessage) (
 	if st == nil {
 		return "", errNotReady(s.lang)
 	}
-	now := p.now()
+	now := p.nowOf(ctx)
 	id := strings.TrimSpace(a.ID)
 	outcome := squash(a.Outcome)
 	if err := checkRunes(s.lang, outcome, "outcome", maxOutcomeRunes); err != nil {
@@ -1153,7 +1153,7 @@ func (t *listPromisesTool) Execute(ctx context.Context, args json.RawMessage) (s
 	}
 	p := t.p
 	s := p.snapshot()
-	now := p.now()
+	now := p.nowOf(ctx)
 	var all []Promise
 	// 按可读域汇总：藏起来的域不该经条数或标题漏出存在性
 	for _, tag := range p.readDomains(ctx) {

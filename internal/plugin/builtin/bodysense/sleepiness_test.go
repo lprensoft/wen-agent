@@ -1,6 +1,7 @@
 package bodysense
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -97,15 +98,15 @@ func TestSleepinessWaveHasCooldown(t *testing.T) {
 	p.roll = func() float64 { return 0 } // 每次都想冒
 	s := p.snapshot()
 
-	if line := p.sleepinessLine(s, "s"); !strings.Contains(line, waveLineZH) {
+	if line := p.sleepinessLine(context.Background(), s, "s"); !strings.Contains(line, waveLineZH) {
 		t.Fatalf("第一阵应当冒出来：%q", line)
 	}
 	at = at.Add(5 * time.Minute)
-	if line := p.sleepinessLine(s, "s"); strings.Contains(line, waveLineZH) {
+	if line := p.sleepinessLine(context.Background(), s, "s"); strings.Contains(line, waveLineZH) {
 		t.Errorf("冷却期内不该再冒：%q", line)
 	}
 	at = at.Add(waveCooldown)
-	if line := p.sleepinessLine(s, "s"); !strings.Contains(line, waveLineZH) {
+	if line := p.sleepinessLine(context.Background(), s, "s"); !strings.Contains(line, waveLineZH) {
 		t.Errorf("冷却过后应当能再冒：%q", line)
 	}
 }

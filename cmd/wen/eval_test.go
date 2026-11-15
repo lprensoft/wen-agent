@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"wen/internal/clock"
+	"wen/internal/plugin"
 	"wen/internal/stylecheck"
 )
 
@@ -244,6 +248,53 @@ func TestParseScriptSeedsAndExpects(t *testing.T) {
 }
 
 // 虚拟时钟的两个入口：脚本起点与种子的「几小时前」。写错在解析时就该拦住。
+// seedClock 是一个记录「执行时看到的时刻」的工具插件，用来验证种子的时钟。
+type seedClock struct{ at []time.Time }
+
+func (s *seedClock) Name() string                                  { return "seed_clock" }
+func (s *seedClock) Description() string                           { return "test" }
+func (s *seedClock) Init(plugin.InitContext, map[string]any) error { return nil }
+func (s *seedClock) SystemPrompt() string                          { return "" }
+func (s *seedClock) Tools() []plugin.Tool                          { return []plugin.Tool{&seedClockTool{s: s}} }
+
+type seedClockTool struct{ s *seedClock }
+
+func (t *seedClockTool) Name() string            { return "stamp" }
+func (t *seedClockTool) Description() string     { return "test" }
+func (t *seedClockTool) Schema() json.RawMessage { return json.RawMessage("{}") }
+func (t *seedClockTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	t.s.at = append(t.s.at, clock.Now(ctx))
+	return "ok", nil
+}
+
+// 种子写在「几小时前」，且写完把时钟拨回来：后面的轮次从脚本起点继续。
+func TestRunSeedsMovesClockAndRestores(t *testing.T) {
+	sc := &seedClock{}
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	if err := m.Register(sc, plugin.PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.Local)
+	clk := clock.NewManual(start)
+	ctx := clock.With(context.Background(), clk)
+	seeds := []evalSeed{{Tool: "stamp"}, {Tool: "stamp", AgoHours: 72}}
+	if err := runSeeds(ctx, &runtime{plugins: m}, clk, seeds); err != nil {
+		t.Fatal(err)
+	}
+	if len(sc.at) != 2 {
+		t.Fatalf("执行了 %d 次", len(sc.at))
+	}
+	if !sc.at[0].Equal(start) {
+		t.Errorf("第一条种子应当在起点，得到 %v", sc.at[0])
+	}
+	if want := start.Add(-72 * time.Hour); !sc.at[1].Equal(want) {
+		t.Errorf("ago_hours 的种子应当在三天前，得到 %v，期望 %v", sc.at[1], want)
+	}
+	if !clk.Now().Equal(start) {
+		t.Errorf("种子跑完时钟应当拨回起点，得到 %v", clk.Now())
+	}
+}
+
 func TestParseScriptClockFields(t *testing.T) {
 	raw := `{"start":"2026-03-01T08:00:00+08:00","seed":[{"tool":"save_memory","args":{},"ago_hours":72}],"turns":[{"say":"a"}]}`
 	sc, err := parseScript([]byte(raw))
@@ -270,6 +321,8 @@ func TestParseScriptClockFields(t *testing.T) {
 	for name, bad := range map[string]string{
 		"start 不是 RFC3339": `{"start":"3 月 1 日","turns":[{"say":"a"}]}`,
 		"负的 ago_hours":     `{"seed":[{"tool":"save_memory","ago_hours":-1}],"turns":[{"say":"a"}]}`,
+		"过长的 ago_hours":    `{"seed":[{"tool":"save_memory","ago_hours":1000000}],"turns":[{"say":"a"}]}`,
+		"过长的 gap_hours":    `{"turns":[{"say":"a"},{"gap_hours":1000000}]}`,
 	} {
 		if _, err := parseScript([]byte(bad)); err == nil {
 			t.Errorf("%s 应当报错", name)

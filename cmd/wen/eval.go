@@ -26,6 +26,11 @@ import (
 // 以及模型对「像不像同一个人 / 语气是否一致 / 关系是否连续」的三项打分（模型打的，
 // 看趋势不看绝对值）。本期只测量，不据此改任何行为。
 
+// maxClockHours 限制脚本能把时钟推多远。五十年的小时数已经远超任何脚本的需要；
+// 而再往上（约二百九十二年）换算成 time.Duration 就会溢出成负数，时钟反而往回走，
+// 脚本作者看不出哪里错了。
+const maxClockHours = 24 * 366 * 50
+
 // judgeTimeout 是评判那一次模型调用的上限。
 const judgeTimeout = 3 * time.Minute
 
@@ -443,6 +448,9 @@ func parseScript(raw []byte) (evalScript, error) {
 		if sd.AgoHours < 0 {
 			return sc, fmt.Errorf(tr("cli.eval.err.seed_ago_neg", "seed[%d]: ago_hours 不能为负"), i+1)
 		}
+		if sd.AgoHours > maxClockHours {
+			return sc, fmt.Errorf(tr("cli.eval.err.seed_ago_long", "seed[%d]: ago_hours 超过 %d 小时"), i+1, maxClockHours)
+		}
 	}
 	says := 0
 	for i, st := range sc.Turns {
@@ -457,6 +465,9 @@ func parseScript(raw []byte) (evalScript, error) {
 		if st.GapHours != 0 {
 			if st.GapHours < 0 {
 				return sc, fmt.Errorf(tr("cli.eval.err.neg_gap", "turns[%d]: gap_hours 不能为负"), i)
+			}
+			if st.GapHours > maxClockHours {
+				return sc, fmt.Errorf(tr("cli.eval.err.gap_long", "turns[%d]: gap_hours 超过 %d 小时"), i, maxClockHours)
 			}
 			n++
 		}

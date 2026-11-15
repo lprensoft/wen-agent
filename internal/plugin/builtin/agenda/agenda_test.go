@@ -39,19 +39,19 @@ func (f fakeLookup) Known(_ context.Context, name string) (string, bool) {
 }
 func (f fakeLookup) Names(context.Context) []string { return f.names }
 
-// clock 是可拨动的时钟。
-type clock struct {
+// fakeClock 是可拨动的时钟。
+type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time
 }
 
-func (c *clock) now() time.Time {
+func (c *fakeClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.t
 }
 
-func (c *clock) set(t time.Time) {
+func (c *fakeClock) set(t time.Time) {
 	c.mu.Lock()
 	c.t = t
 	c.mu.Unlock()
@@ -64,7 +64,7 @@ func at(hh, mm int) time.Time {
 
 type harness struct {
 	p        *Plugin
-	clk      *clock
+	clk      *fakeClock
 	calls    atomic.Int32
 	inputs   chan string
 	notices  chan string
@@ -77,7 +77,7 @@ type harness struct {
 // 宽限拨到很长，让循环什么都不做。
 func newHarness(t *testing.T, running bool, cfg map[string]any) *harness {
 	t.Helper()
-	h := &harness{clk: &clock{t: at(7, 32)}, inputs: make(chan string, 16), notices: make(chan string, 16),
+	h := &harness{clk: &fakeClock{t: at(7, 32)}, inputs: make(chan string, 16), notices: make(chan string, 16),
 		sessions: fakeSessions{id: "s1"}}
 	h.p = New(fakeLookup{names: []string{"林舟", "母亲", "老陈"}})
 	h.p.now = h.clk.now
