@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
 
@@ -290,7 +291,7 @@ func (s *Store) save(ps []Person) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.people.store.save_failed", "保存人物库失败: %w"), err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := plugin.RenameFile(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.people.store.save_failed", "保存人物库失败: %w"), err)
 	}

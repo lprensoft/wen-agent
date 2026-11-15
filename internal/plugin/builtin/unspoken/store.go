@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
 
@@ -204,12 +205,9 @@ func (s *Store) save(es []Entry) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.unspoken.err.mkdir", "创建心里话目录失败: %w"), err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf(prompt.T(s.lang, "prompt.unspoken.err.save", "保存心里话失败: %w"), err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
+	// 临时文件 + 改名由 plugin.WriteFileAtomic 负责：Windows 上杀毒软件会短暂占住
+	// 刚写出的文件，直接改名会偶发 "Access is denied"，那里有几次短重试。
+	if err := plugin.WriteFileAtomic(s.path, raw, 0o600); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.unspoken.err.save", "保存心里话失败: %w"), err)
 	}
 	return nil

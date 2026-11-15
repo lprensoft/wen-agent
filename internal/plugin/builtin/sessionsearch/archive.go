@@ -43,7 +43,7 @@ func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, e
 		return "", fmt.Errorf(prompt.T(s.lang, "prompt.session_search.err.write_archive",
 			"写入归档失败: %w"), err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := plugin.RenameFile(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf(prompt.T(s.lang, "prompt.session_search.err.write_archive",
 			"写入归档失败: %w"), err)
