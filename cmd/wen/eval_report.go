@@ -65,10 +65,12 @@ type evalResult struct {
 	SetupErr        string
 	StartedAt       time.Time
 	Duration        time.Duration
-	// ClockFrom / ClockTo 是这条虚拟时间线的起止，报告里写成一行；
-	// 没有跳步时两者相同，不显示。
+	// ClockFrom / ClockTo 是这条虚拟时间线的起止，报告里写成一行。
+	// ClockFixed 表示脚本写死了起点：没有跳步时也要把它说出来，否则报告读不出
+	// 这一场是深夜还是清晨。
 	ClockFrom    time.Time
 	ClockTo      time.Time
+	ClockFixed   bool
 	BaselinePath string          // 给了 --baseline 时，对比文件的路径
 	Regressions  []string        // 与基线相比退化的确定性指标
 	JudgeDelta   *evalJudgeDelta // 评分变化，只作趋势
@@ -347,6 +349,8 @@ func renderEvalReport(r evalResult) string {
 	}
 	if r.ClockTo.After(r.ClockFrom) {
 		b.WriteString(trf("cli.eval.clock", "- 虚拟时钟：%s → %s\n", clockText(r.ClockFrom), clockText(r.ClockTo)))
+	} else if r.ClockFixed {
+		b.WriteString(trf("cli.eval.clock_from", "- 虚拟时钟：从 %s 开始\n", clockText(r.ClockFrom)))
 	}
 	if r.turnFailed() {
 		b.WriteString(tr("cli.eval.had_failure", "- **有轮次失败**，其后的步骤未执行\n"))

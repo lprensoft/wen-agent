@@ -113,6 +113,7 @@
   "cli.eval.aborted_judge": "aborted before judging",
   "cli.eval.avg": "- Average length: %d characters, average share in action passages: %d%%\n",
   "cli.eval.clock": "- Virtual clock: %s → %s\n",
+  "cli.eval.clock_from": "- Virtual clock: starts at %s\n",
   "cli.eval.compactions": ", %d compactions (%d asked for by the script, %d automatic)",
   "cli.eval.duration": "- Elapsed: %s\n",
   "cli.eval.err.bad_json": "not valid script JSON: %w",

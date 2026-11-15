@@ -133,6 +133,26 @@ func TestRenderEvalReport(t *testing.T) {
 	}
 }
 
+// 写死起点的脚本要能在报告里看出「这一场是深夜」，有跳步时两端都要写出来。
+func TestReportShowsVirtualClock(t *testing.T) {
+	at := time.Date(2026, 3, 1, 23, 30, 0, 0, time.Local)
+	res := evalResult{
+		Name:       "深夜",
+		ClockFrom:  at,
+		ClockTo:    at,
+		ClockFixed: true,
+		Rows:       []evalRow{{Kind: rowSay, Index: 1, Say: "还没睡", Reply: "嗯"}},
+	}
+	if out := renderEvalReport(res); !strings.Contains(out, "虚拟时钟：从 2026-03-01 23:30 开始") {
+		t.Errorf("报告没写出起点：\n%s", out)
+	}
+	res.ClockTo = at.Add(8 * time.Hour)
+	res.ClockFixed = false
+	if out := renderEvalReport(res); !strings.Contains(out, "2026-03-01 23:30 → 2026-03-02 07:30") {
+		t.Errorf("报告没写出跨夜的起止：\n%s", out)
+	}
+}
+
 func TestRenderEvalReportFailures(t *testing.T) {
 	r := sampleResult()
 	r.Rows = append(r.Rows, evalRow{Kind: rowSay, Index: 3, Say: "再说一句", Err: "请求超时"})

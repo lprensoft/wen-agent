@@ -214,10 +214,11 @@ func runSeeds(ctx context.Context, rt *runtime, clk *clock.Manual, seeds []evalS
 // runScript 跑完整个脚本并收集结果。progress 收每轮的进度提示，可为 nil。
 func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manual, progress *os.File) evalResult {
 	res := evalResult{
-		Name:      sc.Name,
-		Model:     rt.current.ProviderName + "/" + rt.current.ModelID,
-		StartedAt: time.Now(),
-		ClockFrom: clk.Now(),
+		Name:       sc.Name,
+		Model:      rt.current.ProviderName + "/" + rt.current.ModelID,
+		StartedAt:  time.Now(),
+		ClockFrom:  clk.Now(),
+		ClockFixed: !sc.start.IsZero(),
 	}
 	res.Persona, res.Samples, res.HasRoleplay = roleplayTexts(rt.plugins)
 
