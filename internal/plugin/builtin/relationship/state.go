@@ -23,7 +23,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	}
 
 	var out []plugin.StateSection
-	failed := false
 	for _, tag := range plugin.ReadDomains(base, plugin.Scope{}) {
 		store := p.storeFor(tag)
 		if store == nil {
@@ -32,7 +31,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		snap, ok, err := store.Load()
 		if err != nil {
 			i18n.Logf(p.langOf(), "log.relationship.state_failed", "读取关系状态失败（域 %q）: %v", tag, err)
-			failed = true
 			continue
 		}
 		if !ok || snap.Empty() {
@@ -46,16 +44,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Domain:    tag,
 			UpdatedAt: snap.Updated,
 		})
-	}
-	if len(out) == 0 {
-		if failed {
-			return nil
-		}
-		return []plugin.StateSection{{
-			Key:   "relationship",
-			Title: i18n.T(q.Lang, "plugin.relationship.state.title", "关系"),
-			Empty: i18n.T(q.Lang, "plugin.relationship.state.empty", "还没有记下关系。"),
-		}}
 	}
 	return out
 }

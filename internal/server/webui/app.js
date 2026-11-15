@@ -427,7 +427,9 @@ async function loadSessions() {
       await fetch(`/api/sessions/${m.id}`, { method: "DELETE" });
       if (currentSession === m.id) {
         currentSession = null;
+        currentDomain = "";
         clearMessages();
+        loadPinnedState();
       }
       loadSessions();
     });
@@ -458,7 +460,13 @@ async function selectSession(id, internal = false) {
   currentSession = id;
   currentDomain = "";
   const res = await fetch(`/api/sessions/${id}`);
-  if (!res.ok) { await loadSessions(); return; }
+  if (!res.ok) {
+    currentSession = null;
+    currentDomain = "";
+    loadPinnedState();
+    await loadSessions();
+    return;
+  }
   const data = await res.json();
   currentDomain = domainOf(data.messages);
   renderHistory(data.messages);
@@ -525,6 +533,15 @@ async function refreshFp() {
 }
 
 setInterval(syncCurrentSession, 5000);
+
+// 「此刻」里的相对时间会过期：心跳的「下次约」、心情的回落都随时间变。
+// 页面不可见时不发请求，回到页面时立刻补一次。
+setInterval(() => {
+  if (!document.hidden) loadPinnedState();
+}, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadPinnedState();
+});
 
 // ---------- 消息渲染 ----------
 
@@ -1359,23 +1376,24 @@ async function loadState() {
   }
 }
 
-// stateDomainFor 选状态页/顶部条要展开的那一个可见域：优先当前会话的域，
-// 没有就退到最近更新的一块，再没有就取第一个域。
+// stateDomainFor 选状态页要展开的那一个可见域：有当前会话的域就只认它，
+// 没有会话信息时才退到共享域或最近更新的一块。
 function stateDomainFor(plugins) {
-  const domains = new Set();
+  // 有当前人格就只认它；没有当前人格时才退回共享域或最近更新的域。
+  if (currentDomain !== "") return currentDomain;
+
   let hasShared = false;
+  const domains = new Set();
   for (const p of plugins) {
     for (const s of p.sections || []) {
       if (s.domain) domains.add(s.domain);
       else hasShared = true;
     }
   }
-  let domain = currentDomain;
-  const known = domain === "" ? hasShared : domains.has(domain);
-  if (known) return domain;
+  if (hasShared) return "";
 
-  domain = "";
   let latest = 0;
+  let domain = "";
   for (const p of plugins) {
     for (const s of p.sections || []) {
       const ts = Date.parse(s.updated_at || "") || 0;

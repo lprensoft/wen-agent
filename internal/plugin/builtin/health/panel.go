@@ -20,7 +20,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	now := time.Now()
 
 	var out []plugin.StateSection
-	failed := false
 	for _, tag := range plugin.ReadDomains(s.base, plugin.Scope{}) {
 		store := p.storeFor(tag)
 		if store == nil {
@@ -29,7 +28,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		snap, err := store.Current(now)
 		if err != nil {
 			i18n.Logf(p.langOf(), "log.health.state_failed", "读取身体状况失败（域 %q）: %v", tag, err)
-			failed = true
 			continue
 		}
 		var rows []plugin.StateRow
@@ -46,7 +44,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			}
 			rows = append(rows, plugin.StateRow{
 				Value:  v.Cond.Name,
-				Detail: statusText(q.Lang, v, now),
+				Detail: healthDetail(q.Lang, v, now),
 				Tone:   tone,
 			})
 		}
@@ -61,15 +59,16 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Domain:  tag,
 		})
 	}
-	if len(out) == 0 {
-		if failed {
-			return nil
-		}
-		return []plugin.StateSection{{
-			Key:   "health",
-			Title: i18n.T(q.Lang, "plugin.health.state.title", "身体"),
-			Empty: i18n.T(q.Lang, "plugin.health.state.empty", "现在没有状况。"),
-		}}
-	}
 	return out
+}
+
+// healthDetail 是状态页里的补充说明。行本身已经给出状况名，这里只写病程与
+// 处理方式，不再把名字重复一遍。
+func healthDetail(lang string, v View, now time.Time) string {
+	if v.Phase == phasePending {
+		return i18n.Tf(lang, "plugin.health.state.pending", "预计%s发作",
+			untilStatus(lang, v.Cond.Onset.Sub(now)))
+	}
+	return i18n.Tf(lang, "plugin.health.state.day", "第 %d 天（%s）",
+		v.Day, careStatus(lang, v.Cond.Care))
 }

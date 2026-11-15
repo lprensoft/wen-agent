@@ -2,6 +2,7 @@ package health
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func stateTestPlugin(t *testing.T) *Plugin {
 
 func TestStateActiveCondition(t *testing.T) {
 	p := stateTestPlugin(t)
-	now := time.Date(2026, 11, 15, 14, 0, 0, 0, time.Local)
+	now := time.Now()
 	if _, err := p.storeFor("").Add("感冒", "有点不舒服", now, 3, "硬扛", now, p.snapshot().limits()); err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +35,10 @@ func TestStateActiveCondition(t *testing.T) {
 	if got.Rows[0].Value != "感冒" {
 		t.Errorf("rows = %+v", got.Rows)
 	}
+	// 行已经有状况名，Detail 不该再重复一遍。
+	if strings.Contains(got.Rows[0].Detail, "感冒") {
+		t.Errorf("Detail 重复了状况名: %q", got.Rows[0].Detail)
+	}
 	if pinned := p.State(plugin.StateQuery{Lang: "zh", PinnedOnly: true}); len(pinned) != 0 {
 		t.Fatalf("PinnedOnly = %+v，期望空", pinned)
 	}
@@ -42,7 +47,7 @@ func TestStateActiveCondition(t *testing.T) {
 func TestStateEmpty(t *testing.T) {
 	p := stateTestPlugin(t)
 	secs := p.State(plugin.StateQuery{Lang: "zh"})
-	if len(secs) != 1 || secs[0].Empty == "" {
-		t.Fatalf("空身体的 State = %+v", secs)
+	if len(secs) != 0 {
+		t.Fatalf("空身体的 State = %+v，期望不出现空块", secs)
 	}
 }

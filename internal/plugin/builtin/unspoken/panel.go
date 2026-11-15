@@ -19,7 +19,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	}
 
 	var out []plugin.StateSection
-	failed := false
 	for _, tag := range plugin.ReadDomains(s.base, plugin.Scope{}) {
 		store := p.storeFor(tag)
 		if store == nil {
@@ -28,7 +27,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		entries, err := store.List()
 		if err != nil {
 			i18n.Logf(p.langOf(), "log.unspoken.state_failed", "读取心里话失败（域 %q）: %v", tag, err)
-			failed = true
 			continue
 		}
 		if len(entries) == 0 {
@@ -54,16 +52,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			UpdatedAt: latest,
 			More:      len(entries) - len(rows),
 		})
-	}
-	if len(out) == 0 {
-		if failed {
-			return nil
-		}
-		return []plugin.StateSection{{
-			Key:   "unspoken",
-			Title: i18n.T(q.Lang, "plugin.unspoken.state.title", "心里话"),
-			Empty: i18n.T(q.Lang, "plugin.unspoken.state.empty", "还没有没说出口的话。"),
-		}}
 	}
 	return out
 }

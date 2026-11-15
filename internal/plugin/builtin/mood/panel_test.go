@@ -13,6 +13,7 @@ func stateTestPlugin(t *testing.T) *Plugin {
 	p := New()
 	p.lang = "zh"
 	p.base = filepath.Join(t.TempDir(), "mood")
+	p.decayPerHour = 0 // 状态测试只看摘要素材，不让真实时钟把数值吹走
 	return p
 }
 
@@ -28,7 +29,7 @@ func TestStateSummaryAndPinned(t *testing.T) {
 		t.Fatalf("State = %+v", secs)
 	}
 	got := secs[0]
-	if got.Title != "心情" || got.Summary != "心情：有点累" || !got.Pinned || got.PinnedOrder != 2 {
+	if got.Title != "心情" || got.Summary != "有点累" || !got.Pinned || got.PinnedOrder != 2 {
 		t.Errorf("section = %+v", got)
 	}
 	if len(got.Rows) != 1 || got.Rows[0].Value != "愉快" || got.Rows[0].Detail != "有点累" {
@@ -43,7 +44,7 @@ func TestStateSummaryAndPinned(t *testing.T) {
 func TestStateEmpty(t *testing.T) {
 	p := stateTestPlugin(t)
 	secs := p.State(plugin.StateQuery{Lang: "zh"})
-	if len(secs) != 1 || secs[0].Empty == "" {
-		t.Fatalf("空心情的 State = %+v", secs)
+	if len(secs) != 0 {
+		t.Fatalf("空心情的 State = %+v，期望不出现空块", secs)
 	}
 }

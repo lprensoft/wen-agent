@@ -46,7 +46,7 @@ func TestStateRowsAndPinnedOnly(t *testing.T) {
 func TestStateEmpty(t *testing.T) {
 	p := stateTestPlugin(t)
 	secs := p.State(plugin.StateQuery{Lang: "zh"})
-	if len(secs) != 1 || secs[0].Empty == "" {
-		t.Fatalf("空关系的 State = %+v", secs)
+	if len(secs) != 0 {
+		t.Fatalf("空关系的 State = %+v，期望不出现空块", secs)
 	}
 }

@@ -17,7 +17,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	now := time.Now()
 
 	var out []plugin.StateSection
-	failed := false
 	for _, tag := range plugin.ReadDomains(s.base, plugin.Scope{}) {
 		store := p.storeFor(tag)
 		if store == nil {
@@ -26,16 +25,16 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		st, ok, err := store.Current(s.decayPerHour, now)
 		if err != nil {
 			i18n.Logf(p.langOf(), "log.mood.state_failed", "读取心情失败（域 %q）: %v", tag, err)
-			failed = true
 			continue
 		}
 		if !ok {
 			continue
 		}
 		band := moodBandLabel(q.Lang, st.Value)
-		summary := i18n.Tf(q.Lang, "plugin.mood.state.summary", "心情：%s", band)
+		// 状态页标题已经是「心情」，摘要不再重复前缀；顶部条有「此刻：」领起。
+		summary := band
 		if st.Reason != "" {
-			summary = i18n.Tf(q.Lang, "plugin.mood.state.summary_reason", "心情：%s", st.Reason)
+			summary = st.Reason
 		}
 		row := plugin.StateRow{
 			Label: i18n.T(q.Lang, "plugin.mood.state.value", "心情"),
@@ -54,16 +53,6 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			PinnedOrder: 2,
 			UpdatedAt:   st.Updated,
 		})
-	}
-	if len(out) == 0 {
-		if failed {
-			return nil
-		}
-		return []plugin.StateSection{{
-			Key:   "mood",
-			Title: i18n.T(q.Lang, "plugin.mood.state.title", "心情"),
-			Empty: i18n.T(q.Lang, "plugin.mood.state.empty", "还没有记下心情。"),
-		}}
 	}
 	return out
 }
