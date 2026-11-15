@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
 
@@ -169,7 +170,7 @@ func (p *Plugin) saveLocked() error {
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p.tasksPath())
+	return plugin.RenameFile(tmp, p.tasksPath())
 }
 
 // catchUpLocked 处理宕机期间错过的任务：once 未超过补跑窗口的保持待跑（到点判定

@@ -55,7 +55,7 @@ func saveCredentials(stateDir string, c credentials) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, credsPath(stateDir))
+	return plugin.RenameFile(tmp, credsPath(stateDir))
 }
 
 // ---------- 扫码绑定（插件操作入口） ----------

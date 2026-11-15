@@ -18,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
 
@@ -389,7 +390,7 @@ func (s *Store) Archive(name string, now time.Time) (Entry, error) {
 		}
 		dst = filepath.Join(dir, fmt.Sprintf("%s.%s-%d.md", e.Slug, now.Format("20060102"), i))
 	}
-	if err := os.Rename(src, dst); err != nil {
+	if err := plugin.RenameFile(src, dst); err != nil {
 		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.archive", "归档记忆失败: %w"), err)
 	}
 	s.dirty = true
@@ -545,7 +546,7 @@ func writeFileAtomic(lang, path string, data []byte) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf(prompt.T(lang, "prompt.memory.err.save", "保存记忆失败: %w"), err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := plugin.RenameFile(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf(prompt.T(lang, "prompt.memory.err.save", "保存记忆失败: %w"), err)
 	}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"time"
+	"wen/internal/plugin"
 )
 
 const (
@@ -76,7 +77,7 @@ func saveState(dir string, st State) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := plugin.RenameFile(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
