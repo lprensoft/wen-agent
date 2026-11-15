@@ -45,8 +45,11 @@ func With(ctx context.Context, c Clock) context.Context {
 	return context.WithValue(ctx, ctxKey{}, c)
 }
 
-// from 返回 ctx 里的钟，没有时返回 nil。
-func from(ctx context.Context) Clock {
+// From 返回 ctx 里的钟，没有时返回 nil。
+//
+// 给「把这一轮的时间线带进后台工作」的地方用：后台 goroutine 拿到的 ctx 是插件
+// 自己的（没有轮次信息），把钟接过去它才看得见同一条时间线。
+func From(ctx context.Context) Clock {
 	if ctx == nil {
 		return nil
 	}
@@ -66,7 +69,7 @@ func Now(ctx context.Context) time.Time {
 // 给「插件自己也有一个可替换的钟」的地方用（日程、身体感知）：规则只有一条，
 // ctx 里的钟优先，插件自己的兜底。生产里两者都是系统时间，测试替换的是后者。
 func NowOr(ctx context.Context, fallback func() time.Time) time.Time {
-	if c := from(ctx); c != nil {
+	if c := From(ctx); c != nil {
 		return c.Now()
 	}
 	return fallback()

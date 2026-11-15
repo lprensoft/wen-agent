@@ -651,6 +651,66 @@ func TestPlanFollowsTurnClock(t *testing.T) {
 	}
 }
 
+// 规划真正跑起来时可能已经跨过日界：日期要在执行时重算，不能冻结在触发那一刻，
+// 否则表会存到昨天，甚至盖掉已经存在的今天。
+func TestPlanRechecksDayWhenItRuns(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.clk.set(at(4, 59)) // 04:59 仍属于「昨天」这个逻辑日
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		h.clk.set(at(5, 1)) // 规划轮次跑起来时已经翻篇
+		_, err := h.tool("set_day_plan").Execute(ctx, json.RawMessage(`{"items":[{"title":"晨跑","start":"07:00","end":"07:30","flex":"可挪"}]}`))
+		return "", err
+	}
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	recvInput(t, h)
+	h.waitPlanning()
+	pl := h.plan(t)
+	if pl.Date != "2026-08-21" {
+		t.Fatalf("应排到新的一天，得到 %q", pl.Date)
+	}
+	if pl.Attempts.Count != 0 {
+		t.Fatalf("跨日界排成不该记失败：%+v", pl.Attempts)
+	}
+}
+
+// 触发时还没到今天，但规划真正跑起来时已经跨过日界、并且新的一天早有安排：
+// 这一轮必须让开，不能拿昨天那次的理由去覆盖今天的表。
+func TestPlanYieldsToNewDayPlanAcrossBoundary(t *testing.T) {
+	h := newHarness(t, true, nil)
+	// 先在新的一天排好一张表，再把钟拨回触发时刻
+	h.clk.set(at(5, 1))
+	if _, err := h.tool("set_day_plan").Execute(context.Background(),
+		json.RawMessage(`{"items":[{"title":"原来的安排","start":"09:00","end":"10:00","flex":"可挪"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.clk.set(at(4, 59))
+	h.p.planSettle = 100 * time.Millisecond
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	h.clk.set(at(5, 1)) // 等它醒来时，日界已经翻篇
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 0 {
+		t.Fatalf("新的一天已经有表，不该再起 %d 轮规划", got)
+	}
+	if pl := h.plan(t); len(pl.Items) != 1 || pl.Items[0].Title != "原来的安排" {
+		t.Fatalf("原有的表被改写了：%+v", pl.Items)
+	}
+}
+
+// 等待触发那轮收尾的几秒里，今天已经被排好了：不再起轮次，更不覆盖。
+func TestPlanSkippedWhenPlannedWhileWaiting(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.p.planSettle = 100 * time.Millisecond
+	h.p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "s1", EndedAt: h.clk.now()})
+	if _, err := h.tool("set_day_plan").Execute(context.Background(),
+		json.RawMessage(`{"items":[{"title":"晨跑","start":"07:00","end":"07:30","flex":"可挪"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 0 {
+		t.Fatalf("已经排好了还起了 %d 轮规划", got)
+	}
+}
+
 func TestPlanTriggeredByHeartbeatTurn(t *testing.T) {
 	h := newHarness(t, true, nil)
 	h.call(t, "add_commitment", `{"date":"2026-08-21","start":"18:30","end":"20:00","title":"和对方吃晚饭","with_user":true}`)

@@ -55,17 +55,21 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	}
 	p.planning[tag] = true
 	p.wg.Add(1)
-	// 整条规划链固定在触发那一刻：日期、注入的「现在」、以及规划轮次写下的消息
-	// 都按同一条时间线走。取系统时间的后台 ctx 会让它们各自漂回机器时间。
-	pctx := clock.With(p.ctx, clock.Func(func() time.Time { return now }))
+	// 把这一轮的时间线带进后台，但只带「钟」不冻结「时刻」：规划可能等上几秒、
+	// 重试几次，甚至跨过日界，拿触发那一刻的日期去排表会排到昨天，还会盖掉已经
+	// 存在的今天。生产路径的 ctx 里没有钟，后台照旧用系统时间。
+	pctx := p.ctx
+	if c := clock.From(ctx); c != nil {
+		pctx = clock.With(pctx, c)
+	}
 	p.mu.Unlock()
-	go p.runPlan(pctx, tag, ev.SessionID, today)
+	go p.runPlan(pctx, tag, ev.SessionID)
 }
 
 // runPlan 跑一次规划轮次：等触发那轮彻底收尾，清掉已过期的约定，再以【规划今天】
 // 为一次性输入起轮次。会话忙限次重试；其它失败与「轮次成功但没提交表」各计一次
 // 尝试，达到上限就留一条会话注记。
-func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
+func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
 	defer p.wg.Done()
 	defer func() {
 		p.mu.Lock()
@@ -85,6 +89,17 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 	st := p.storeFor(tag)
 	if st == nil || s.runTurn == nil {
 		return
+	}
+	// 等到真正要跑的时候再算一次「今天」。等待、重试与模型调用都可能跨过日界，
+	// 按触发那一刻的日期排表会排到昨天；这几秒里别人排好的今天也要让出来。
+	today := s.today(p.nowOf(ctx)).Format(dateLayout)
+	if pl, err := st.LoadPlan(); err == nil {
+		if pl.Date == today {
+			return
+		}
+		if pl.Attempts.Date == today && pl.Attempts.Count >= defMaxPlanAttempts {
+			return
+		}
 	}
 	nctx := plugin.WithScope(ctx, plugin.Scope{Write: tag})
 	p.pruneCommitments(nctx, st, sid, today)
@@ -111,7 +126,9 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 		switch {
 		case err == nil:
 			pl, lerr := st.LoadPlan()
-			if lerr == nil && pl.Date == today {
+			// 模型调用本身也可能跨过日界：表排在今天或更晚都算排成了，
+			// 只有「还是旧的那一天 / 压根没排」才记一次失败。
+			if lerr == nil && pl.Date >= today {
 				return
 			}
 			p.countAttempt(nctx, st, sid, today, "模型没有提交日程表")
