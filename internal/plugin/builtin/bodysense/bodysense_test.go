@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 )
 
@@ -108,9 +109,18 @@ func TestTurnPromptEmptyWhenNoRecords(t *testing.T) {
 
 func TestTurnPromptRendersRecords(t *testing.T) {
 	p := newTestPlugin(t, nil)
-	ctx := scoped("", nil)
-	record(t, p, ctx, Touch{Part: "手", Action: "牵"})
-	record(t, p, ctx, Touch{Part: "腰", Action: "揽"})
+	// 两次接触的时刻必须明确分出先后。此前走 store.Record 取系统时间：Windows 上
+	// 两次调用可能落在同一个计时粒度里，「最近一次」就退化成部位表的顺序，CI 上
+	// 因此挑中了手而不是后记的腰。
+	base := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+	ctx := clock.With(scoped("", nil), clock.Func(func() time.Time { return base.Add(50 * time.Second) }))
+	store := p.writeStore(ctx)
+	if _, err := store.RecordAt([]Touch{{Part: "手", Action: "牵"}}, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordAt([]Touch{{Part: "腰", Action: "揽"}}, base.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := p.TurnPrompt(ctx, plugin.TurnEvent{})
 	if err != nil {
