@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"wen/internal/plugin"
+	"wen/internal/atomicfile"
 	"wen/internal/prompt"
 )
 
@@ -420,7 +420,7 @@ func (s *Store) writeJSON(path string, v any) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.save_failed", "保存日程失败: %w"), err)
 	}
-	if err := plugin.RenameFile(tmp, path); err != nil {
+	if err := atomicfile.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.save_failed", "保存日程失败: %w"), err)
 	}

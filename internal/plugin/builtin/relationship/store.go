@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"wen/internal/plugin"
+	"wen/internal/atomicfile"
 	"wen/internal/prompt"
 )
 
@@ -392,7 +392,7 @@ func (s *Store) save(snap Snapshot) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.save", "保存关系状态失败: %w"), err)
 	}
-	if err := plugin.RenameFile(tmp, s.path); err != nil {
+	if err := atomicfile.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.relationship.err.save", "保存关系状态失败: %w"), err)
 	}

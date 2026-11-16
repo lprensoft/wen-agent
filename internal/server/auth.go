@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
 
@@ -218,7 +219,7 @@ func (s *AuthStore) SetPassword(pwd string) error {
 		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.mkdir", "创建配置目录: %w"), err)
 	}
 	// 0600：与 models.json、plugins.state.json 一致，文件里是口令派生值
-	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
+	if err := atomicfile.WriteFile(s.path, raw, 0o600); err != nil {
 		return fmt.Errorf(i18n.T(s.lang, "server.auth.err.write", "写入 %s: %w"), s.path, err)
 	}
 	s.cred = cred

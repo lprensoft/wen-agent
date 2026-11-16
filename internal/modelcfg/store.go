@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/atomicfile"
 	"wen/internal/config"
 	"wen/internal/llm"
 
@@ -394,7 +395,7 @@ func (s *Store) persistLocked(lang string) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf(i18n.T(lang, "modelcfg.err.save", "保存模型配置失败: %w"), err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := atomicfile.Rename(tmp, s.path); err != nil {
 		return fmt.Errorf(i18n.T(lang, "modelcfg.err.save", "保存模型配置失败: %w"), err)
 	}
 	return nil

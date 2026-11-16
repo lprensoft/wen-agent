@@ -15,6 +15,7 @@ internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者
 internal/plugin/builtin/ 内置插件（注册顺序见 cmd/wen/main.go 的 builtinPlugins）
 internal/agentplugin/    Agent Plugins 1.0 客户端（读取外源插件包、技能与 MCP 声明）
 internal/imbot/          消息通道的公共骨架（分发 / 命令 / 会话绑定 / 确认代理 / 通道路由）
+internal/atomicfile/     「写临时文件再改名」的落盘：崩溃不留半个文件，Windows 上改名遇占用会重试
 internal/clock/          可替换的「现在几点」：跟着 context 走，评测据此推进时间线
 internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前取走
 internal/availability/   「忙碌状态」公告板：日程在活动进行中写，心跳与消息通道读

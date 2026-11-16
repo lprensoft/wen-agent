@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
 
@@ -74,7 +75,7 @@ func (s *Store) Install(src string) (*Bundle, error) {
 			os.RemoveAll(dst)
 			return nil, err
 		}
-	} else if err := os.Rename(stage, dst); err != nil {
+	} else if err := atomicfile.Rename(stage, dst); err != nil {
 		// 同一个存放目录下的 rename 不该失败，真失败了就退回逐个复制
 		if err := copyTree(stage, dst); err != nil {
 			os.RemoveAll(dst)

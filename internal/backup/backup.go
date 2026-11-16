@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
 
@@ -143,7 +144,7 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	if opt.Overwrite {
 		_ = os.Remove(absOut)
 	}
-	if err := os.Rename(tmpName, absOut); err != nil {
+	if err := atomicfile.Rename(tmpName, absOut); err != nil {
 		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.rename", "保存备份文件失败：%v", err))
 	}
 	committed = true

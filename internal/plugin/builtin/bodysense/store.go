@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"wen/internal/plugin"
+	"wen/internal/atomicfile"
 	"wen/internal/prompt"
 )
 
@@ -152,7 +152,7 @@ func (s *Store) save(states []PartState) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.save_failed", "保存接触记录失败: %w"), err)
 	}
-	if err := plugin.RenameFile(tmp, s.path); err != nil {
+	if err := atomicfile.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.save_failed", "保存接触记录失败: %w"), err)
 	}

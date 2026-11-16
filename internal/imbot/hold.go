@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/availability"
 	"wen/internal/i18n"
 	"wen/internal/llm"
@@ -156,7 +157,7 @@ func (h *holder) saveLocked() error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, h.path); err != nil {
+	if err := atomicfile.Rename(tmp, h.path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

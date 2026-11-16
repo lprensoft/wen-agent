@@ -13,6 +13,7 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"wen/internal/atomicfile"
 	"wen/internal/plugin"
 
 	"wen/internal/i18n"
@@ -55,7 +56,7 @@ func saveCredentials(stateDir string, c credentials) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return plugin.RenameFile(tmp, credsPath(stateDir))
+	return atomicfile.Rename(tmp, credsPath(stateDir))
 }
 
 // ---------- 扫码绑定（插件操作入口） ----------

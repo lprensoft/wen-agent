@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
-	"wen/internal/plugin"
 )
 
 // maxTrackedSessions 限制状态文件里记录的会话数，超出后丢弃最早写入的。
@@ -122,7 +122,7 @@ func (s *store) saveLocked() error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	if err := plugin.RenameFile(tmp, s.path); err != nil {
+	if err := atomicfile.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

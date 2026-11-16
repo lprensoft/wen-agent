@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -162,7 +163,7 @@ func saveDayBuf(lang, dir string, f dayBufFile) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	if err := os.WriteFile(filepath.Join(dir, dayBufFileName), raw, 0o600); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(dir, dayBufFileName), raw, 0o600); err != nil {
 		i18n.Logf(lang, "log.memory.daybuf_write_failed", "时间线：当日缓冲写入失败：%v", err)
 	}
 }
@@ -251,7 +252,7 @@ func (p *Plugin) appendTimeline(dir string, e timelineEntry) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	if err := os.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600); err != nil {
+	if err := atomicfile.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600); err != nil {
 		i18n.Logf(p.langOf(), "log.memory.timeline_write_failed", "时间线：写入失败：%v", err)
 	}
 }
