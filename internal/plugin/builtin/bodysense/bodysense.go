@@ -587,6 +587,8 @@ func renderGrouped(lang string, views []view) string {
 // lastTouchLine 给出最近一次接触。间隔由落盘时记下的时间戳与查询时刻作差算得，
 // 不含推测；时间戳为零值（旧文件、手改坏的文件）时整行不出现，不回落到别的字段。
 func lastTouchLine(lang string, views []view, now time.Time) string {
+	// 两个部位的时刻一模一样时（粗计时粒度下同一秒内的两次接触），取先出现的那个：
+	// views 由 visibleViews 按部位表顺序给出，结果因此是稳定的，不随 map 遍历变。
 	var latest view
 	for _, v := range views {
 		if !v.Last.IsZero() && v.Last.After(latest.Last) {
