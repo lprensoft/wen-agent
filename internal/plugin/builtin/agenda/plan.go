@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"wen/internal/clock"
@@ -11,11 +12,18 @@ import (
 	"wen/internal/plugin"
 )
 
+// pendingPlan 是手动时间线下登记的一次规划。
+type pendingPlan struct {
+	sid   string
+	today string
+}
+
 // OnTurnEnd 是规划轮次的触发点：新的一天里第一轮对话（真人的，或心跳暂停到点后
 // 的第一拍——那是「睡醒」）结束后，在同一个会话上起一轮【规划今天】。不另设固定时刻：
 // 心跳关着、又没人说话的日子，没有任何人看得到这张表，排了也白排。
 //
-// 本方法在轮次收尾的同步路径上被调用，只做判断与起 goroutine。
+// 本方法在轮次收尾的同步路径上被调用。生产路径判断后起 goroutine；手动时间线只登记，
+// 由评测在轮次彻底返回后调 Settle 同步执行。
 func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	if ev.Origin == p.Name() {
 		return // 自己的轮次（规划、开始、结束）不触发
@@ -28,8 +36,7 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	st := p.storeFor(tag)
 	if st == nil {
 		return
-	}
-	// 用这一轮结束的时刻算「今天」：评测的时间线可能不在系统时间上，按 p.now()
+	} // 用这一轮结束的时刻算「今天」：评测的时间线可能不在系统时间上，按 p.now()
 	// 判断会去排另一天的表，而那一轮写下的消息也落在另一条时间线上。
 	now := ev.EndedAt
 	if now.IsZero() {
@@ -53,6 +60,11 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 		p.mu.Unlock()
 		return
 	}
+	if p.manual {
+		p.planPending[tag] = pendingPlan{sid: ev.SessionID, today: today}
+		p.mu.Unlock()
+		return
+	}
 	p.planning[tag] = true
 	p.wg.Add(1)
 	// 把这一轮的时间线带进后台，但只带「钟」不冻结「时刻」：规划可能等上几秒、
@@ -63,14 +75,42 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 		pctx = clock.With(pctx, c)
 	}
 	p.mu.Unlock()
-	go p.runPlan(pctx, tag, ev.SessionID)
+	go func() {
+		defer p.wg.Done()
+		p.runPlan(pctx, tag, ev.SessionID)
+	}()
+}
+
+// Settle 同步执行手动时间线下登记的规划。按固定域顺序取，避免 map 的随机遍历。
+func (p *Plugin) Settle(ctx context.Context) (bool, error) {
+	p.mu.Lock()
+	if len(p.planPending) == 0 {
+		p.mu.Unlock()
+		return false, nil
+	}
+	tags := make([]string, 0, len(p.planPending))
+	for tag := range p.planPending {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	tag := tags[0]
+	job := p.planPending[tag]
+	delete(p.planPending, tag)
+	if p.planning[tag] {
+		p.mu.Unlock()
+		return true, nil
+	}
+	p.planning[tag] = true
+	p.mu.Unlock()
+
+	p.runPlan(ctx, tag, job.sid)
+	return true, nil
 }
 
 // runPlan 跑一次规划轮次：等触发那轮彻底收尾，清掉已过期的约定，再以【规划今天】
 // 为一次性输入起轮次。会话忙限次重试；其它失败与「轮次成功但没提交表」各计一次
 // 尝试，达到上限就留一条会话注记。
 func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
-	defer p.wg.Done()
 	defer func() {
 		p.mu.Lock()
 		delete(p.planning, tag)
@@ -136,8 +176,11 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
 			}
 			p.countAttempt(nctx, st, sid, today, "模型没有提交日程表")
 			return
+		case errors.Is(err, plugin.ErrTurnNotStarted):
+			// 轮次没有开始：不记尝试，任务保持待处理（预算中止会终止整场评测）。
+			return
 		case errors.Is(err, plugin.ErrSessionBusy):
-			if attempt+1 >= defBusyRetryMax {
+			if p.isManual() || attempt+1 >= defBusyRetryMax {
 				i18n.Logf(p.langOf(), "log.agenda.plan_session_busy", "agenda: 会话 %s 持续繁忙，本次规划放弃", sid)
 				return
 			}

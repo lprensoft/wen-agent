@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"wen/internal/clock"
 	"wen/internal/llm"
 )
 
@@ -71,6 +72,14 @@ type InitContext struct {
 	// 日期是本地时区的 2006-01-02。为 nil 表示不可用，插件应据此降级——
 	// 补不上那一句不该让功能本身停摆。
 	DayFacts DayFactsFunc
+	// Clock 是进程的「现在几点」。为 nil 表示系统时间（生产路径）。
+	// 非 nil 时由外部推进（评测）：插件读它取「现在」，不得再用 time.Now 判断
+	// 业务时刻；超时与耗时仍用真实时间。
+	Clock clock.Clock
+	// ManualTime 为真表示时间由外部推进：插件不得启动自己的定时循环，到点该做什么
+	// 由 BackgroundWorker.RunBackground 或 TurnSettler.Settle 显式驱动。
+	// 为真时 Clock 必定非 nil。
+	ManualTime bool
 }
 
 // StatusInfo 是当前模型配置与会话用量的快照。

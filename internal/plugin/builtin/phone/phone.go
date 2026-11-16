@@ -127,6 +127,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	if ictx.Clock != nil {
+		p.now = ictx.Clock.Now
+	}
 	p.dir = ictx.StateDir
 	p.feeds = feeds
 	p.interests = parseInterests(plugin.CfgString(cfg, "interests", ""))
@@ -136,6 +139,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.started = p.now()
 	if len(feeds) == 0 {
 		return nil // 一个源都没有就不起循环
+	}
+	if ictx.ManualTime {
+		return nil // 手动时间线：不启循环，也不在评测里刷订阅源
 	}
 
 	wake := make(chan struct{}, 1)

@@ -26,7 +26,7 @@
 
 **依赖方向同时约束提示词：插件的提示词只能引用它所依赖的插件的块名。** roleplay 引用 `[长期记忆]`、`[想起来的事]` 是安全的（它 `Requires` memory），反过来 relationship 依赖 roleplay，roleplay 就不能引用 `[关系]`——那句话会在 relationship 被关掉时指向一段不存在的内容，而模型不会报错，只会照着一个空指代往下演。两个插件要互相划清地盘时，**把话写在依赖方那一侧，单向即可**：`relationship` 的判据里说「一次明确表达过的不愿意归记忆的『边界』类」，memory 那边不必回指。同理，需要「谁归谁管」的分工说明时，先问哪一侧的插件一定在场。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有二十四处按此标准放行：
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有二十五处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.Sessions` —— 会话的只读窄查询（最近活跃的会话、某会话是否还在）；`InitContext.SessionDir` —— 会话目录，只给要读会话**正文**的插件；
@@ -59,6 +59,8 @@
 23. **回复预览**（`WithReplyPreview` / `ReplyPreviewFrom`，`internal/plugin/preview.go`）—— 与第 13 条同形：发起方按需安装回调，核心在模型流式输出时送出**当前这次响应到目前为止的全文**（不是增量：调了工具之后下一次响应从空开始，接收方据此就知道前面那段过渡话作废了，不需要另一个「重置」信号）；不安装零开销。回调在输出的同步路径上，必须立即返回。`imbot` 据此做「边写边显示」（`Config.Preview`，Telegram 的 `sendMessageDraft`）：节流在骨架里做（至多每秒一次、只送最新的一份），最后一次预览必须在正式回复**之前**送完；回复要转投别的通道时不预览——预览出现在这一侧，等于把另一面的话露在这一面。通道的开关默认关：开着就不像真人打字了。QQ 的流式消息没有接：它的流本身就是那条正式消息、已发出的前缀不能改，与工具轮次的「前面那段作废」、QQ 的 markdown 方言转换都对不上。
 
 24. **角色状态**（`StateReporter`，`internal/plugin/state.go`）—— 插件向 Web UI 的「角色状态」页贡献只读快照（记忆索引、今日安排、现场……）。`Manager.State(lang, pinnedOnly)` 按注册顺序只收启用插件的非空块，按 `Category()` 分组，并执行硬上限（单块行数、单插件与总量字节数；超出的行累加进 `More`，整块被丢时置 `Truncated`）。与 `StatusLines` 同契约（廉价、无副作用），另加三条：**只读**（不写盘、不调模型、不发网络请求）、**只给人看**（绝不进入模型上下文、不落会话、不经 IM 转发）、**自己加锁**（会与轮次写入并发）。块带可选的 `Domain` 标签，插件按 `plugin.ReadDomains` 枚举全部域、每域一块；前端据当前会话最后一条真正的消息的域把其它人格折叠起来。块还可声明 `Pinned`（摘要进聊天页顶部那一行「此刻」）、`Collapsed`（默认收起）与 `Global`（不属于任何可见域，如心跳，任何人格下都显示），`PinnedOrder` 决定顶部那一行里的先后；`Manager.State` 的 pinnedOnly 只保留置顶块，插件经 `StateQuery.PinnedOnly` 提前跳过不需要的磁盘读取。行的语义见文件头，核心不知道「记忆」「日程」「现场」这些概念。
+
+25. **可替换时钟与后台工作的人工驱动**（`InitContext.Clock` / `ManualTime`、`BackgroundWorker`、`TurnSettler`、`BackgroundObserver`，`internal/plugin/background.go`）—— 时间与后台调度不再由各插件直接绑死在系统时钟上：`Clock` 非空时插件读它取「现在」；`ManualTime` 为真时插件不得自起定时循环，到点该做什么由评测按虚拟时钟调用 `RunBackground` 同步执行；`TurnSettler.Settle` 在轮次彻底返回后执行 `OnTurnEnd` 登记的工作，并按 `Requires` 做拓扑排序（`growth` 依赖 `memory`，所以记忆先结算、反思才看得到刚落盘的昨日时间线），成环是运行错误。`BackgroundObserver.ObserveBackground` 在每次推进前记录外部状态（心跳据此维护忙碌结束后的缓冲），只观察不排期，查询保持无副作用。`runtimeOverrides` 的 `BeforeTurn` / `AfterTurn` 让评测在 `RunTurn` 入口扣预算；`plugin.ErrTurnNotStarted` 表示「这一轮没有开始」，插件必须回滚为执行而做的状态变更，未执行的待办保持待处理。手动待办不占 WaitGroup，`Stop` 必须正常返回。生产路径全为零值，行为与从前一致；核心仍然不知道「心跳」「日程」「反思」这些概念。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「现场」「持有物」「人物」「日程」「关系」「心里话」「天气」「身体」「健康」「心情」「文风」「危险命令」「心跳」「定时」「技能」「QQ」「微信」「飞书」「Lark」「Telegram」或「更新」这回事。
 

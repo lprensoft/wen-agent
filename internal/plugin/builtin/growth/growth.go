@@ -59,6 +59,7 @@ type Plugin struct {
 	notice  plugin.NoticeFunc
 
 	now        func() time.Time // 测试替换
+	manual     bool             // 手动时间线：反思由 Settle 同步驱动
 	settle     time.Duration    // 触发轮次收尾后等多久再起反思
 	busyRetry  time.Duration
 	busyMax    int
@@ -72,6 +73,9 @@ type Plugin struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	reflecting map[string]bool
+	// reflectPending 是手动时间线下登记、等待 Settle 同步执行的反思。
+	// 不占 wg：预算中止时 StopAll 必须能正常返回。
+	reflectPending map[string]pendingReflect
 	// 每一次反思有自己的编号（runSeq 发号，随 ctx 进入那一轮）。claims 是「这次反思
 	// 认领了哪个域」，claimedBy 是「这个域被哪次反思认领了」：反思落在哪个人格上由那
 	// 一轮在裁决之后自己认领（见 runReflect），工具只接受本次反思认领的域。按编号而
@@ -159,6 +163,14 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	if ictx.Clock != nil {
+		p.now = ictx.Clock.Now
+	}
+	p.manual = ictx.ManualTime
+	if p.manual {
+		p.settle = 0
+		p.busyRetry = 0
+	}
 	p.base = filepath.Join(ictx.StateDir, "growth")
 	p.reflect = plugin.CfgBool(cfg, "daily_reflect", true)
 	p.maxDetails = plugin.CfgInt(cfg, "max_details", defMaxDetails)
@@ -169,6 +181,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.notice = ictx.Notice
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.reflecting = map[string]bool{}
+	p.reflectPending = map[string]pendingReflect{}
 	p.claims, p.claimedBy, p.lastActive = map[int64]string{}, map[string]int64{}, map[string]time.Time{}
 	p.changed = map[int64][]string{}
 	return nil
@@ -179,6 +192,7 @@ func (p *Plugin) Stop() {
 	p.mu.Lock()
 	cancel := p.cancel
 	p.cancel = nil
+	p.reflectPending = map[string]pendingReflect{}
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()

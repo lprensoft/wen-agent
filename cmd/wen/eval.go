@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"wen/internal/agent"
+	"wen/internal/availability"
 	"wen/internal/clock"
 	"wen/internal/config"
+	"wen/internal/cue"
 	"wen/internal/plugin"
 	"wen/internal/stylecheck"
 )
@@ -78,6 +80,16 @@ func runEval(args []string) error {
 	}
 	adoptLang(cfg)
 
+	// 整场评测跑在一条可以自己推进的时间线上：种子可以写在「三天前」，轮次之间的
+	// run_hours 真的把时钟拨过去。真实路径没有这条线，插件读到的仍是系统时间。
+	clk := clock.NewManual(sc.startAt())
+	budget := &evalTurnBudget{max: sc.MaxBackgroundTurns}
+	obs := &evalObserver{}
+
+	// 公告板是进程级的；同进程连续评测时先清干净，跑完再清一次。
+	cue.Reset()
+	availability.Reset()
+
 	// 一切落盘都进临时目录：会话、记忆库、心情、统计……评测不该在真实数据里留下
 	// 任何痕迹，也不该读到真实的记忆（那会让两次评测的条件不同）。
 	tmp, err := os.MkdirTemp("", "wen-eval-*")
@@ -88,6 +100,10 @@ func runEval(args []string) error {
 
 	rt, err := buildRuntime(cfg, runtimeOverrides{
 		SessionDir: filepath.Join(tmp, "sessions"),
+		Clock:      clk,
+		ManualTime: true,
+		BeforeTurn: budget.before,
+		AfterTurn:  budget.after,
 		PluginOpts: []plugin.Option{
 			plugin.WithStateDir(filepath.Join(tmp, "plugins")),
 			plugin.WithSuppressed(evalSuppressed),
@@ -96,14 +112,21 @@ func runEval(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer rt.plugins.StopAll()
+	defer func() {
+		rt.plugins.StopAll()
+		cue.Reset()
+		availability.Reset()
+	}()
+	if err := rt.plugins.Register(obs, plugin.PluginConfig{Enabled: true}); err != nil {
+		return fmt.Errorf(tr("cli.eval.err.observer", "注册评测观察者失败: %w"), err)
+	}
+	// 结算顺序依赖 Requires；成环时在第一次模型调用之前就失败。
+	if err := rt.plugins.ValidateSettleOrder(); err != nil {
+		return fmt.Errorf(tr("cli.eval.err.settle_order", "插件结算顺序无效: %w"), err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// 整场评测跑在一条可以自己推进的时间线上：种子可以写在「三天前」，轮次之间的
-	// gap_hours 真的把时钟拨过去。真实路径没有这条线，插件读到的仍是系统时间。
-	clk := clock.NewManual(sc.startAt())
 	ctx = clock.With(ctx, clk)
 
 	if len(sc.Seed) > 0 {
@@ -134,7 +157,7 @@ func runEval(args []string) error {
 		}
 	}
 
-	res := runScript(ctx, rt, sc, clk, os.Stderr)
+	res := runScript(ctx, rt, sc, clk, budget, obs, os.Stderr)
 	if *baselinePath != "" {
 		res.BaselinePath = *baselinePath
 		res.Regressions, res.JudgeDelta = compareEvalBaseline(evalJSONOf(res), base)
@@ -163,13 +186,13 @@ func runEval(args []string) error {
 	return nil
 }
 
-// evalSuppressed 圈出评测时不启动的插件：消息通道会连到真实平台，后台任务会在评测
-// 会话上插话（心跳挑的正是「最近活跃的会话」，评测会话在临时目录里就是唯一的那个），
-// 程序维护会在评测中途去够外网、甚至把脚下的二进制换掉。
+// evalSuppressed 圈出评测时不启动的插件：消息通道会连到真实平台，程序维护会在
+// 评测中途去够外网、甚至把脚下的二进制换掉。后台任务不压：它们改为手动时间线，
+// 由 run_hours / tick 显式驱动，不自起循环。
 // 按分组判断而不是点名：以后再加一条 IM 或一种后台任务，这里不用改。
 func evalSuppressed(p plugin.Plugin) bool {
 	switch plugin.CategoryOf(p) {
-	case plugin.CategoryBackground, plugin.CategoryChannel, plugin.CategoryProgram:
+	case plugin.CategoryChannel, plugin.CategoryProgram:
 		return true
 	}
 	return false
@@ -212,7 +235,8 @@ func runSeeds(ctx context.Context, rt *runtime, clk *clock.Manual, seeds []evalS
 }
 
 // runScript 跑完整个脚本并收集结果。progress 收每轮的进度提示，可为 nil。
-func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manual, progress *os.File) evalResult {
+func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manual,
+	budget *evalTurnBudget, obs *evalObserver, progress *os.File) evalResult {
 	res := evalResult{
 		Name:       sc.Name,
 		Model:      rt.current.ProviderName + "/" + rt.current.ModelID,
@@ -228,12 +252,50 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manua
 		}
 	}
 
-	meta, err := rt.store.Create()
+	meta, err := rt.store.CreateAt(clk.Now())
 	if err != nil {
 		res.SetupErr = trf("cli.eval.err.new_session", "新建会话失败: %s", err.Error())
 		return res
 	}
 	sessionID := meta.ID
+
+	appendBackground := func(events []plugin.TurnEndEvent) {
+		for _, ev := range events {
+			row := evalRow{Kind: rowBackground, At: ev.EndedAt, Origin: ev.Origin, Reply: ev.FinalText}
+			row.Metrics = stylecheck.Measure(uiLang, row.Reply)
+			row.Hits = stylecheck.Check(uiLang, row.Reply)
+			res.BackgroundTurns = append(res.BackgroundTurns, row)
+		}
+	}
+	settle := func() bool {
+		if err := rt.plugins.Settle(ctx); err != nil {
+			appendBackground(obs.drain())
+			res.BackgroundErr = err.Error()
+			return false
+		}
+		// 轮次后结算里跑的规划/反思也是后台轮次，要收进报告。
+		appendBackground(obs.drain())
+		if budget.limited() {
+			res.BackgroundErr = trf("cli.eval.err.background_limit",
+				"后台轮次达到上限 %d，评测中止", budget.max)
+			return false
+		}
+		return true
+	}
+	finalize := func() {
+		res.Duration = time.Since(res.StartedAt)
+		res.ClockTo = clk.Now()
+		res.BackgroundUsed, res.BackgroundAttempts = budget.snapshot()
+		res.BackgroundDenied = budget.deniedCount()
+		res.Drift = computeDrift(res.Rows)
+	}
+	finish := func() evalResult {
+		finalize()
+		if res.Judge.Err == "" {
+			res.Judge.Err = tr("cli.eval.aborted_judge", "已中断，未评判")
+		}
+		return res
+	}
 
 	turnNo := 0
 	for _, step := range sc.Turns {
@@ -250,7 +312,11 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manua
 			res.AutoCompactions += row.autoCompactions
 			if row.failed {
 				say(tr("cli.eval.say.failed", "  失败：%s"), row.rows[0].Err)
-				return res // 后面的轮次建立在这一轮之上，失败了再跑没有意义
+				return finish() // 后面的轮次建立在这一轮之上，失败了再跑没有意义
+			}
+			// 规划、反思、提炼在轮次彻底返回后结算，再进入下一步。
+			if !settle() {
+				return finish()
 			}
 		case step.Compact:
 			say("%s", tr("cli.eval.say.compacting", "压缩…"))
@@ -264,22 +330,51 @@ func runScript(ctx context.Context, rt *runtime, sc evalScript, clk *clock.Manua
 				res.Compactions++
 			}
 			res.Rows = append(res.Rows, row)
+			if !settle() {
+				return finish()
+			}
 		case step.GapHours > 0:
 			clk.Advance(time.Duration(step.GapHours * float64(time.Hour)))
 			res.Rows = append(res.Rows, evalRow{Kind: rowGap, GapHours: step.GapHours})
+		case step.RunHours > 0:
+			horizon := clk.Now().Add(time.Duration(step.RunHours * float64(time.Hour)))
+			say(tr("cli.eval.timeline.run", "推进 %.1f 小时…"), step.RunHours)
+			events, steps, err := advanceTimeline(ctx, clk, rt.plugins, obs, budget, horizon, func(format string, a ...any) {
+				say(format, a...)
+			})
+			appendBackground(events)
+			res.BackgroundSteps += steps
+			res.Rows = append(res.Rows, evalRow{Kind: rowRun, RunHours: step.RunHours, Background: len(events)})
+			if err != nil {
+				res.BackgroundErr = err.Error()
+				return finish()
+			}
+		case step.Tick:
+			say("%s", tr("cli.eval.timeline.tick", "执行当前到期的后台工作…"))
+			events, steps, err := runDueNow(ctx, clk, rt.plugins, obs, budget, func(format string, a ...any) {
+				say(format, a...)
+			})
+			appendBackground(events)
+			res.BackgroundSteps += steps
+			res.Rows = append(res.Rows, evalRow{Kind: rowRun, Background: len(events)})
+			if err != nil {
+				res.BackgroundErr = err.Error()
+				return finish()
+			}
 		}
 	}
-	res.Duration = time.Since(res.StartedAt)
-	res.ClockTo = clk.Now()
+	finalize()
 
+	if res.BackgroundErr != "" {
+		return finish()
+	}
 	if ctx.Err() != nil {
-		res.Judge.Err = tr("cli.eval.aborted_judge", "已中断，未评判")
-		return res
+		return finish()
 	}
 	say("%s", tr("cli.eval.say.judging", "评判中…"))
 	jctx, cancel := context.WithTimeout(ctx, judgeTimeout)
 	defer cancel()
-	prompt := buildJudgePrompt(res.Persona, res.Samples, res.Rows, sc.JudgePoints)
+	prompt := buildJudgePrompt(res.Persona, res.Samples, res.Rows, res.BackgroundTurns, res.ClockFrom, res.ClockTo, sc.JudgePoints)
 	raw, err := rt.agent.Complete(jctx, prompt)
 	if err != nil {
 		res.Judge.Err = err.Error()
@@ -378,6 +473,9 @@ type evalScript struct {
 	Seed        []evalSeed `json:"seed,omitempty"`
 	Turns       []evalStep `json:"turns"`
 	JudgePoints []string   `json:"judge_points,omitempty"`
+	// MaxBackgroundTurns 是整份脚本的后台轮次尝试上限；0 表示默认 100。
+	// 它是尝试次数，不是模型请求数或费用上限。
+	MaxBackgroundTurns int `json:"max_background_turns,omitempty"`
 
 	start time.Time // Start 解析后的值，零值表示脚本没写
 }
@@ -412,11 +510,13 @@ type evalExpect struct {
 	MustCall       []string       `json:"must_call,omitempty"`
 }
 
-// evalStep 是脚本里的一步：三者取其一。
+// evalStep 是脚本里的一步：五者取其一。
 type evalStep struct {
 	Say      string      `json:"say,omitempty"`
 	Compact  bool        `json:"compact,omitempty"`
-	GapHours float64     `json:"gap_hours,omitempty"`
+	GapHours float64     `json:"gap_hours,omitempty"` // 纯推进，不跑后台
+	RunHours float64     `json:"run_hours,omitempty"` // 事件驱动推进并执行后台
+	Tick     bool        `json:"tick,omitempty"`      // 不推进，执行当前到期
 	Expect   *evalExpect `json:"expect,omitempty"`
 }
 
@@ -430,6 +530,12 @@ func parseScript(raw []byte) (evalScript, error) {
 	}
 	if len(sc.Turns) == 0 {
 		return sc, fmt.Errorf("%s", tr("cli.eval.err.no_turns", "turns 为空"))
+	}
+	if sc.MaxBackgroundTurns < 0 {
+		return sc, fmt.Errorf("%s", tr("cli.eval.err.turn_budget_neg", "max_background_turns 不能为负"))
+	}
+	if sc.MaxBackgroundTurns == 0 {
+		sc.MaxBackgroundTurns = defaultMaxBackgroundTurns
 	}
 	if s := strings.TrimSpace(sc.Start); s != "" {
 		t, err := time.Parse(time.RFC3339, s)
@@ -475,8 +581,21 @@ func parseScript(raw []byte) (evalScript, error) {
 			}
 			n++
 		}
+		if st.RunHours != 0 {
+			if st.RunHours < 0 {
+				return sc, fmt.Errorf(tr("cli.eval.err.neg_run", "turns[%d]: run_hours 不能为负"), i)
+			}
+			if st.RunHours > maxClockHours {
+				return sc, fmt.Errorf(tr("cli.eval.err.run_long", "turns[%d]: run_hours 超过 %d 小时"), i, maxClockHours)
+			}
+			n++
+		}
+		if st.Tick {
+			n++
+		}
 		if n != 1 {
-			return sc, fmt.Errorf(tr("cli.eval.err.bad_step", "turns[%d]: 每步只能是 say、compact、gap_hours 之一"), i)
+			return sc, fmt.Errorf(tr("cli.eval.err.bad_step",
+				"turns[%d]: 每步只能是 say、compact、gap_hours、run_hours、tick 之一"), i)
 		}
 		if st.Expect != nil {
 			if strings.TrimSpace(st.Say) == "" {

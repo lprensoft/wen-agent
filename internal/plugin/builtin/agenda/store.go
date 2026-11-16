@@ -120,6 +120,9 @@ type Item struct {
 	StartFired time.Time `json:"start_fired,omitempty"`
 	EndFired   time.Time `json:"end_fired,omitempty"`
 	SoonFired  time.Time `json:"soon_fired,omitempty"`
+	// BusyCleared 表示这一段活动的忙碌状态已经撤过。只对应当前这段活动时间：
+	// 改时间、重排、重新进入 ongoing 时重置为 false。
+	BusyCleared bool `json:"busy_cleared,omitempty"`
 }
 
 // terminal 报告该项是否已到终态（做完、跳过、延期、取消）。
@@ -246,6 +249,12 @@ func (s *Store) loadPlan() (Plan, error) {
 	}
 	if err := json.Unmarshal(raw, &pl); err != nil {
 		return pl, fmt.Errorf(prompt.T(s.lang, "prompt.agenda.store.plan_corrupt", "日程表文件损坏: %w"), err)
+	}
+	// BusyCleared 只对应当前这段活动：不是进行中的项一律清掉，旧数据也据此校正。
+	for i := range pl.Items {
+		if pl.Items[i].Status != statusOngoing {
+			pl.Items[i].BusyCleared = false
+		}
 	}
 	return pl, nil
 }

@@ -126,6 +126,14 @@ func Clear(source string) {
 // 没有任何未过期记录时第二个返回值为 false。
 func Current(now time.Time) (State, bool) { return CurrentExcept(now, "") }
 
+// Reset 清空全部写入方的状态。评测在同一进程里连续跑时用它隔离；生产路径没有调用点。
+// 订阅者不动：它们属于插件的生命周期，由各自的 Stop 撤销。
+func Reset() {
+	mu.Lock()
+	states = nil
+	mu.Unlock()
+}
+
 // CurrentExcept 与 Current 相同，但不看 exclude 那个写入方的记录。写入方自己也读的
 // 时候用：心跳把「睡着」写在这里，又按这里压后下一拍，不排除自己就会把醒来那一拍
 // 也压后。

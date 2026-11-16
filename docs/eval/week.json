@@ -1,0 +1,52 @@
+{
+  "name": "跨天的一周",
+  "start": "2026-03-02T08:00:00+08:00",
+  "max_background_turns": 60,
+  "seed": [
+    {
+      "tool": "save_memory",
+      "args": {
+        "name": "怕冷",
+        "description": "空调 26 度以下会冷",
+        "type": "偏好",
+        "content": "她说办公室空调开得低时会披外套。"
+      },
+      "ago_hours": 72
+    },
+    {
+      "tool": "add_commitment",
+      "args": {
+        "date": "2026-03-03",
+        "start": "15:00",
+        "title": "一起去看展",
+        "with_user": true
+      }
+    }
+  ],
+  "turns": [
+    {
+      "say": "早，今天打算做什么？",
+      "expect": {
+        "must_not_include": ["作为 AI", "希望这对你有帮助"],
+        "max_sentences": 4
+      }
+    },
+    { "run_hours": 24 },
+    {
+      "say": "昨天过得怎么样？"
+    },
+    { "run_hours": 24 },
+    {
+      "say": "明天见。",
+      "expect": {
+        "max_sentences": 4
+      }
+    },
+    { "compact": true },
+    { "run_hours": 12 }
+  ],
+  "judge_points": [
+    "隔了一天之后，她是否还记得昨天的约定",
+    "称呼与亲密度有没有无来由的跳变"
+  ]
+}

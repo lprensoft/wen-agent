@@ -10,12 +10,13 @@ import (
 // StatusLines 在状态命令里报一行当前节奏：间隔、模式与下次心跳的大致时刻。
 // 只报「大致」——心跳会被真人对话重置、被动态判定改写，报到秒既没有意义也会误导。
 func (p *Plugin) StatusLines(lang string) []string {
+	now := p.nowTime()
 	p.mu.Lock()
 	cur, dynamic := p.cur, p.dynamic
 	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
 	var next time.Time
 	if cur > 0 {
-		next, _, _, _ = p.nextBeatAt(time.Now())
+		next, _, _, _ = p.nextBeatAt(now)
 	}
 	p.mu.Unlock()
 
@@ -29,24 +30,24 @@ func (p *Plugin) StatusLines(lang string) []string {
 	if curContext != "" {
 		mode += " · " + curContext // 情境名是用户自己写的，不翻译
 	}
-	if until := time.Until(pausedUntil); until > 0 && asleep {
+	if until := pausedUntil.Sub(now); until > 0 && asleep {
 		return []string{i18n.Tf(lang, "plugin.heartbeat.status.asleep",
 			"💓 心跳：睡着了，约 %s后醒（每 %s，%s）",
 			humanDur(lang, until), humanDur(lang, cur), mode)}
 	}
-	if until := time.Until(pausedUntil); until > 0 {
+	if until := pausedUntil.Sub(now); until > 0 {
 		return []string{i18n.Tf(lang, "plugin.heartbeat.status.paused",
 			"💓 心跳：暂停中，约 %s后恢复（每 %s，%s）",
 			humanDur(lang, until), humanDur(lang, cur), mode)}
 	}
 	return []string{i18n.Tf(lang, "plugin.heartbeat.status.line", "💓 心跳：每 %s（%s），%s",
-		humanDur(lang, cur), mode, nextBeatDesc(lang, next))}
+		humanDur(lang, cur), mode, nextBeatDesc(lang, now, next))}
 }
 
 // nextBeatDesc 描述下次心跳的时机。已到期说明轮次正忙或刚被叫醒，此时报「即将」
 // 比报一个负数或过去的时刻更贴近实际。
-func nextBeatDesc(lang string, next time.Time) string {
-	left := time.Until(next)
+func nextBeatDesc(lang string, now, next time.Time) string {
+	left := next.Sub(now)
 	if left < time.Minute {
 		return i18n.T(lang, "plugin.heartbeat.status.imminent", "即将触发")
 	}

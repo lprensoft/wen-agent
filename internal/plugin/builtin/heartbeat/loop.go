@@ -23,16 +23,7 @@ func (p *Plugin) loop(ctx context.Context) {
 	defer decay.Stop()
 
 	for {
-		p.mu.Lock()
-		next := p.nextBeatLocked()
-		// 睡着时要整理上下文的话，那一刻总在暂停结束（也就是下一拍）之前
-		due := p.sleepCompactDueLocked()
-		tidy := !due.IsZero() && due.Before(next)
-		if tidy {
-			next = due
-		}
-		p.mu.Unlock()
-
+		next := p.nextWakeAt(p.nowTime())
 		timer := time.NewTimer(time.Until(next)) // 已过期时零延时触发
 		select {
 		case <-ctx.Done():
@@ -42,21 +33,86 @@ func (p *Plugin) loop(ctx context.Context) {
 			timer.Stop()
 		case <-decay.C:
 			timer.Stop()
-			p.maybeDecay()
+			// 与到点心跳走同一条路径：若这一拍正好也到期，先执行心跳，不让衰减把它推迟。
+			_ = p.RunBackground(ctx, p.nowTime())
 		case <-timer.C:
-			if tidy {
-				p.sleepCompact(ctx)
-			} else {
-				p.beat(ctx)
-			}
+			_ = p.RunBackground(ctx, p.nowTime())
 		}
 	}
 }
 
-// nextBeatLocked 推算下一次心跳时刻，并顺手更新忙碌观察。调用方需持有 p.mu。
-// 实际的推算在 nextBeatAt；状态查询走那一条只读路径，不能在这里留下副作用。
+// nextWakeAt 返回生产循环下一次该醒来的时刻：心跳、睡着整理、衰减检查取最早。
+// 衰减检查基准可能在暂停恢复时被重置，因此不能只靠启动时建立的固定 ticker。
+func (p *Plugin) nextWakeAt(now time.Time) time.Time {
+	p.mu.Lock()
+	next := p.nextBeatLockedAt(now)
+	if due := p.sleepCompactDueAt(now); !due.IsZero() && due.Before(next) {
+		next = due
+	}
+	if due, ok := p.decayDueAtLocked(now); ok && due.Before(next) {
+		next = due
+	}
+	p.mu.Unlock()
+	return next
+}
+
+// ObserveBackground 记录忙碌公告板的状态，不排定下一拍。
+// 手动时间线没有常驻循环来维护 busySeen / busyEndedAt，由评测在每次推进前调用；
+// 生产路径不调用，循环自己会在每次重算时更新。
+func (p *Plugin) ObserveBackground(now time.Time) {
+	p.mu.Lock()
+	p.nextBeatLockedAt(now)
+	p.mu.Unlock()
+}
+
+// NextBackgroundAt 返回下一次后台工作的时刻：下一次心跳、睡着整理、空闲衰减取最早。
+// 只读，不改忙碌观察与任何状态。已到期的时刻原样返回（调用方会钳到 now）。
+func (p *Plugin) NextBackgroundAt(now time.Time) (time.Time, bool) {
+	p.mu.Lock()
+	next, _, _, _ := p.nextBeatAt(now)
+	tidy := p.sleepCompactDueAt(now)
+	decay, decayOK := p.decayDueAtLocked(now)
+	p.mu.Unlock()
+
+	if !tidy.IsZero() && tidy.Before(next) {
+		next = tidy
+	}
+	if decayOK && decay.Before(next) {
+		next = decay
+	}
+	return next, true
+}
+
+// RunBackground 同步执行 now 时刻到期的后台工作：睡着整理、到点心跳、空闲衰减。
+// 顺序固定为先心跳、后衰减：心跳到点本身不该被衰减推迟；同一时刻两者都到期时，
+// 在同一次调用里把衰减也做掉，生产和回放因此走同一条规则。
+// 手动时间线下由评测调用；生产循环也走这一条，避免两套逻辑。
+func (p *Plugin) RunBackground(ctx context.Context, now time.Time) error {
+	p.mu.Lock()
+	tidy := p.sleepCompactDueAt(now)
+	next := p.nextBeatLockedAt(now)
+	p.mu.Unlock()
+
+	if !tidy.IsZero() && !tidy.After(now) {
+		p.sleepCompactAt(ctx, now)
+	}
+	if !next.After(now) {
+		if err := p.beatAt(ctx, now); err != nil {
+			return err
+		}
+	}
+	p.maybeDecayAt(now)
+	return nil
+}
+
+// nextBeatLocked 是按当前时钟的版本，测试与状态查询用；循环走 nextWakeAt。
 func (p *Plugin) nextBeatLocked() time.Time {
-	next, seen, until, ended := p.nextBeatAt(time.Now())
+	return p.nextBeatLockedAt(p.nowTime())
+}
+
+// nextBeatLockedAt 按 now 推算下一次心跳时刻，并顺手更新忙碌观察。调用方需持有 p.mu。
+func (p *Plugin) nextBeatLockedAt(now time.Time) time.Time {
+	next, seen, until, ended := p.nextBeatAt(now)
 	p.busySeen, p.busyUntil, p.busyEndedAt = seen, until, ended
 	return next
 }
@@ -121,7 +177,7 @@ func minTime(a, b time.Time) time.Time {
 // 反而立刻触发一次心跳。调用方需持有 p.mu。
 func (p *Plugin) resetClockLocked(at time.Time) {
 	if at.IsZero() {
-		at = time.Now()
+		at = p.nowTime()
 	}
 	if !at.After(p.lastBeat) {
 		return
@@ -135,9 +191,17 @@ func (p *Plugin) resetClockLocked(at time.Time) {
 
 // beat 执行一次心跳：挑最近活跃的会话（没有就新建），以心跳提示词跑一轮对话。
 // 会话忙时跳过本次——心跳排队毫无意义，下个周期自然会再来。
-func (p *Plugin) beat(ctx context.Context) {
+// beat 是生产与测试的入口：按当前时钟执行一次心跳。
+func (p *Plugin) beat(ctx context.Context) { _ = p.beatAt(ctx, p.nowTime()) }
+
+// beatAt 在 now 时刻执行一次心跳：挑最近活跃的会话（没有就新建），以心跳提示词
+// 跑一轮对话。会话忙时跳过本次——心跳排队毫无意义，下个周期自然会再来。
+//
+// 轮次因外部预算没有开始时（EvTurnNotStarted），把 lastBeat 回滚到本次之前，
+// 任务保持待处理；理由也放回公告板，等下一次真正开口时再带上。
+func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 	p.mu.Lock()
-	now := time.Now()
+	prevBeat := p.lastBeat
 	// 暂停到点后的第一拍是「睡醒」：节奏恢复到基础值——睡前的快慢都属于睡前那段
 	// 对话，人睡一觉起来回到平常状态。与 OnTurnEnd 的「见人恢复常态」是同一条规则，
 	// 只是醒来这一次连快节奏也不保留：隔了一觉，热聊的势头已经不在了。
@@ -146,6 +210,7 @@ func (p *Plugin) beat(ctx context.Context) {
 		p.adjusted = false
 		p.clearPauseLocked()
 		p.publishSleepLocked()
+		p.resumeDecayAfterPauseLocked(now)
 	}
 	p.lastBeat = now
 	runTurn, beatPrompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
@@ -159,19 +224,27 @@ func (p *Plugin) beat(ctx context.Context) {
 	sid, lastActive, err := p.pickSession()
 	if err != nil {
 		i18n.Logf(p.langOf(), "log.heartbeat.no_session", "heartbeat: 找不到可用会话，本次心跳跳过: %v", err)
-		return
+		return nil
 	}
 	tctx, cancel := context.WithTimeout(ctx, beatTimeout)
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
-	cues := cue.Take(time.Now())
-	input := withCues(lang, gapNote(lang, beatPrompt, lastActive, time.Now(), cur), cues)
+	cues := cue.Take(now)
+	input := withCues(lang, gapNote(lang, beatPrompt, lastActive, now, cur), cues)
 	if _, err := runTurn(tctx, sid, input); err != nil {
 		// 理由没送达就放回公告板等下一拍（已过期的会被 Post 拒收），别让一次
 		// 会话忙把「刚下起雨」整个吞掉
 		for _, c := range cues {
 			cue.Post(c)
+		}
+		if errors.Is(err, plugin.ErrTurnNotStarted) {
+			p.mu.Lock()
+			if p.lastBeat.Equal(now) {
+				p.lastBeat = prevBeat
+			}
+			p.mu.Unlock()
+			return err
 		}
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			i18n.Logf(p.langOf(), "log.heartbeat.session_busy", "heartbeat: 会话 %s 忙，本次心跳跳过", sid)
@@ -179,6 +252,7 @@ func (p *Plugin) beat(ctx context.Context) {
 			i18n.Logf(p.langOf(), "log.heartbeat.turn_failed", "heartbeat: 心跳轮次失败: %v", err)
 		}
 	}
+	return nil
 }
 
 // withCues 把待说的开口理由附在心跳输入末尾。理由给出的是「发生了什么」，
@@ -258,18 +332,106 @@ func gapNote(lang, beatPrompt string, lastActive, now time.Time, cur time.Durati
 // 暂停期间也不衰减：这段安静是模型自己定下的，不是「没人想聊」的证据，
 // 衰减再计一次就是把同一份沉默记了两笔账（暂停到点由 beat 恢复成基础节奏）。
 // 豁免只覆盖暂停本身——到点之后若仍无人来聊，又是自然安静，衰减照常恢复计数。
-func (p *Plugin) maybeDecay() {
-	p.mu.Lock()
-	if !p.dynamic || p.cur >= p.maxIv || time.Now().Before(p.pausedUntil) {
-		p.mu.Unlock()
-		return
+// decayDueAtLocked 返回下一次空闲衰减检查的时刻；不该检查时 ok=false。
+// 调用方需持有 p.mu。
+func (p *Plugin) decayDueAtLocked(now time.Time) (time.Time, bool) {
+	if !p.dynamic || p.cur >= p.maxIv {
+		return time.Time{}, false
 	}
-	if !p.lastActive.IsZero() && time.Since(p.lastActive) < p.cur {
-		p.mu.Unlock()
-		return
+	if !p.pausedUntil.IsZero() && now.Before(p.pausedUntil) {
+		return time.Time{}, false
+	}
+	// 空闲条件由 decayOnceLocked 判断；这里只负责「下一次检查是什么时候」。
+	// 检查本身每 15 分钟一次，不论当时有没有真的放缓。
+	if p.lastDecay.IsZero() {
+		return now, true
+	}
+	return p.lastDecay.Add(decayEvery), true
+}
+
+// decayOnceLocked 按当前条件放缓一档；返回是否真的变了。调用方需持有 p.mu。
+func (p *Plugin) decayOnceLocked(now time.Time) bool {
+	if !p.dynamic || p.cur >= p.maxIv {
+		return false
+	}
+	if !p.pausedUntil.IsZero() && now.Before(p.pausedUntil) {
+		return false
+	}
+	if !p.lastActive.IsZero() && now.Sub(p.lastActive) < p.cur {
+		return false
 	}
 	p.cur = p.normalize(p.cur * 3 / 2)
 	p.adjusted = true
+	return true
+}
+
+// maybeDecay 是测试用的强制检查入口：每叫一次就做一次检查，不看计划时刻。
+// 生产循环走 RunBackground，由它按计划时刻和容差处理衰减。
+func (p *Plugin) maybeDecay() {
+	now := p.nowTime()
+	p.mu.Lock()
+	if p.lastDecay.IsZero() {
+		p.lastDecay = now
+	} else {
+		p.lastDecay = p.lastDecay.Add(decayEvery)
+	}
+	if !p.decayOnceLocked(now) {
+		p.mu.Unlock()
+		return
+	}
+	next := p.cur
+	dir, st := p.snapshotStateLocked()
+	p.mu.Unlock()
+
+	persistState(dir, st)
+	i18n.Logf(p.langOf(), "log.heartbeat.decayed", "heartbeat: 无人聊天，心跳放缓至 %v", next)
+}
+
+// maybeDecayAt 空闲衰减：距最近真人交互超过一个当前间隔时，把间隔放缓一档（×1.5），
+// 直到最慢间隔。
+//
+// 检查按**计划时刻**每 15 分钟推进，而不是按实际处理时刻重算：ticker 抖动几毫秒
+// 不会让下一次检查被误判为「还没到」而整轮跳过；虚拟时间跨过很久时，循环补齐
+// 落下的检查，每轮最多放缓一档。
+//
+// 动态心跳关闭时不衰减——那是「固定节奏」的含义。暂停期间也不衰减：这段安静是
+// 模型自己定下的，不是「没人想聊」的证据，衰减再计一次就是把同一份沉默记了两笔账。
+func (p *Plugin) maybeDecayAt(now time.Time) {
+	p.mu.Lock()
+	if p.lastDecay.IsZero() {
+		// 没有历史时把上一次检查摆在 now-decayEvery，第一次调用就是一次检查。
+		p.lastDecay = now.Add(-decayEvery)
+	}
+	due, ok := p.decayDueAtLocked(now)
+	if !ok {
+		// 暂停、固定节奏或已到最慢间隔：不补算落下的检查，从当下重新起算。
+		p.lastDecay = now
+		p.mu.Unlock()
+		return
+	}
+	if due.After(now.Add(decaySlack)) {
+		p.mu.Unlock()
+		return
+	}
+	decayed := false
+	for {
+		due = p.lastDecay.Add(decayEvery)
+		if due.After(now.Add(decaySlack)) {
+			break
+		}
+		p.lastDecay = due // 按计划时刻推进，不跟着处理时刻漂移
+		if p.decayOnceLocked(now) {
+			decayed = true
+		}
+		if !p.dynamic || p.cur >= p.maxIv ||
+			(!p.pausedUntil.IsZero() && now.Before(p.pausedUntil)) {
+			break
+		}
+	}
+	if !decayed {
+		p.mu.Unlock()
+		return
+	}
 	next := p.cur
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
@@ -293,6 +455,10 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 		return
 	}
 	p.mu.Lock()
+	endedAt := ev.EndedAt
+	if endedAt.IsZero() {
+		endedAt = p.nowTime()
+	}
 	p.lastActive = ev.EndedAt
 	// 真人刚聊完，心跳倒计时从此刻重新开始：心跳是「没人说话时才主动开口」的机制，
 	// 聊天途中插进来的心跳既打断对话，也让间隔配置失去意义。
@@ -312,6 +478,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	if !p.pausedUntil.IsZero() && (ev.StartedAt.IsZero() || p.pausedAt.Before(ev.StartedAt)) {
 		p.clearPauseLocked()
 		p.publishSleepLocked()
+		p.resumeDecayAfterPauseLocked(endedAt)
 		persist = true
 	}
 	var dir string

@@ -205,8 +205,14 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.stale = time.Duration(staleMin) * time.Minute
 	p.tomorrowFrom = tomorrowFrom
 	p.client = &http.Client{Timeout: requestTimeout}
+	if ictx.Clock != nil {
+		p.now = ictx.Clock.Now
+	}
 	if len(wanted) == 0 {
 		return nil // 一个城市都没填就不起循环，也不注入任何东西
+	}
+	if ictx.ManualTime {
+		return nil // 手动时间线：不启刷新循环，评测不产生外部请求
 	}
 
 	// 循环起在锁内，与 cancel 的记录是同一步：分成两步的话，中间来一次 Stop

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -90,7 +91,7 @@ func (p *Plugin) applyContextLocked(name string) (string, error) {
 	return prompt.Tf(lang, "prompt.heartbeat.result.context_switched", "，情境切到「%s」", name), nil
 }
 
-func (t *setIntervalTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *setIntervalTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Minutes int    `json:"minutes"`
 		Reason  string `json:"reason"`
@@ -127,7 +128,7 @@ func (t *setIntervalTool) Execute(_ context.Context, args json.RawMessage) (stri
 	p.adjusted = true
 	// 倒计时从此刻重算：「N 分钟之后再开口」说的是从现在起算。resetClockLocked
 	// 只前推不回拨，因此这里不会把已经临近的一次心跳推回过去。
-	p.resetClockLocked(time.Now())
+	p.resetClockLocked(clock.Now(ctx))
 	next, minIv, maxIv := p.cur, p.minIv, p.maxIv
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
@@ -194,7 +195,7 @@ const pauseSchemaZH = `{
 	"required": ["minutes", "reason"]
 }`
 
-func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *pauseTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Minutes int    `json:"minutes"`
 		Reason  string `json:"reason"`
@@ -227,7 +228,7 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 		p.mu.Unlock()
 		return "", err
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 	p.clearPauseLocked() // 新的一段暂停是新的一觉：上一觉整理过与否不作数
 	p.pausedAt = now
 	p.pausedUntil = now.Add(time.Duration(capped) * time.Minute)

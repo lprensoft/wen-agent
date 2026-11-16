@@ -130,11 +130,10 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	marks := dayMarks{lastSweep: p.lastSweep, lastTimeline: p.lastTimeline}
 	// 登记在锁内完成：Stop 会先在同一把锁下置 stopped 再 Wait，
 	// 这样不会出现「刚 Add 完就被略过」的 goroutine
-	p.wg.Add(1)
-	p.turnMu.Unlock()
-
-	go func() {
-		defer p.wg.Done()
+	job := func(ctx context.Context) {
+		// 手动模式用 Settle 传入的 ctx 派生辅助调用，取消评测即可中断；
+		// 生产模式这里收到的就是插件生命周期的 s.ctx。
+		s.ctx = ctx
 		// 先收束昨天，再把本轮追加进今天的缓冲——反过来会把新一天的第一轮
 		// 也算进「昨天」。多天缓冲对并发追加是安全的：收束只取早于今天的日子。
 		if dayFlush {
@@ -150,7 +149,34 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 		if sweep {
 			p.runSweep(s, now)
 		}
+	}
+	if s.manual {
+		// 手动时间线：登记待办，不占 wg，由 Settle 同步执行。
+		p.pending = append(p.pending, job)
+		p.turnMu.Unlock()
+		return
+	}
+	p.wg.Add(1)
+	p.turnMu.Unlock()
+
+	go func() {
+		defer p.wg.Done()
+		job(s.ctx)
 	}()
+}
+
+// Settle 同步执行手动时间线下登记的提炼/日切工作。
+func (p *Plugin) Settle(ctx context.Context) (bool, error) {
+	p.turnMu.Lock()
+	if len(p.pending) == 0 {
+		p.turnMu.Unlock()
+		return false, nil
+	}
+	job := p.pending[0]
+	p.pending = p.pending[1:]
+	p.turnMu.Unlock()
+	job(ctx)
+	return true, nil
 }
 
 // persistWindows 串行写盘并丢弃过期的快照。

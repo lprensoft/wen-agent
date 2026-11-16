@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,10 +13,19 @@ import (
 	"wen/internal/prompt"
 )
 
+// pendingReflect 是手动时间线下登记的一次反思。
+type pendingReflect struct {
+	sid   string
+	today string
+	now   time.Time
+}
+
 // OnTurnEnd 是反思的触发点：新的一天里第一轮对话（真人的，或心跳的一拍）结束后，在
 // 同一个会话上起一轮【成长·反思】。照 agenda 规划当天的做法，不另设固定时刻——放在
 // 早上而不是夜里还有一层用意：心情、唤起这类状态过了一夜已经回落，正好躲开
 // 「情绪起伏时不改自己」。
+//
+// 生产路径起 goroutine；手动时间线只登记，由评测在轮次彻底返回后调 Settle 同步执行。
 //
 // 前一次反思之后没有真人来聊过（Dirty 为假）就不反思：没有新东西可想，不为它付一轮
 // 模型调用。Dirty 在真人轮次收尾时置上；反思收尾时只消费它开始之前的那些（见 runReflect），
@@ -74,11 +84,52 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 		p.mu.Unlock()
 		return
 	}
+	if p.manual {
+		p.reflectPending[tag] = pendingReflect{sid: ev.SessionID, today: today, now: now}
+		p.mu.Unlock()
+		return
+	}
 	p.reflecting[tag] = true
 	p.wg.Add(1)
 	rctx := p.ctx
 	p.mu.Unlock()
-	go p.runReflect(rctx, tag, ev.SessionID, today, now)
+	go func() {
+		defer p.wg.Done()
+		p.runReflect(rctx, tag, ev.SessionID, today, now)
+	}()
+}
+
+// Settle 同步执行手动时间线下登记的反思。按固定域顺序取，避免 map 随机遍历。
+func (p *Plugin) Settle(ctx context.Context) (bool, error) {
+	p.mu.Lock()
+	if len(p.reflectPending) == 0 {
+		p.mu.Unlock()
+		return false, nil
+	}
+	tags := make([]string, 0, len(p.reflectPending))
+	for tag := range p.reflectPending {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	tag := tags[0]
+	job := p.reflectPending[tag]
+	delete(p.reflectPending, tag)
+	if p.reflecting[tag] {
+		p.mu.Unlock()
+		return true, nil
+	}
+	p.reflecting[tag] = true
+	p.mu.Unlock()
+
+	p.runReflect(ctx, tag, job.sid, job.today, job.now)
+	return true, nil
+}
+
+// isManual 报告当前是否运行在手动时间线上。
+func (p *Plugin) isManual() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.manual
 }
 
 // runReflect 跑一次反思：等触发那轮彻底收尾，再以【成长·反思】为一次性输入起轮次。
@@ -97,7 +148,6 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 // 每次反思发一个编号随 ctx 进入那一轮，认领、改动与收尾都只认自己的编号：同一个会话
 // 上可能同时排着两次反思，不能一次替另一次记账或清理。
 func (p *Plugin) runReflect(ctx context.Context, tag, sid, today string, startedAt time.Time) {
-	defer p.wg.Done()
 	p.mu.Lock()
 	p.runSeq++
 	run := p.runSeq
@@ -130,12 +180,20 @@ func (p *Plugin) runReflect(ctx context.Context, tag, sid, today string, started
 		tctx = plugin.WithEphemeralInput(tctx)
 		_, err = s.runTurn(tctx, sid, input)
 		cancel()
-		if errors.Is(err, plugin.ErrSessionBusy) && attempt+1 < p.busyMax {
-			select {
-			case <-time.After(p.busyRetry):
-				continue
-			case <-ctx.Done():
-				return
+		if errors.Is(err, plugin.ErrTurnNotStarted) {
+			return // 轮次没有开始：不记反思过，等下一次
+		}
+		if errors.Is(err, plugin.ErrSessionBusy) {
+			if p.isManual() {
+				return // 手动时间线不真睡重试；下一次轮次结束再来
+			}
+			if attempt+1 < p.busyMax {
+				select {
+				case <-time.After(p.busyRetry):
+					continue
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 		break

@@ -32,6 +32,10 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
+	clockMu sync.Mutex
+	clock   clock.Clock
+	manual  bool
+
 	lang          string // 进程语言，注入片段、工具文本与状态行据此取用
 	base          string // 基准目录（= 共享域）
 	cooldown      time.Duration
@@ -53,16 +57,25 @@ type Plugin struct {
 }
 
 func New() *Plugin {
-	return &Plugin{
-		cooldown:      defaultCooldownDays * 24 * time.Hour,
+	return &Plugin{cooldown: defaultCooldownDays * 24 * time.Hour,
 		maxConditions: defaultMaxConditions,
 		maxPeak:       capFor(capModerate),
 		tick:          cueTick,
 	}
 }
 
-func (p *Plugin) Name() string { return "health" }
+// nowTime 返回健康插件视角的「现在」：注入钟优先，否则系统时间。
+func (p *Plugin) nowTime() time.Time {
+	p.clockMu.Lock()
+	c := p.clock
+	p.clockMu.Unlock()
+	if c != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
 
+func (p *Plugin) Name() string     { return "health" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
@@ -112,6 +125,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.Stop()
 
+	p.clockMu.Lock()
+	p.clock = ictx.Clock
+	p.clockMu.Unlock()
+
 	p.storesMu.Lock()
 	p.stores = map[string]*Store{}
 	p.storesMu.Unlock()
@@ -119,6 +136,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	p.manual = ictx.ManualTime
 	p.base = filepath.Join(ictx.StateDir, "health")
 	p.cooldown = time.Duration(plugin.CfgInt(cfg, "cooldown_days", defaultCooldownDays)) * 24 * time.Hour
 	p.maxConditions = plugin.CfgInt(cfg, "max_conditions", defaultMaxConditions)
@@ -128,6 +146,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 会看到 cancel 还是 nil，于是这个刚起来的循环就没人停得掉了。
 	var ctx context.Context
 	ctx, p.cancel = context.WithCancel(context.Background())
+	if p.manual {
+		return nil // 手动时间线：不启循环，RunBackground 显式驱动
+	}
 	p.wg.Add(1)
 	go p.loop(ctx, p.tick)
 	return nil
@@ -288,7 +309,7 @@ func (p *Plugin) StatusLines(lang string) []string {
 	if base == "" {
 		return nil
 	}
-	now := time.Now()
+	now := p.nowTime()
 	var parts []string
 	for _, tag := range tags {
 		store := p.storeFor(tag)

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"wen/internal/clock"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 )
@@ -40,7 +40,7 @@ const scheduleSchemaZH = `{
   "required": ["content", "schedule_type"]
 }`
 
-func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *scheduleTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var req struct {
 		Content         string `json:"content"`
 		ScheduleType    string `json:"schedule_type"`
@@ -48,6 +48,7 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 		IntervalMinutes int    `json:"interval_minutes"`
 		DailyTime       string `json:"daily_time"`
 	}
+	now := clock.Now(ctx)
 	lang := t.p.langOf()
 	if err := json.Unmarshal(args, &req); err != nil {
 		return "", plugin.BadArgs(lang, err)
@@ -57,18 +58,18 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 	}
 
 	task := &Task{
-		ID:        newTaskID(),
+		ID:        newTaskID(now),
 		Content:   strings.TrimSpace(req.Content),
 		Type:      req.ScheduleType,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	}
 	switch req.ScheduleType {
 	case typeOnce:
-		at, err := parseAt(lang, req.At)
+		at, err := parseAt(lang, req.At, now.Location())
 		if err != nil {
 			return "", err
 		}
-		if !at.After(time.Now()) {
+		if !at.After(now) {
 			return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.past", "执行时刻 %s 已经过去"), at.Format("2006-01-02 15:04"))
 		}
 		task.At = at
@@ -106,7 +107,7 @@ func (t *scheduleTool) Execute(_ context.Context, args json.RawMessage) (string,
 	}
 	p.wakeup()
 
-	next := task.nextRun(time.Now())
+	next := task.nextAt(now)
 	return prompt.Tf(lang, "prompt.scheduler.result.created", "已创建定时任务 %s，下次执行：%s", task.describe(lang), next.Format("2006-01-02 15:04")), nil
 }
 
@@ -124,7 +125,7 @@ func (t *listTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type": "object", "properties": {}}`)
 }
 
-func (t *listTool) Execute(context.Context, json.RawMessage) (string, error) {
+func (t *listTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
 	p := t.p
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -132,11 +133,11 @@ func (t *listTool) Execute(context.Context, json.RawMessage) (string, error) {
 	if len(p.tasks) == 0 {
 		return prompt.T(lang, "prompt.scheduler.result.no_tasks", "当前没有定时任务。"), nil
 	}
-	now := time.Now()
+	now := clock.Now(ctx)
 	var b strings.Builder
 	for _, task := range p.tasks {
 		b.WriteString("- " + task.describe(lang))
-		if next := task.nextRun(now); !next.IsZero() {
+		if next := task.nextAt(now); !next.IsZero() {
 			b.WriteString(prompt.Tf(lang, "prompt.scheduler.result.next_run", "，下次执行 %s",
 				next.Format("2006-01-02 15:04")))
 		}
@@ -165,7 +166,7 @@ const cancelSchemaZH = `{
   "required": ["id"]
 }`
 
-func (t *cancelTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *cancelTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var req struct {
 		ID string `json:"id"`
 	}
@@ -182,7 +183,7 @@ func (t *cancelTool) Execute(_ context.Context, args json.RawMessage) (string, e
 				return prompt.Tf(lang, "prompt.scheduler.result.already_done", "任务 %s 已经结束，无需取消。", task.ID), nil
 			}
 			task.Done = true
-			task.DoneAt = time.Now()
+			task.DoneAt = clock.Now(ctx)
 			task.Note = prompt.T(lang, "prompt.scheduler.note.cancelled", "已取消")
 			if err := p.saveLocked(); err != nil {
 				return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.save_short", "保存失败: %w"), err)
