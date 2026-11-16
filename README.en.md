@@ -107,7 +107,7 @@ Thirty-seven built-in plugins, grouped by function, all toggleable and configura
 - [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
 - [Docker deployment](docs/en/docker.md) — building the image, compose variables, data volumes and upgrades
 - [Backup and restore](docs/en/backup.md) — what `wen export` / `wen import` include, and their safety boundaries
-- [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
+- [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script, and letting the character live through several days before you judge whether it is still the same person
 - [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message
 - [HTTP API](docs/en/http-api.md) — the endpoints shared by the web UI and any external program
 - [Project layout and writing plugins](docs/en/architecture.md) — a tour of the tree, the `Plugin` interface and its optional companions, and visibility scopes

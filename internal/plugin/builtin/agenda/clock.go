@@ -24,10 +24,6 @@ const (
 )
 
 // name 是这一档在会话注记与日志里的说法，跟随语言。
-//
-// 从前另有一个 String() 专给日志用、固定说中文——那时日志本来就是中文的。现在
-// 日志也跟着语言走，再留一个说中文的 String() 就只是个陷阱：忘了带 lang 的调用点
-// 照样编得过，只是在英文日志里冒出两个汉字。
 func (k activityKind) name(lang string) string {
 	switch k {
 	case kindStart:
@@ -51,26 +47,61 @@ func (p *Plugin) loop(ctx context.Context, wake <-chan struct{}) {
 		case <-wake:
 			timer.Stop()
 		case <-timer.C:
-			p.tick(ctx)
+			p.tickAt(ctx, p.now())
 		}
 	}
 }
 
+// NextBackgroundAt 返回下一次需要调度维护工作的时刻。
+// 查询负责预测，执行（tickAt）负责判断是否到期。
+func (p *Plugin) NextBackgroundAt(now time.Time) (time.Time, bool) {
+	return p.nextDueAt(now)
+}
+
+// RunBackground 同步执行 now 时刻到期的维护工作；手动时间线下由评测调用。
+func (p *Plugin) RunBackground(ctx context.Context, now time.Time) error {
+	return p.tickAt(ctx, now)
+}
+
 // untilNext 返回距最近一个到点时刻的时长：未派发的开始、已开始未结束的结束、与对方
-// 约定的提前提醒；启动宽限期内不早于宽限结束。
+// 约定的提前提醒、忙碌清理、承诺收束；启动宽限期内不早于宽限结束。
 func (p *Plugin) untilNext() time.Duration {
-	s := p.snapshot()
+	now := p.now()
+	wait := pollFallback
+	if next, ok := p.nextDueAt(now); ok {
+		if d := next.Sub(now); d < wait {
+			wait = d
+		}
+	}
+	if wait < 0 {
+		wait = 0
+	}
 	p.mu.RLock()
 	graceEnd := p.startedAt.Add(p.startupGrace)
 	p.mu.RUnlock()
-	now := p.now()
+	if g := graceEnd.Sub(now); g > wait {
+		wait = g
+	}
+	return wait
+}
+
+// nextDueAt 预测下一次维护工作的时刻。
+//
+// 活动模型轮次（开始/结束/补记）只受 runActivities 控制；提前提醒、忙碌状态清理与
+// 承诺收束各自按自己的条件调度——关闭自动活动轮次不等于关掉整张表。
+// 已到期的候选钳到 now，交由 tickAt 判断并消费。
+func (p *Plugin) nextDueAt(now time.Time) (time.Time, bool) {
+	s := p.snapshot()
 	day := s.today(now)
 	today := day.Format(dateLayout)
 
-	wait := pollFallback
+	var next time.Time
 	consider := func(t time.Time) {
-		if d := t.Sub(now); d < wait {
-			wait = d
+		if t.Before(now) {
+			t = now
+		}
+		if next.IsZero() || t.Before(next) {
+			next = t
 		}
 	}
 	for _, tag := range p.allDomains() {
@@ -81,24 +112,67 @@ func (p *Plugin) untilNext() time.Duration {
 		for i := range pl.Items {
 			it := &pl.Items[i]
 			start, end := it.span(day, s.dayStartHour)
+
+			// 与对方的约定快到了：投一条开口理由，到 start 为止有效。
+			// 不受 runActivities 控制；已过 start 就不再提醒。
+			if it.WithUser && it.Status == statusPlanned && it.SoonFired.IsZero() &&
+				s.remindBefore > 0 && start.After(now) {
+				consider(start.Add(-s.remindBefore))
+			}
+			// 进行中的项到点了：撤掉忙碌状态。用独立的 BusyCleared，不借用结束轮次标记。
+			if it.Status == statusOngoing && !it.BusyCleared {
+				consider(end)
+			}
+			if !s.runActivities {
+				continue
+			}
 			switch {
 			case it.Status == statusPlanned && it.StartFired.IsZero():
 				consider(start)
-				if it.WithUser && s.remindBefore > 0 && it.SoonFired.IsZero() {
-					consider(start.Add(-s.remindBefore))
-				}
 			case (it.Status == statusPlanned || it.Status == statusOngoing) && it.EndFired.IsZero():
 				consider(end)
 			}
 		}
 	}
-	if wait < 0 {
-		wait = 0
+	// 承诺过期收束：没有活动的日子也要能触发。
+	if at, ok := p.nextPromiseSweepAt(now); ok {
+		consider(at)
 	}
-	if g := graceEnd.Sub(now); g > wait {
-		wait = g
+	return next, !next.IsZero()
+}
+
+// nextPromiseSweepAt 返回最早一条待收束承诺的日始时刻；已过期的返回 now。
+func (p *Plugin) nextPromiseSweepAt(now time.Time) (time.Time, bool) {
+	s := p.snapshot()
+	var next time.Time
+	for _, tag := range p.allDomains() {
+		st := p.storeFor(tag)
+		if st == nil {
+			continue
+		}
+		list, err := st.LoadPromises()
+		if err != nil {
+			continue
+		}
+		for _, pr := range list {
+			if pr.settled() {
+				continue
+			}
+			d, err := time.ParseInLocation(dateLayout, pr.Date, now.Location())
+			if err != nil {
+				continue
+			}
+			sweep := d.AddDate(0, 0, promiseGraceDays+1)
+			at := time.Date(sweep.Year(), sweep.Month(), sweep.Day(), s.dayStartHour, 0, 0, 0, now.Location())
+			if at.Before(now) {
+				at = now
+			}
+			if next.IsZero() || at.Before(next) {
+				next = at
+			}
+		}
 	}
-	return wait
+	return next, !next.IsZero()
 }
 
 // due 是一次派发决定。
@@ -108,17 +182,17 @@ type due struct {
 	kind activityKind
 }
 
-// tick 扫全部域的表，把到点的项标记后派发。标记（start_fired / end_fired）先落盘再跑
-// 轮次：重启不重发，轮次跑多久都不会被重复派发。启动宽限期内什么都不做——刚起来那
-// 一秒人多半正要自己说话。
-func (p *Plugin) tick(ctx context.Context) {
+// tickAt 扫全部域的表，把到点的项标记后派发，并执行提醒、忙碌清理与承诺收束。
+// 标记（start_fired / end_fired）先落盘再跑轮次：重启不重发，轮次跑多久都不会被
+// 重复派发。启动宽限期内什么都不做——刚起来的那一秒人多半正要自己说话。
+func (p *Plugin) tickAt(ctx context.Context, now time.Time) error {
 	s := p.snapshot()
 	p.mu.RLock()
 	graceEnd := p.startedAt.Add(p.startupGrace)
+	manual := p.manual
 	p.mu.RUnlock()
-	now := p.now()
 	if now.Before(graceEnd) {
-		return
+		return nil
 	}
 	dispatch := s.runActivities && s.runTurn != nil
 	day := s.today(now)
@@ -135,9 +209,12 @@ func (p *Plugin) tick(ctx context.Context) {
 			for i := range pl.Items {
 				it := &pl.Items[i]
 				start, end := it.span(day, s.dayStartHour)
-				// 进行中的项到点了：不管派不派轮次，忙碌状态都该撤
-				if it.Status == statusOngoing && !end.After(now) {
+				// 进行中的项到点了：不管派不派轮次，忙碌状态都该撤。撤过就记下，
+				// 不再重复调度。
+				if it.Status == statusOngoing && !end.After(now) && !it.BusyCleared {
 					clearAvailability()
+					it.BusyCleared = true
+					changed = true
 				}
 				// 与对方的约定快到了：投一条开口理由，到 start 为止有效
 				if it.WithUser && it.Status == statusPlanned && s.remindBefore > 0 && it.SoonFired.IsZero() &&
@@ -176,13 +253,27 @@ func (p *Plugin) tick(ctx context.Context) {
 			i18n.Logf(p.langOf(), "log.agenda.scan_failed", "agenda: 扫表失败: %v", err)
 		}
 	}
-	p.sweepPromises(ctx, day)
+	p.sweepPromises(ctx, day, now)
 
+	var firstErr error
 	for _, d := range dues {
+		if manual {
+			if err := p.runActivity(ctx, d, now); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		p.wg.Add(1)
-		go p.runActivity(ctx, d, now)
+		go func(d due) {
+			defer p.wg.Done()
+			_ = p.runActivity(ctx, d, now)
+		}(d)
 	}
+	return firstErr
 }
+
+// tick 是既有入口：按当前时钟扫一遍。
+func (p *Plugin) tick(ctx context.Context) { _ = p.tickAt(ctx, p.now()) }
 
 // sweepPromises 把过了宽限期还没了结的事标成「没做成」，并为每条留一行注记。
 //
@@ -192,9 +283,8 @@ func (p *Plugin) tick(ctx context.Context) {
 // 它们不再是 pending，下一拍什么都不会发生，不需要另外记「上次扫到哪天」。
 //
 // 注记而不是开口理由：这是给人看的一笔账，不该变成角色主动找上来说的话。
-func (p *Plugin) sweepPromises(ctx context.Context, day time.Time) {
+func (p *Plugin) sweepPromises(ctx context.Context, day, now time.Time) {
 	cutoff := day.AddDate(0, 0, -promiseGraceDays).Format(dateLayout)
-	now := p.now()
 	var missed []Promise
 	for _, tag := range p.allDomains() {
 		if _, err := p.storeFor(tag).UpdatePromises(func(ps *[]Promise, _ func() string) (bool, error) {
@@ -233,21 +323,21 @@ func (p *Plugin) sweepPromises(ctx context.Context, day time.Time) {
 
 // runActivity 跑一次开始 / 结束轮次：落在最近活跃的会话上，一个都没有时不新建
 // ——没人看的开始与结束只进文件。会话忙每分钟重试，超出上限放弃并留注记。
-func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
-	defer p.wg.Done()
+func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			i18n.Logf(p.langOf(), "log.agenda.activity_panic", "agenda: %s「%s」的%s轮次 panic（已隔离）: %v", d.item.ID, d.item.Title, d.kind.name(p.langOf()), r)
+			err = nil
 		}
 	}()
 	s := p.snapshot()
 	if s.runTurn == nil || s.sessions == nil {
-		return
+		return nil
 	}
 	sid, _, err := s.sessions.LastActive()
 	if err != nil || sid == "" {
 		i18n.Logf(p.langOf(), "log.agenda.no_session", "agenda: 没有可用会话，「%s」的%s轮次跳过", d.item.Title, d.kind.name(p.langOf()))
-		return
+		return nil
 	}
 	day := s.today(now)
 	var input string
@@ -262,32 +352,37 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 	}
 	nctx := plugin.WithScope(ctx, plugin.Scope{Write: d.tag})
 
+	manual := p.isManual()
 	for attempt := 0; ; attempt++ {
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)
 		tctx = plugin.WithEphemeralInput(tctx)
-		_, err := s.runTurn(tctx, sid, input)
+		var runErr error
+		_, runErr = s.runTurn(tctx, sid, input)
 		cancel()
 		switch {
-		case err == nil:
+		case runErr == nil:
 			if d.kind != kindStart {
 				p.postBackCue(d)
 			}
-			return
-		case errors.Is(err, plugin.ErrSessionBusy):
-			if attempt+1 >= defBusyRetryMax {
+			return nil
+		case errors.Is(runErr, plugin.ErrTurnNotStarted):
+			p.rollbackActivity(d.tag, d.item.ID, d.kind)
+			return runErr
+		case errors.Is(runErr, plugin.ErrSessionBusy):
+			if manual || attempt+1 >= defBusyRetryMax {
 				i18n.Logf(p.langOf(), "log.agenda.session_busy", "agenda: 会话 %s 持续繁忙，「%s」的%s轮次放弃", sid, d.item.Title, d.kind.name(p.langOf()))
 				p.postNotice(nctx, sid, i18n.Tf(s.lang, "plugin.agenda.notice.busy_gave_up",
 					"「%s」的%s轮次因会话持续繁忙而放弃。", d.item.Title, d.kind.name(s.lang)))
-				return
+				return nil
 			}
 			select {
 			case <-time.After(p.busyRetry):
 			case <-ctx.Done():
-				return
+				return nil
 			}
 		default:
 			if ctx.Err() == nil {
-				i18n.Logf(p.langOf(), "log.agenda.activity_failed", "agenda: 「%s」的%s轮次失败: %v", d.item.Title, d.kind.name(p.langOf()), err)
+				i18n.Logf(p.langOf(), "log.agenda.activity_failed", "agenda: 「%s」的%s轮次失败: %v", d.item.Title, d.kind.name(p.langOf()), runErr)
 				// 轮次挂了不等于什么都没发生：经历是工具当场落盘的，模型可能已经写好了，
 				// 只是收尾那次模型调用没回来（实际见过：done 已经记上，随后的调用等了
 				// 六十秒没等到响应头）。这条理由本来就只看落盘的结果（见 postBackCue），
@@ -296,9 +391,39 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 					p.postBackCue(d)
 				}
 			}
-			return
+			return nil
 		}
 	}
+}
+
+// rollbackActivity 把「轮次未开始」的活动恢复成待派发，保持待处理。
+func (p *Plugin) rollbackActivity(tag, id string, kind activityKind) {
+	st := p.storeFor(tag)
+	if st == nil {
+		return
+	}
+	_, _ = st.UpdatePlan(func(pl *Plan) (bool, error) {
+		it := pl.item(id)
+		if it == nil {
+			return false, nil
+		}
+		switch kind {
+		case kindStart:
+			it.StartFired = time.Time{}
+		case kindEnd:
+			it.EndFired = time.Time{}
+		case kindCatchUp:
+			it.StartFired, it.EndFired = time.Time{}, time.Time{}
+		}
+		return true, nil
+	})
+}
+
+// isManual 报告当前是否运行在手动时间线上。
+func (p *Plugin) isManual() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.manual
 }
 
 // postBackCue 在结束轮次成功后投一条「刚回来」的开口理由，不依赖模型是否调了工具：

@@ -15,18 +15,37 @@ import (
 // 报告是给人看的，基线要比的是机器：同一份脚本前后两次运行，逐轮比较确定性指标。
 // schema 变了就升版本，旧基线直接拒绝，免得拿两套字段硬比。
 
-const evalJSONSchema = 1
+const (
+	evalJSONSchema       = 2
+	evalJSONMinSupported = 1
+)
 
 // evalJSON 是 --json 写出的形状，同时也是 --baseline 读的形状。
 type evalJSON struct {
-	Schema          int            `json:"schema"`
-	Name            string         `json:"name"`
-	Model           string         `json:"model"`
-	Start           string         `json:"start,omitempty"` // 虚拟时钟的起点，用来判断两次是不是同一个场景
-	Compactions     int            `json:"compactions"`
-	AutoCompactions int            `json:"auto_compactions"`
-	Turns           []evalJSONTurn `json:"turns"`
-	Judge           *evalJSONJudge `json:"judge,omitempty"`
+	Schema           int                  `json:"schema"`
+	Name             string               `json:"name"`
+	Model            string               `json:"model"`
+	Start            string               `json:"start,omitempty"` // 虚拟时钟的起点，用来判断两次是不是同一个场景
+	ClockTo          string               `json:"clock_to,omitempty"`
+	Compactions      int                  `json:"compactions"`
+	AutoCompactions  int                  `json:"auto_compactions"`
+	Turns            []evalJSONTurn       `json:"turns"`
+	Backgrounds      []evalJSONBackground `json:"backgrounds,omitempty"`
+	BackgroundUsed   int                  `json:"background_used,omitempty"`
+	BackgroundDenied int                  `json:"background_denied,omitempty"`
+	Drift            *evalDrift           `json:"drift,omitempty"`
+	Judge            *evalJSONJudge       `json:"judge,omitempty"`
+}
+
+// evalJSONBackground 是一条后台轮次。它只作展示与趋势，不进入基线退化判据。
+type evalJSONBackground struct {
+	At           string         `json:"at"`
+	Origin       string         `json:"origin"`
+	Reply        string         `json:"reply"`
+	Runes        int            `json:"runes"`
+	Sentences    int            `json:"sentences"`
+	BracketRatio float64        `json:"bracket_ratio"`
+	HitCounts    map[string]int `json:"hit_counts,omitempty"`
 }
 
 // evalJSONTurn 是一轮 say 的结构化结果。只留前后可比的数字与稳定 id，
@@ -69,12 +88,16 @@ func startOf(t time.Time) string {
 // evalJSONOf 把运行结果转成可落盘、可对比的形状。
 func evalJSONOf(r evalResult) evalJSON {
 	out := evalJSON{
-		Schema:          evalJSONSchema,
-		Name:            r.Name,
-		Model:           r.Model,
-		Start:           startOf(r.ClockFrom),
-		Compactions:     r.Compactions,
-		AutoCompactions: r.AutoCompactions,
+		Schema:           evalJSONSchema,
+		Name:             r.Name,
+		Model:            r.Model,
+		Start:            startOf(r.ClockFrom),
+		ClockTo:          startOf(r.ClockTo),
+		Compactions:      r.Compactions,
+		AutoCompactions:  r.AutoCompactions,
+		BackgroundUsed:   r.BackgroundUsed,
+		BackgroundDenied: r.BackgroundDenied,
+		Drift:            r.Drift,
 	}
 	for _, row := range r.Rows {
 		if row.Kind != rowSay {
@@ -106,6 +129,23 @@ func evalJSONOf(r evalResult) evalJSON {
 			Relation:   r.Judge.Relation.Score,
 		}
 	}
+	for _, row := range r.BackgroundTurns {
+		bg := evalJSONBackground{
+			At:           startOf(row.At),
+			Origin:       row.Origin,
+			Reply:        row.Reply,
+			Runes:        row.Metrics.Runes,
+			Sentences:    row.Metrics.Sentences,
+			BracketRatio: row.Metrics.BracketRatio,
+		}
+		if len(row.Hits) > 0 {
+			bg.HitCounts = map[string]int{}
+			for _, h := range row.Hits {
+				bg.HitCounts[h.Rule]++
+			}
+		}
+		out.Backgrounds = append(out.Backgrounds, bg)
+	}
 	return out
 }
 
@@ -131,8 +171,9 @@ func loadEvalJSON(path string) (evalJSON, error) {
 	if err := json.Unmarshal(raw, &b); err != nil {
 		return evalJSON{}, fmt.Errorf(tr("cli.eval.err.baseline_read", "读取基线失败: %w"), err)
 	}
-	if b.Schema != evalJSONSchema {
-		return evalJSON{}, fmt.Errorf(tr("cli.eval.err.baseline_schema", "基线文件的 schema 是 %d，当前只支持 %d"), b.Schema, evalJSONSchema)
+	if b.Schema < evalJSONMinSupported || b.Schema > evalJSONSchema {
+		return evalJSON{}, fmt.Errorf(tr("cli.eval.err.baseline_schema",
+			"基线文件的 schema 是 %d，当前支持 %d-%d"), b.Schema, evalJSONMinSupported, evalJSONSchema)
 	}
 	return b, nil
 }

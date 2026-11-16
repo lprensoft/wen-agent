@@ -109,7 +109,7 @@ wen update [--check] [-y]  检查并安装新版本
 - [部署与访问控制](docs/deployment.md) —— 认证模型、启停脚本与 systemd
 - [容器部署（Docker）](docs/docker.md) —— 构建镜像、compose 变量、数据卷与升级
 - [备份与恢复](docs/backup.md) —— `wen export` / `wen import` 的备份范围与安全边界
-- [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本
+- [回放评测（wen eval）](docs/evaluation.md) —— 把「改完提示词角色变好了没有」变成可重复跑的脚本，也能让角色自己过完几天，再看是不是同一个人
 - [上下文的组织](docs/context.md) —— 一轮请求怎么拼、当前时间为什么不放在 system 里
 - [HTTP API](docs/http-api.md) —— Web UI 与外部程序共用的接口
 - [项目结构与插件开发](docs/architecture.md) —— 目录导览、`Plugin` 接口与各个可选接口、可见域

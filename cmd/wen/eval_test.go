@@ -52,6 +52,20 @@ func TestExampleScriptParses(t *testing.T) {
 	}
 }
 
+func TestWeekScriptParses(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/eval/week.json")
+	if err != nil {
+		t.Skip("示例脚本不在预期位置:", err)
+	}
+	sc, err := parseScript(raw)
+	if err != nil {
+		t.Fatalf("跨天示例解析失败: %v", err)
+	}
+	if sc.MaxBackgroundTurns != 60 || len(sc.Turns) != 7 {
+		t.Fatalf("跨天示例解析结果不对：%+v", sc)
+	}
+}
+
 func TestParseJudge(t *testing.T) {
 	cases := []string{
 		`{"same_person":{"score":4,"reason":"口癖一致"},"tone":{"score":3,"reason":"压缩后客气了些"},"relation":{"score":5,"reason":"称呼没变"}}`,
@@ -186,7 +200,7 @@ func TestRenderEvalReportFailures(t *testing.T) {
 
 func TestBuildJudgePrompt(t *testing.T) {
 	r := sampleResult()
-	p := buildJudgePrompt(r.Persona, r.Samples, r.Rows, []string{"有没有忘了对方的名字"})
+	p := buildJudgePrompt(r.Persona, r.Samples, r.Rows, nil, r.ClockFrom, r.ClockTo, []string{"有没有忘了对方的名字"})
 	for _, want := range []string{
 		"[角色设定]\n小满，二十出头，说话短。",
 		"[台词样例]\n你：累了。",
@@ -204,7 +218,7 @@ func TestBuildJudgePrompt(t *testing.T) {
 	if strings.Count(p, "—— 此处做过一次压缩 ——") != 2 {
 		t.Error("脚本压缩与自动压缩都该标出来")
 	}
-	empty := buildJudgePrompt("", "", nil, nil)
+	empty := buildJudgePrompt("", "", nil, nil, time.Time{}, time.Time{}, nil)
 	if strings.Count(empty, "（未提供）") != 2 || strings.Contains(empty, "额外关注点") {
 		t.Errorf("空设定的提示词 = %q", empty)
 	}
@@ -465,5 +479,86 @@ func TestEvalJSONRoundTrip(t *testing.T) {
 	}
 	if _, err := loadEvalJSON(path); err == nil {
 		t.Error("schema 不认识时应当报错")
+	}
+}
+
+func TestParseScriptRunHoursAndTick(t *testing.T) {
+	good := `{"turns":[{"say":"早"},{"run_hours":24},{"tick":true},{"say":"晚"}],"max_background_turns":7}`
+	sc, err := parseScript([]byte(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.MaxBackgroundTurns != 7 || sc.Turns[1].RunHours != 24 || !sc.Turns[2].Tick {
+		t.Fatalf("解析结果不对：%+v", sc)
+	}
+	for _, bad := range []string{
+		`{"turns":[{"say":"早"},{"run_hours":-1}]}`,
+		`{"turns":[{"say":"早"},{"run_hours":1,"tick":true}]}`,
+		`{"turns":[{"say":"早"}],"max_background_turns":-1}`,
+		`{"turns":[{"say":"早"},{"tick":true,"expect":{"must_include":["x"]}}]}`,
+	} {
+		if _, err := parseScript([]byte(bad)); err == nil {
+			t.Fatalf("应拒绝：%s", bad)
+		}
+	}
+}
+
+func TestLoadEvalJSONSchemaOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	raw := `{"schema":1,"name":"旧基线","model":"m","start":"2026-03-01T08:00:00+08:00","turns":[{"index":1,"say":"早","reply":"嗯"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := loadEvalJSON(path)
+	if err != nil {
+		t.Fatalf("schema 1 应可读：%v", err)
+	}
+	if len(b.Turns) != 1 || b.Turns[0].Say != "早" {
+		t.Fatalf("读回的基线不对：%+v", b)
+	}
+}
+
+func TestComputeDrift(t *testing.T) {
+	row := func(i int, text string) evalRow {
+		return evalRow{Kind: rowSay, Index: i, Reply: text, Metrics: stylecheck.Measure("", text), Hits: stylecheck.Check("", text)}
+	}
+	r := evalResult{Rows: []evalRow{
+		row(1, "好的。希望这对你有帮助。"),
+		row(2, "嗯。"),
+		row(3, "【笑】行。"),
+	}}
+	d := computeDrift(r.Rows)
+	if d == nil || d.Early.Turns != 1 || d.Late.Turns != 2 {
+		t.Fatalf("漂移分段不对：%+v", d)
+	}
+	if d.Early.HitsPer1000 <= 0 || d.Late.HitsPer1000 >= d.Early.HitsPer1000 {
+		t.Fatalf("前半段助手腔应更密：%+v", d)
+	}
+}
+
+func TestReportRendersBackgroundAndDrift(t *testing.T) {
+	r := sampleResult()
+	r.Drift = &evalDrift{
+		Early: evalDriftHalf{Turns: 1, AvgRunes: 20, HitsPer1000: 50, AvgSentences: 2, BracketRatio: 0.1},
+		Late:  evalDriftHalf{Turns: 1, AvgRunes: 10, HitsPer1000: 0, AvgSentences: 1, BracketRatio: 0.2},
+	}
+	r.BackgroundTurns = []evalRow{{
+		Kind: rowBackground, At: time.Date(2026, 3, 2, 8, 0, 0, 0, time.Local),
+		Origin: "heartbeat", Reply: "在呢", Metrics: stylecheck.Measure("", "在呢"),
+	}}
+	r.BackgroundUsed = 1
+	r.Rows = append(r.Rows, evalRow{Kind: rowRun, RunHours: 24, Background: 1})
+	out := renderEvalReport(r)
+	for _, want := range []string{
+		"- 后台轮次：尝试 1 次，成功 1 次，失败 0 次",
+		"## 后台轮次",
+		"heartbeat",
+		"## 前后半段对比",
+		"后台 1 轮",
+		"推进",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("报告缺 %q\n%s", want, out)
+		}
 	}
 }

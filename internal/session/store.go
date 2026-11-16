@@ -50,11 +50,16 @@ func (s *Store) path(id string) (string, error) {
 
 // Create 新建 session，返回其 Meta。ID 为时间戳+随机后缀，天然按时间排序。
 func (s *Store) Create() (Meta, error) {
+	return s.CreateAt(time.Now())
+}
+
+// CreateAt 用给定时刻新建 session。评测用它让会话时间跟随虚拟时间线，
+// 而不是系统时间；生产路径走 Create。
+func (s *Store) CreateAt(now time.Time) (Meta, error) {
 	buf := make([]byte, 3)
 	if _, err := rand.Read(buf); err != nil {
 		return Meta{}, err
 	}
-	now := time.Now()
 	meta := Meta{
 		Type:      "meta",
 		ID:        now.Format("20060102-150405") + "-" + hex.EncodeToString(buf),

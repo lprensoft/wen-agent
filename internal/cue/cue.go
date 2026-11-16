@@ -94,6 +94,15 @@ func Pending(now time.Time) bool {
 	return len(cues) > 0
 }
 
+// Reset 清空未消费的理由并卸下通知回调。评测在同一进程里连续跑时用它隔离；
+// 生产路径没有调用点。
+func Reset() {
+	mu.Lock()
+	cues = nil
+	notify = nil
+	mu.Unlock()
+}
+
 // Drop 撤回一条尚未消费的理由（按 Source+Key）。产生方发现理由不再成立时用——
 // 已经送达的收不回，还没送达的不该再送出去（预报里的雨取消了，「明天有雨」就不能
 // 再说）。撤回不存在的键什么都不发生。

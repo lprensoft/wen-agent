@@ -63,6 +63,9 @@ type Plugin struct {
 	wake      chan struct{}
 	startedAt time.Time
 	planning  map[string]bool // 域 → 规划轮次进行中
+	// planPending 是手动时间线下登记、等待 Settle 同步执行的规划。
+	// 不占 wg：预算中止时 StopAll 必须能正常返回。
+	planPending map[string]pendingPlan
 	// planSubmitted 域 → 本次规划轮次里已经提交过表。
 	//
 	// 它挡的是一种真实的绕圈：规划提示词是一次性输入，却在工具循环的每一次迭代里
@@ -76,6 +79,7 @@ type Plugin struct {
 	planSettle   time.Duration
 	busyRetry    time.Duration
 	startupGrace time.Duration
+	manual       bool // 手动时间线：不自起循环，由 RunBackground 驱动
 
 	// 按可见域分出的库，惰性创建。单独一把锁：这张表的生命周期与配置无关。
 	storesMu sync.Mutex
@@ -179,6 +183,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	if ictx.Clock != nil {
+		p.now = ictx.Clock.Now
+	}
+	p.manual = ictx.ManualTime
+	if p.manual {
+		p.startupGrace = 0
+	}
 	p.base = filepath.Join(ictx.StateDir, "agenda")
 	p.autoPlan = plugin.CfgBool(cfg, "auto_plan", true)
 	p.runActivities = plugin.CfgBool(cfg, "run_activities", true)
@@ -196,6 +207,11 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.sessions = ictx.Sessions
 	p.planning = map[string]bool{}
 	p.planSubmitted = map[string]bool{}
+	p.planPending = map[string]pendingPlan{}
+	if p.manual {
+		p.planSettle = 0
+		p.busyRetry = 0
+	}
 	p.startedAt = p.now()
 
 	// 忙碌状态不落盘，权威在表里：重启后从「进行中且还没到点」的项重建
@@ -203,6 +219,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.wake = make(chan struct{}, 1)
+	if p.manual {
+		return nil // 手动时间线：不启循环，RunBackground 显式驱动
+	}
 	p.wg.Add(1)
 	go p.loop(p.ctx, p.wake)
 	return nil
@@ -213,6 +232,7 @@ func (p *Plugin) Stop() {
 	p.mu.Lock()
 	cancel := p.cancel
 	p.cancel = nil
+	p.planPending = map[string]pendingPlan{}
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -389,6 +409,7 @@ func setAvailability(it *Item, day time.Time, dayStartHour int, now time.Time) {
 	if !end.After(now) {
 		return
 	}
+	it.BusyCleared = false
 	availability.Set(availability.State{
 		Source: availabilitySource, Activity: it.Title, Level: lvl, Since: start, Until: end,
 	})

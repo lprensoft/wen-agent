@@ -38,9 +38,47 @@ func (p *Plugin) loop(ctx context.Context, tick time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			p.postDueCues(time.Now())
+			p.postDueCues(p.nowTime())
 		}
 	}
+}
+
+// NextBackgroundAt 返回最早一条尚未投递理由的发作时刻；已到期的返回 now。
+func (p *Plugin) NextBackgroundAt(now time.Time) (time.Time, bool) {
+	base, tags := p.allDomains()
+	if base == "" {
+		return time.Time{}, false
+	}
+	var next time.Time
+	for _, tag := range tags {
+		store := p.storeFor(tag)
+		if store == nil {
+			continue
+		}
+		snap, err := store.Current(now)
+		if err != nil {
+			continue
+		}
+		for _, v := range snap.Active {
+			c := v.Cond
+			if c.Cued {
+				continue
+			}
+			if !c.Onset.After(now) {
+				return now, true
+			}
+			if next.IsZero() || c.Onset.Before(next) {
+				next = c.Onset
+			}
+		}
+	}
+	return next, !next.IsZero()
+}
+
+// RunBackground 投递 now 时刻到期的发作理由；手动时间线下由评测调用。
+func (p *Plugin) RunBackground(_ context.Context, now time.Time) error {
+	p.postDueCues(now)
+	return nil
 }
 
 // postDueCues 扫一遍全部域，为到点发作、还没投过理由的状况投递理由。

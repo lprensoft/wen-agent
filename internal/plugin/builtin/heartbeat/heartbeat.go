@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"wen/internal/availability"
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -67,10 +68,21 @@ const beatTimeout = 10 * time.Minute
 // decayEvery 是空闲衰减定时器的周期：无人聊天时每次触发都把间隔放缓一档。
 const decayEvery = 15 * time.Minute
 
+// decaySlack 容忍 ticker 抖动：定时器可能比计划时刻早几毫秒触发，不能因此把这一轮
+// 检查当成「还没到」而跳过。虚拟时间没有抖动，但两条路径用同一套判据。
+const decaySlack = time.Second
+
 // Plugin 是心跳插件。有状态：Init 会被反复调用（SetConfig），所有字段由 mu 保护，
 // 重入时先停掉上一轮循环再起新的。
 type Plugin struct {
 	mu sync.Mutex
+
+	// clock 非 nil 表示时间由外部推进（评测）。单独一把锁：nowTime 会在持有
+	// p.mu 的路径里被调用，共用 p.mu 会自锁。
+	clockMu sync.Mutex
+	clock   clock.Clock
+	// manual 为真时不启自己的循环，后台工作由 RunBackground 驱动。
+	manual bool
 
 	// 配置（Init 写入）
 	lang     string // 进程语言，注入片段与工具文本据此取用
@@ -96,6 +108,7 @@ type Plugin struct {
 	adjusted    bool          // cur 是动态判定调整出来的，而非基础间隔的副本
 	lastActive  time.Time     // 最近一次真人交互轮次的时间
 	lastBeat    time.Time
+	lastDecay   time.Time // 上一次空闲衰减检查的计划时刻（按 decayEvery 推进，不跟随实际处理时刻）
 	curContext  string    // 当前情境（模型经工具切换，持久化）
 	pausedUntil time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
 	pausedAt    time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
@@ -122,6 +135,18 @@ type Plugin struct {
 
 func New() *Plugin { return &Plugin{} }
 
+// nowTime 返回心跳视角的「现在」：注入钟优先，否则系统时间。
+// 单独用 clockMu，便于在持有 p.mu 的路径里调用。
+func (p *Plugin) nowTime() time.Time {
+	p.clockMu.Lock()
+	c := p.clock
+	p.clockMu.Unlock()
+	if c != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
 func (p *Plugin) Name() string { return "heartbeat" }
 
 func (p *Plugin) Category() string { return plugin.CategoryBackground }
@@ -140,7 +165,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	p.mu.Lock()
 	lang, cur, dynamic := p.lang, p.cur, p.dynamic
 	var paused string
-	if until := time.Until(p.pausedUntil); until > 0 {
+	if until := p.pausedUntil.Sub(clock.Now(ctx)); until > 0 {
 		paused = p.pauseStateLocked(plugin.IsInteractive(ctx), until)
 	}
 	p.mu.Unlock()
@@ -227,9 +252,14 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.Stop() // 重入：先停上一轮循环，避免两套定时器并行
 
+	p.clockMu.Lock()
+	p.clock = ictx.Clock
+	p.clockMu.Unlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	p.manual = ictx.ManualTime
 	p.base, p.minIv, p.maxIv = base, minIv, maxIv
 	p.prompt = plugin.CfgString(cfg, "prompt", defaultPrompt)
 	p.dynamic = plugin.CfgBool(cfg, "dynamic", true)
@@ -246,7 +276,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	st := p.loadStateLocked()
 	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.normalize)
 	p.lastActive = p.probeLastActiveLocked()
-	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
+	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, p.nowTime())
+	p.lastDecay = p.nowTime()
 	// 情境跟着状态走；配置里已经删掉的情境名不保留，否则 beat 会去查一个不存在的键
 	if _, ok := p.contexts[st.Context]; ok {
 		p.curContext = st.Context
@@ -257,7 +288,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 设下暂停之后真人说过话的话，说话那刻已把暂停清掉——重启不该让它复活，
 	// 所以要对照「暂停设于何时」而不能只看「暂停到何时」。
 	p.clearPauseLocked()
-	if p.dynamic && st.PausedUntil.After(time.Now()) && !p.lastActive.After(st.PausedAt) {
+	if p.dynamic && st.PausedUntil.After(p.nowTime()) && !p.lastActive.After(st.PausedAt) {
 		p.pausedUntil, p.pausedAt = st.PausedUntil, st.PausedAt
 		p.asleep, p.sleepCompacted = st.Asleep, st.SleepCompacted
 	} else if p.dynamic && !st.PausedUntil.IsZero() && !p.lastActive.After(st.PausedAt) {
@@ -276,6 +307,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.wake = make(chan struct{}, 1)
+	if p.manual {
+		// 手动时间线：不启循环、不订阅公告板，RunBackground 会显式驱动。
+		return nil
+	}
 	p.wg.Add(1)
 	go p.loop(p.ctx)
 	// 公告板来了新理由就叫醒循环重算下一拍。锁序恒为 p.mu → cue 内部锁

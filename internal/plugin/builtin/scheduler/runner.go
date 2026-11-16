@@ -25,23 +25,25 @@ func (p *Plugin) loop(ctx context.Context) {
 		case <-p.wake: // 任务表变了，重算
 			timer.Stop()
 		case <-timer.C:
-			p.dispatchDue(ctx)
+			_ = p.dispatchDueAt(ctx, p.nowTime())
 		}
 	}
 }
 
 // untilNext 返回距最近到期任务的时长，无任务或过远时用兜底轮询周期。
-func (p *Plugin) untilNext() time.Duration {
+func (p *Plugin) untilNext() time.Duration { return p.untilNextAt(p.nowTime()) }
+
+// untilNextAt 按 now 计算等待时长；nextAt 负责预测，可能落在未来。
+func (p *Plugin) untilNextAt(now time.Time) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now()
 	wait := pollFallback
 	for _, t := range p.tasks {
-		next := t.nextRun(now)
+		next := t.nextAt(now)
 		if next.IsZero() {
 			continue
 		}
-		if d := time.Until(next); d < wait {
+		if d := next.Sub(now); d < wait {
 			wait = d
 		}
 	}
@@ -51,90 +53,163 @@ func (p *Plugin) untilNext() time.Duration {
 	return wait
 }
 
-// dispatchDue 派发所有已到期的任务：先改状态并持久化（once 标记已派发、周期记 LastRun，
-// 防止执行期间被重复派发），再各自开 goroutine 执行。
-func (p *Plugin) dispatchDue(ctx context.Context) {
-	now := time.Now()
+// NextBackgroundAt 返回所有任务里最近的一次计划时刻。
+func (p *Plugin) NextBackgroundAt(now time.Time) (time.Time, bool) {
 	p.mu.Lock()
-	var due []*Task
+	defer p.mu.Unlock()
+	var next time.Time
 	for _, t := range p.tasks {
-		next := t.nextRun(now)
-		if next.IsZero() || next.After(now) {
+		n := t.nextAt(now)
+		if n.IsZero() {
 			continue
 		}
+		if next.IsZero() || n.Before(next) {
+			next = n
+		}
+	}
+	return next, !next.IsZero()
+}
+
+// RunBackground 同步派发 now 时刻到期的任务；手动时间线下由评测调用。
+func (p *Plugin) RunBackground(ctx context.Context, now time.Time) error {
+	return p.dispatchDueAt(ctx, now)
+}
+
+// dispatchDue 是既有测试入口：按当前时钟派发。
+func (p *Plugin) dispatchDue(ctx context.Context) { _ = p.dispatchDueAt(ctx, p.nowTime()) }
+
+// runTask 是既有测试入口：按当前时钟执行单个任务。
+func (p *Plugin) runTask(ctx context.Context, t *Task) { _ = p.runTaskAt(ctx, t, p.nowTime()) }
+
+// taskMark 是派发前的状态快照，轮次未开始时用它回滚。
+type taskMark struct {
+	lastRun time.Time
+	done    bool
+	doneAt  time.Time
+	note    string
+}
+
+// dispatchDueAt 逐个标记并派发到期任务。
+//
+// 不先把整批记为已派发：预算只够一轮时，后面的任务应保持待处理，而不是被标成
+// Done 再当作失败。手动模式同步执行，遇到 ErrTurnNotStarted 回滚当前项并向上返回；
+// 生产模式仍每个任务一个 goroutine。
+func (p *Plugin) dispatchDueAt(ctx context.Context, now time.Time) error {
+	p.mu.Lock()
+	due := make([]*Task, 0)
+	for _, t := range p.tasks {
+		if t.dueAt(now) {
+			due = append(due, t)
+		}
+	}
+	manual := p.manual
+	p.mu.Unlock()
+
+	for _, t := range due {
+		p.mu.Lock()
+		// 同一轮里前一项可能已经改过状态（例如 once 完成后表被重写），重新核对。
+		if !t.dueAt(now) {
+			p.mu.Unlock()
+			continue
+		}
+		mark := taskMark{lastRun: t.LastRun, done: t.Done, doneAt: t.DoneAt, note: t.Note}
 		t.LastRun = now
 		if t.Type == typeOnce {
 			t.Done = true
 			t.DoneAt = now
 			t.Note = prompt.T(p.lang, "prompt.scheduler.note.running", "执行中")
 		}
-		due = append(due, t)
-	}
-	if len(due) > 0 {
-		_ = p.saveLocked()
-	}
-	p.mu.Unlock()
+		if err := p.saveLocked(); err != nil {
+			// 持有 p.mu 时不能调 p.langOf（它会再取同一把锁）；直接读字段。
+			i18n.Logf(p.lang, "log.scheduler.save_failed", "scheduler: 保存任务状态失败: %v", err)
+		}
+		p.mu.Unlock()
 
-	for _, t := range due {
+		if manual {
+			if err := p.runTaskAt(ctx, t, now); err != nil {
+				if errors.Is(err, plugin.ErrTurnNotStarted) {
+					p.rollbackTask(t, mark)
+					return err
+				}
+			}
+			continue
+		}
 		p.wg.Add(1)
-		go p.runTask(ctx, t)
+		go func(t *Task, mark taskMark) {
+			defer p.wg.Done()
+			if err := p.runTaskAt(ctx, t, now); err != nil && errors.Is(err, plugin.ErrTurnNotStarted) {
+				p.rollbackTask(t, mark)
+			}
+		}(t, mark)
 	}
+	return nil
 }
 
-// runTask 执行单个任务：独立 goroutine + recover + 超时，任务崩溃或卡死只影响自己。
+// rollbackTask 把「轮次未开始」的任务恢复到派发前，保持待处理。
+func (p *Plugin) rollbackTask(t *Task, mark taskMark) {
+	p.mu.Lock()
+	t.LastRun, t.Done, t.DoneAt, t.Note = mark.lastRun, mark.done, mark.doneAt, mark.note
+	_ = p.saveLocked()
+	p.mu.Unlock()
+}
+
+// runTaskAt 执行单个任务：独立 goroutine + recover + 超时，任务崩溃或卡死只影响自己。
 // 会话忙时 once 任务限次重试，周期任务直接跳过（下个周期自然会来）。
-func (p *Plugin) runTask(ctx context.Context, t *Task) {
-	defer p.wg.Done()
+// 手动模式下不真睡重试：会话锁在上一轮返回时已释放，重试只会拖住时间线。
+func (p *Plugin) runTaskAt(ctx context.Context, t *Task, now time.Time) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			i18n.Logf(p.langOf(), "log.scheduler.task_panic", "scheduler: 任务 %s 执行时 panic（已隔离）: %v", t.ID, r)
 			p.setNote(t, prompt.T(p.langOf(), "prompt.scheduler.note.panic", "执行异常"))
+			err = nil
 		}
 	}()
 
 	p.mu.Lock()
-	runTurn, lang := p.runTurn, p.lang
+	runTurn, lang, manual := p.runTurn, p.lang, p.manual
 	p.mu.Unlock()
 
 	for attempt := 0; ; attempt++ {
 		tctx, cancel := context.WithTimeout(ctx, runTimeout)
-		sid, err := p.pickSession()
-		if err != nil {
+		sid, e := p.pickSession()
+		if e != nil {
 			cancel()
-			i18n.Logf(p.langOf(), "log.scheduler.no_session", "scheduler: 任务 %s 找不到可用会话: %v", t.ID, err)
+			i18n.Logf(p.langOf(), "log.scheduler.no_session", "scheduler: 任务 %s 找不到可用会话: %v", t.ID, e)
 			p.setNote(t, prompt.T(lang, "prompt.scheduler.note.no_session", "找不到可用会话"))
-			return
+			return nil
 		}
-		_, err = runTurn(tctx, sid, prompt.T(lang, "prompt.scheduler.task_prefix", taskPrefixZH)+t.Content)
+		_, e = runTurn(tctx, sid, prompt.T(lang, "prompt.scheduler.task_prefix", taskPrefixZH)+t.Content)
 		cancel()
 
 		switch {
-		case err == nil:
-			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.ok", "上次执行成功 %s", time.Now().Format("01-02 15:04")))
-			return
-		case errors.Is(err, plugin.ErrSessionBusy):
-			if t.Type != typeOnce {
-				i18n.Logf(p.langOf(), "log.scheduler.session_busy", "scheduler: 会话忙，周期任务 %s 跳过本次", t.ID)
+		case e == nil:
+			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.ok", "上次执行成功 %s", now.Format("01-02 15:04")))
+			return nil
+		case errors.Is(e, plugin.ErrTurnNotStarted):
+			return e
+		case errors.Is(e, plugin.ErrSessionBusy):
+			if t.Type != typeOnce || manual {
+				i18n.Logf(p.langOf(), "log.scheduler.session_busy", "scheduler: 会话忙，任务 %s 跳过本次", t.ID)
 				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy", "上次因会话忙跳过"))
-				return
+				return nil
 			}
 			if attempt+1 >= busyRetryMax {
 				i18n.Logf(p.langOf(), "log.scheduler.give_up", "scheduler: 任务 %s 重试 %d 次仍撞上会话忙，放弃本次", t.ID, busyRetryMax)
 				p.setNote(t, prompt.T(lang, "prompt.scheduler.note.busy_gave_up", "会话持续繁忙，本次未执行"))
-				return
+				return nil
 			}
 			select {
 			case <-time.After(busyRetryEvery):
 			case <-ctx.Done():
-				return
+				return nil
 			}
 		default:
 			if ctx.Err() != nil {
-				return // 进程退出/插件停止，不记错
+				return nil // 进程退出/插件停止，不记错
 			}
-			i18n.Logf(p.langOf(), "log.scheduler.task_failed", "scheduler: 任务 %s 执行失败: %v", t.ID, err)
-			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.failed", "上次执行失败：%s", truncate(err.Error(), 100)))
-			return
+			i18n.Logf(p.langOf(), "log.scheduler.task_failed", "scheduler: 任务 %s 执行失败: %v", t.ID, e)
+			p.setNote(t, prompt.Tf(lang, "prompt.scheduler.note.failed", "上次执行失败：%s", truncate(e.Error(), 100)))
+			return nil
 		}
 	}
 }

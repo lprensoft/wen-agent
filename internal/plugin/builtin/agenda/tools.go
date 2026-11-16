@@ -441,6 +441,7 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 					it.StartFired, it.SoonFired = time.Time{}, time.Time{}
 				}
 				it.EndFired = time.Time{}
+				it.BusyCleared = false
 			}
 		}
 		if a.Busy != nil {
@@ -451,6 +452,7 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 			}
 			if b != it.Busy {
 				it.Busy = b
+				it.BusyCleared = false
 				changes = append(changes, prompt.Tf(s.lang, "prompt.agenda.change.busy", "期间%s",
 					busyLevels.For(s.lang, b)))
 			}
@@ -470,6 +472,7 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 			}
 		case statusOngoing:
 			it.Status = statusOngoing
+			it.BusyCleared = false
 			if it.StartFired.IsZero() {
 				it.StartFired = now
 			}

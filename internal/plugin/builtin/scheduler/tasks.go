@@ -38,33 +38,89 @@ type Task struct {
 	DoneAt    time.Time `json:"done_at,omitempty"`
 }
 
-// nextRun 返回任务的下一次到期时刻；零值表示不再执行。
-func (t *Task) nextRun(now time.Time) time.Time {
+// nextRun 是既有调用点与测试的入口，等价于 nextAt。
+func (t *Task) nextRun(now time.Time) time.Time { return t.nextAt(now) }
+
+// dueAt 报告 now 时刻任务是否到期。Done（已完成/已取消）统一先返回 false。
+func (t *Task) dueAt(now time.Time) bool {
+	if t.Done {
+		return false
+	}
+	switch t.Type {
+	case typeOnce:
+		return !t.At.IsZero() && !t.At.After(now)
+	case typeInterval:
+		at := t.intervalAt()
+		return !at.IsZero() && !at.After(now)
+	case typeDaily:
+		occ, ok := t.dailyAt(now)
+		if !ok || occ.After(now) {
+			return false
+		}
+		return t.LastRun.IsZero() || t.LastRun.Before(occ)
+	}
+	return false
+}
+
+// nextAt 返回 >= now 的最近一次计划时刻；零值表示不再执行。
+// 与 dueAt 分开：nextAt 负责预测（可能在未来），dueAt 负责判断此刻是否该跑。
+func (t *Task) nextAt(now time.Time) time.Time {
 	if t.Done {
 		return time.Time{}
 	}
 	switch t.Type {
 	case typeOnce:
-		return t.At
-	case typeInterval:
-		base := t.LastRun
-		if base.IsZero() {
-			base = t.CreatedAt
-		}
-		return base.Add(time.Duration(t.IntervalMin) * time.Minute)
-	case typeDaily:
-		hh, mm, err := parseDaily("", t.DailyTime) // 只看成功与否，报错被丢弃
-		if err != nil {
+		if t.At.IsZero() {
 			return time.Time{}
 		}
-		next := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location())
-		// 今天的点已过、或今天已经跑过，则排到明天
-		if !next.After(now) || (!t.LastRun.IsZero() && sameDay(t.LastRun, next)) {
-			next = next.AddDate(0, 0, 1)
+		if !t.At.After(now) {
+			return now
 		}
-		return next
+		return t.At
+	case typeInterval:
+		at := t.intervalAt()
+		if at.IsZero() {
+			return time.Time{}
+		}
+		if !at.After(now) {
+			return now
+		}
+		return at
+	case typeDaily:
+		occ, ok := t.dailyAt(now)
+		if !ok {
+			return time.Time{}
+		}
+		if !occ.After(now) {
+			if t.LastRun.IsZero() || t.LastRun.Before(occ) {
+				return now // 今天这次还没跑，现在就是它的到期时刻
+			}
+			return occ.AddDate(0, 0, 1)
+		}
+		return occ
 	}
 	return time.Time{}
+}
+
+// intervalAt 返回周期任务的下一次计划时刻。
+func (t *Task) intervalAt() time.Time {
+	base := t.LastRun
+	if base.IsZero() {
+		base = t.CreatedAt
+	}
+	if base.IsZero() || t.IntervalMin < 1 {
+		return time.Time{}
+	}
+	return base.Add(time.Duration(t.IntervalMin) * time.Minute)
+}
+
+// dailyAt 返回 now 所在日期的定点时刻。
+func (t *Task) dailyAt(now time.Time) (time.Time, bool) {
+	hh, mm, err := parseDaily("", t.DailyTime) // 只看成功与否，报错被丢弃
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location()), true
 }
 
 // describe 返回任务的一句话中文描述，供列表与创建回执使用。
@@ -110,12 +166,16 @@ func parseDaily(lang, s string) (hh, mm int, err error) {
 	return hh, mm, nil
 }
 
-// parseAt 解析一次性任务的执行时刻（本地时区），接受 "2006-01-02 15:04"、
-// "2006-01-02 15:04:05" 与 RFC3339。
-func parseAt(lang, s string) (time.Time, error) {
+// parseAt 解析一次性任务的执行时刻，接受 "2006-01-02 15:04"、
+// "2006-01-02 15:04:05" 与 RFC3339。无时区时间按 loc（调用方的「现在」所在地）
+// 解析，评测里因此落在虚拟时间线上而不是系统时区。
+func parseAt(lang, s string, loc *time.Location) (time.Time, error) {
+	if loc == nil {
+		loc = time.Local
+	}
 	s = strings.TrimSpace(s)
 	for _, layout := range []string{"2006-01-02 15:04", "2006-01-02 15:04:05"} {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
 			return t, nil
 		}
 	}
@@ -126,10 +186,10 @@ func parseAt(lang, s string) (time.Time, error) {
 		"无法解析时间 %q，请用 2006-01-02 15:04 格式"), s)
 }
 
-func newTaskID() string {
+func newTaskID(now time.Time) string {
 	buf := make([]byte, 3)
 	_, _ = rand.Read(buf)
-	return "t" + time.Now().Format("0102150405") + hex.EncodeToString(buf)
+	return "t" + now.Format("0102150405") + hex.EncodeToString(buf)
 }
 
 // ---------- 持久化（tasks.json，tmp+rename 原子写） ----------
@@ -151,8 +211,9 @@ func (p *Plugin) loadLocked() error {
 // saveLocked 持久化任务表，顺带清理保留期已过的已完成任务。
 func (p *Plugin) saveLocked() error {
 	kept := p.tasks[:0]
+	now := p.nowTime()
 	for _, t := range p.tasks {
-		if t.Done && !t.DoneAt.IsZero() && time.Since(t.DoneAt) > doneKeep {
+		if t.Done && !t.DoneAt.IsZero() && now.Sub(t.DoneAt) > doneKeep {
 			continue
 		}
 		kept = append(kept, t)
@@ -175,8 +236,7 @@ func (p *Plugin) saveLocked() error {
 
 // catchUpLocked 处理宕机期间错过的任务：once 未超过补跑窗口的保持待跑（到点判定
 // 自然会立即触发），太久的标记过期；周期任务无需处理，下一个周期自然到来。
-func (p *Plugin) catchUpLocked() {
-	now := time.Now()
+func (p *Plugin) catchUpAt(now time.Time) {
 	changed := false
 	for _, t := range p.tasks {
 		if t.Done || t.Type != typeOnce {
@@ -193,3 +253,6 @@ func (p *Plugin) catchUpLocked() {
 		_ = p.saveLocked()
 	}
 }
+
+// catchUpLocked 是既有入口：按当前时钟处理宕机期间错过的任务。
+func (p *Plugin) catchUpLocked() { p.catchUpAt(p.nowTime()) }

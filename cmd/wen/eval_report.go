@@ -20,6 +20,8 @@ const (
 	rowCompact     = "compact"      // 脚本要求的压缩
 	rowAutoCompact = "auto_compact" // 上下文到阈值后自动触发的压缩
 	rowGap         = "gap"          // 脚本里的时间跳步：虚拟时钟向前推进这么久
+	rowRun         = "run"          // 事件驱动的时间线推进
+	rowBackground  = "background"   // 后台插件跑的一轮（心跳、日程、定时、健康触发）
 )
 
 // evalRow 是报告里的一行。
@@ -29,6 +31,10 @@ type evalRow struct {
 	Say         string
 	Reply       string
 	GapHours    float64
+	RunHours    float64   // rowRun：推进了多少小时（tick 为 0）
+	Background  int       // rowRun：这一步产生的后台轮次条数
+	At          time.Time // rowBackground：虚拟时刻
+	Origin      string    // rowBackground：发起方插件名
 	Metrics     stylecheck.Metrics
 	Hits        []stylecheck.Hit
 	Tools       []string // 这一轮调用过的工具名，供 must_call 断言
@@ -74,6 +80,68 @@ type evalResult struct {
 	BaselinePath string          // 给了 --baseline 时，对比文件的路径
 	Regressions  []string        // 与基线相比退化的确定性指标
 	JudgeDelta   *evalJudgeDelta // 评分变化，只作趋势
+	// 后台时间线的产出。BackgroundErr 非空表示时间线没能跑完（预算中止、
+	// 结算不收敛、插件反复产生同刻事件等），报告照样输出已跑部分。
+	BackgroundTurns    []evalRow
+	BackgroundErr      string
+	BackgroundUsed     int
+	BackgroundDenied   int
+	BackgroundSteps    int
+	BackgroundAttempts []evalTurnAttempt
+	Drift              *evalDrift
+}
+
+// evalDrift 是前后半段的确定性对比。只报告差值，不判失败：样本少时抖动很正常，
+// 它回答的是「有没有变」，而不是「变得够不够好」。
+type evalDrift struct {
+	Early evalDriftHalf `json:"early"`
+	Late  evalDriftHalf `json:"late"`
+}
+
+type evalDriftHalf struct {
+	Turns        int     `json:"turns"`
+	AvgRunes     float64 `json:"avg_runes"`
+	HitsPer1000  float64 `json:"hits_per_1000"`
+	AvgSentences float64 `json:"avg_sentences"`
+	BracketRatio float64 `json:"bracket_ratio"`
+}
+
+// computeDrift 把 say 行按序号对半，比较前半段与后半段。少于两轮时不报告。
+func computeDrift(rows []evalRow) *evalDrift {
+	var says []evalRow
+	for _, row := range rows {
+		if row.Kind == rowSay && row.Err == "" {
+			says = append(says, row)
+		}
+	}
+	if len(says) < 2 {
+		return nil
+	}
+	half := len(says) / 2
+	return &evalDrift{Early: summarizeDrift(says[:half]), Late: summarizeDrift(says[half:])}
+}
+
+func summarizeDrift(rows []evalRow) evalDriftHalf {
+	var out evalDriftHalf
+	if len(rows) == 0 {
+		return out
+	}
+	var runes, hits, sentences int
+	var bracket float64
+	for _, row := range rows {
+		runes += row.Metrics.Runes
+		hits += len(row.Hits)
+		sentences += row.Metrics.Sentences
+		bracket += row.Metrics.BracketRatio
+	}
+	out.Turns = len(rows)
+	out.AvgRunes = float64(runes) / float64(len(rows))
+	out.AvgSentences = float64(sentences) / float64(len(rows))
+	out.BracketRatio = bracket / float64(len(rows))
+	if runes > 0 {
+		out.HitsPer1000 = float64(hits) * 1000 / float64(runes)
+	}
+	return out
 }
 
 // turnFailed 报告是否真的有轮次没跑成。断言失败不算：话已经说出来了，只是不合预期。
@@ -91,7 +159,7 @@ func (r evalResult) turnFailed() bool {
 
 // failed 报告是否有轮次失败、断言失败或基线退化（含没能开始）。
 func (r evalResult) failed() bool {
-	if r.turnFailed() {
+	if r.turnFailed() || r.BackgroundErr != "" {
 		return true
 	}
 	for _, row := range r.Rows {
@@ -102,13 +170,17 @@ func (r evalResult) failed() bool {
 	return len(r.Regressions) > 0
 }
 
-// gateFails 汇总门禁项：每轮的断言失败与基线退化。评分不在其中——它本来就抖。
+// gateFails 汇总门禁项：每轮的断言失败、基线退化与时间线运行失败。评分不在其中——
+// 它本来就抖。
 func (r evalResult) gateFails() []string {
 	var out []string
 	for _, row := range r.Rows {
 		for _, f := range row.ExpectFails {
 			out = append(out, trf("cli.eval.gate.turn", "第 %d 轮：%s", row.Index, f))
 		}
+	}
+	if r.BackgroundErr != "" {
+		out = append(out, trf("cli.eval.gate.background", "后台时间线：%s", r.BackgroundErr))
 	}
 	return append(out, r.Regressions...)
 }
@@ -191,8 +263,9 @@ const judgePromptTailZH = `只输出下面形状的 JSON，不要输出任何其
 {"same_person":{"score":1,"reason":"一句话"},"tone":{"score":1,"reason":"一句话"},"relation":{"score":1,"reason":"一句话"}}`
 
 // buildJudgePrompt 拼评判提示词。角色设定与样例是评判的参照；回复按轮编号，
-// 压缩与间隔以分界线的形式穿插其中。
-func buildJudgePrompt(persona, samples string, rows []evalRow, points []string) string {
+// 压缩与间隔以分界线的形式穿插其中。后台轮次按域每天采样，避免长时程脚本把
+// 评判预算全用在心跳独白上。
+func buildJudgePrompt(persona, samples string, rows, backgrounds []evalRow, from, to time.Time, points []string) string {
 	lang := uiLang
 	var b strings.Builder
 	b.WriteString(prompt.T(lang, "prompt.eval.judge_head", judgePromptHeadZH))
@@ -200,6 +273,12 @@ func buildJudgePrompt(persona, samples string, rows []evalRow, points []string) 
 	b.WriteString(orNone(lang, persona))
 	b.WriteString(prompt.T(lang, "prompt.eval.samples_head", "\n\n[台词样例]\n"))
 	b.WriteString(orNone(lang, samples))
+	if to.After(from) {
+		b.WriteString(prompt.Tf(lang, "prompt.eval.span",
+			"\n\n[虚拟时间线]\n%s → %s，其间有 %d 条后台轮次。判断时请把这条时间跨度考虑进去："+
+				"隔了几天、压缩过几次之后，是否还是同一个声音。",
+			clockText(from), clockText(to), len(backgrounds)))
+	}
 	if len(points) > 0 {
 		b.WriteString(prompt.T(lang, "prompt.eval.points_head", "\n\n[额外关注点]\n"))
 		for _, p := range points {
@@ -208,8 +287,39 @@ func buildJudgePrompt(persona, samples string, rows []evalRow, points []string) 
 	}
 	b.WriteString(prompt.T(lang, "prompt.eval.replies_head", "\n\n[回复]\n"))
 	b.WriteString(renderRowsForJudge(lang, rows, judgeMaxBytes))
+	if bg := renderBackgroundsForJudge(lang, backgrounds, 30, 3); bg != "" {
+		b.WriteString(prompt.T(lang, "prompt.eval.backgrounds_head", "\n\n[后台轮次（每域每天最多 3 条）]\n"))
+		b.WriteString(bg)
+	}
 	b.WriteString("\n\n")
 	b.WriteString(prompt.T(lang, "prompt.eval.judge_tail", judgePromptTailZH))
+	return b.String()
+}
+
+// renderBackgroundsForJudge 按「每天每域」采样后台轮次：全部塞进去会挤掉前台轮次，
+// 而长时程评测里前台轮次才是判断人格连续性的主证据。
+func renderBackgroundsForJudge(lang string, rows []evalRow, maxTotal, perDay int) string {
+	seen := map[string]int{}
+	picked := make([]evalRow, 0, maxTotal)
+	for _, row := range rows {
+		if row.Kind != rowBackground || strings.TrimSpace(row.Reply) == "" {
+			continue
+		}
+		key := row.At.Format("2006-01-02") + "|" + row.Origin
+		if seen[key] >= perDay {
+			continue
+		}
+		seen[key]++
+		picked = append(picked, row)
+	}
+	if len(picked) > maxTotal {
+		picked = picked[len(picked)-maxTotal:]
+	}
+	var b strings.Builder
+	for _, row := range picked {
+		b.WriteString(prompt.Tf(lang, "prompt.eval.background", "\n[%s %s] %s",
+			row.At.Format("01-02 15:04"), row.Origin, clipLine(row.Reply, 160)))
+	}
 	return b.String()
 }
 
@@ -352,6 +462,54 @@ func renderEvalReport(r evalResult) string {
 	} else if r.ClockFixed {
 		b.WriteString(trf("cli.eval.clock_from", "- 虚拟时钟：从 %s 开始\n", clockText(r.ClockFrom)))
 	}
+	if len(r.BackgroundTurns) > 0 || r.BackgroundUsed > 0 || len(r.BackgroundAttempts) > 0 || r.BackgroundDenied > 0 {
+		failed := 0
+		for _, a := range r.BackgroundAttempts {
+			if a.Err != "" {
+				failed++
+			}
+		}
+		line := trf("cli.eval.background.summary",
+			"- 后台轮次：尝试 %d 次，成功 %d 次，失败 %d 次",
+			r.BackgroundUsed, len(r.BackgroundTurns), failed)
+		if r.BackgroundDenied > 0 {
+			line += trf("cli.eval.background.denied", "；预算中止 %d 项未执行", r.BackgroundDenied)
+		}
+		if r.BackgroundSteps > 0 {
+			line += trf("cli.eval.background.steps", "；时间线事件 %d 次", r.BackgroundSteps)
+		}
+		b.WriteString(line + "\n")
+		if failed > 0 {
+			b.WriteString(tr("cli.eval.background.failures_head",
+				"\n**后台失败**\n\n| 时刻 | 来源 | 原因 |\n|---|---|---|\n"))
+			for _, a := range r.BackgroundAttempts {
+				if a.Err == "" {
+					continue
+				}
+				b.WriteString(trf("cli.eval.background.failure_row", "| %s | %s | %s |\n",
+					clockText(a.At), mdCell(a.Origin), mdCell(clipLine(a.Err, 120))))
+			}
+		}
+	}
+	if r.BackgroundErr != "" {
+		b.WriteString(trf("cli.eval.background.aborted", "> 时间线中止：%s\n", r.BackgroundErr))
+	}
+	if d := r.Drift; d != nil {
+		b.WriteString(tr("cli.eval.drift_head", "\n## 前后半段对比（不判失败）\n\n| 指标 | 前半段 | 后半段 | 变化 |\n|---|---|---|---|\n"))
+		row := func(label string, early, late float64, format string) {
+			delta := late - early
+			sign := ""
+			if delta > 0 {
+				sign = "+"
+			}
+			b.WriteString(trf("cli.eval.drift.row", "| %s | %s | %s | %s%s |\n",
+				label, fmt.Sprintf(format, early), fmt.Sprintf(format, late), sign, fmt.Sprintf(format, delta)))
+		}
+		row(tr("cli.eval.drift.runes", "平均字数"), d.Early.AvgRunes, d.Late.AvgRunes, "%.1f")
+		row(tr("cli.eval.drift.hits", "每千字助手腔"), d.Early.HitsPer1000, d.Late.HitsPer1000, "%.2f")
+		row(tr("cli.eval.drift.sentences", "平均句数"), d.Early.AvgSentences, d.Late.AvgSentences, "%.1f")
+		row(tr("cli.eval.drift.bracket", "演绎占比"), d.Early.BracketRatio*100, d.Late.BracketRatio*100, "%.1f")
+	}
 	if r.turnFailed() {
 		b.WriteString(tr("cli.eval.had_failure", "- **有轮次失败**，其后的步骤未执行\n"))
 	}
@@ -418,6 +576,22 @@ func renderEvalReport(r evalResult) string {
 			b.WriteString(tr("cli.eval.row.auto_compact", "| — | （自动压缩） | | | | | |\n"))
 		case rowGap:
 			b.WriteString(trf("cli.eval.row.gap", "| — | （时间推进 %s） | | | | | |\n", humanHours(uiLang, row.GapHours)))
+		case rowRun:
+			if row.RunHours > 0 {
+				b.WriteString(trf("cli.eval.row.run", "| — | （推进 %s，后台 %d 轮） | | | | | |\n",
+					humanHours(uiLang, row.RunHours), row.Background))
+			} else {
+				b.WriteString(trf("cli.eval.row.tick", "| — | （执行到期后台工作，后台 %d 轮） | | | | | |\n", row.Background))
+			}
+		}
+	}
+
+	if len(r.BackgroundTurns) > 0 {
+		b.WriteString(tr("cli.eval.backgrounds_head", "\n## 后台轮次\n\n| 时刻 | 来源 | 字数 | 句数 | 命中 | 摘要 |\n|---|---|---|---|---|---|\n"))
+		for _, row := range r.BackgroundTurns {
+			b.WriteString(trf("cli.eval.background.row", "| %s | %s | %d | %d | %s | %s |\n",
+				row.At.Format("01-02 15:04"), mdCell(row.Origin), row.Metrics.Runes, row.Metrics.Sentences,
+				mdCell(hitsCell(row.Hits)), mdCell(clipLine(row.Reply, 60))))
 		}
 	}
 
@@ -437,6 +611,18 @@ func renderEvalReport(r evalResult) string {
 			b.WriteString(tr("cli.eval.mark_compact", "\n---\n*此处做过一次压缩*\n"))
 		case rowGap:
 			b.WriteString(trf("cli.eval.mark_gap", "\n---\n*此处过了 %s*\n", humanHours(uiLang, row.GapHours)))
+		}
+	}
+	if len(r.BackgroundTurns) > 0 {
+		b.WriteString(tr("cli.eval.backgrounds_replies", "\n## 后台轮次原文\n"))
+		for _, row := range r.BackgroundTurns {
+			b.WriteString(trf("cli.eval.background.reply_head", "\n### %s · %s\n\n",
+				row.At.Format("2006-01-02 15:04"), row.Origin))
+			if strings.TrimSpace(row.Reply) == "" {
+				b.WriteString(tr("cli.eval.reply_empty", "（空回复）\n"))
+			} else {
+				b.WriteString(row.Reply + "\n")
+			}
 		}
 	}
 	return b.String()

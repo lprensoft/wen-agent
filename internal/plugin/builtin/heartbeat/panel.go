@@ -10,7 +10,7 @@ import (
 // State 把心跳的节奏交给设置页的「角色状态」，并给聊天页顶部贡献一行
 // 「下次开口」摘要。心跳是全局的，没有可见域。
 func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
-	now := time.Now()
+	now := p.nowTime()
 	p.mu.Lock()
 	cur, dynamic := p.cur, p.dynamic
 	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
@@ -42,18 +42,18 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	}
 
 	var summary string
-	if until := time.Until(pausedUntil); until > 0 {
+	if until := pausedUntil.Sub(now); until > 0 {
 		if asleep {
 			summary = i18n.Tf(lang, "plugin.heartbeat.state.asleep", "睡着了，约 %s后醒", humanDur(lang, until))
 		} else {
 			summary = i18n.Tf(lang, "plugin.heartbeat.state.paused", "暂停中，约 %s后恢复", humanDur(lang, until))
 		}
 	} else {
-		summary = nextBeatDesc(lang, next)
+		summary = nextBeatDesc(lang, now, next)
 	}
 	statusValue := i18n.T(lang, "plugin.heartbeat.state.running", "运行中")
 	statusDetail := summary
-	if time.Until(pausedUntil) > 0 {
+	if pausedUntil.Sub(now) > 0 {
 		// 暂停/睡着时这一行本身就是那句「暂停中…」，不再重复「运行中」。
 		statusValue, statusDetail = summary, ""
 	}

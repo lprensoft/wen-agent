@@ -1151,5 +1151,8 @@
   "prompt.web_fetch.result.truncated": "\n...[content exceeded %d bytes and was truncated]",
   "prompt.web_fetch.system": "You can use the fetch_url tool to pull the text of a web page.",
   "prompt.web_fetch.tool.fetch_url.desc": "Fetch the page at the given URL and return its text (HTML is stripped of tags). Only http/https is supported, and long content is truncated.",
-  "prompt.web_fetch.tool.fetch_url.schema": "{\n\t\t\"type\": \"object\",\n\t\t\"properties\": {\n\t\t\t\"url\": {\"type\": \"string\", \"description\": \"address of the page to fetch (http/https)\"}\n\t\t},\n\t\t\"required\": [\"url\"]\n\t}"
+  "prompt.web_fetch.tool.fetch_url.schema": "{\n\t\t\"type\": \"object\",\n\t\t\"properties\": {\n\t\t\t\"url\": {\"type\": \"string\", \"description\": \"address of the page to fetch (http/https)\"}\n\t\t},\n\t\t\"required\": [\"url\"]\n\t}",
+  "prompt.eval.span": "\n\n[Virtual timeline]\n%s → %s, with %d background turns in between. Take this span into account: after several days and compactions, is it still the same voice?",
+  "prompt.eval.backgrounds_head": "\n\n[Background turns (at most 3 per persona per day)]\n",
+  "prompt.eval.background": "\n[%s %s] %s"
 }

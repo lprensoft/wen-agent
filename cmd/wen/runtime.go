@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"wen/internal/agent"
+	"wen/internal/clock"
 	"wen/internal/config"
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
@@ -38,6 +40,15 @@ type runtimeOverrides struct {
 	// 为 nil 表示这个装配形态下重启不可用（评测就是），插件据此降级为
 	// 「更新完成，重启后生效」。
 	Restart func(reason string) error
+	// Clock 非空时作为进程的「现在几点」（评测用一条可推进的时间线）。
+	Clock clock.Clock
+	// ManualTime 为真时插件不自起定时循环，后台工作由评测显式驱动。
+	// 为真时 Clock 必定非空。
+	ManualTime bool
+	// BeforeTurn / AfterTurn 包在插件发起的每一轮 RunTurn 外面。评测用它们在
+	// 轮次开始前扣预算、结束后记录尝试；生产路径为 nil。
+	BeforeTurn func(ctx context.Context) error
+	AfterTurn  func(ctx context.Context, err error)
 }
 
 // buildRuntime 按配置把各层装配起来。
@@ -54,6 +65,25 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	sessionDir := cfg.SessionDir()
 	if ov.SessionDir != "" {
 		sessionDir = ov.SessionDir
+	}
+	now := time.Now
+	if ov.Clock != nil {
+		now = ov.Clock.Now
+	}
+
+	// runTurn 把评测的预算钩子包在插件发起的每一轮外面。生产路径两个钩子都为 nil，
+	// 只是一层直接调用。
+	runTurn := func(ctx context.Context, run func() (string, error)) (string, error) {
+		if ov.BeforeTurn != nil {
+			if err := ov.BeforeTurn(ctx); err != nil {
+				return "", err
+			}
+		}
+		out, err := run()
+		if ov.AfterTurn != nil {
+			ov.AfterTurn(ctx, err)
+		}
+		return out, err
 	}
 
 	var (
@@ -72,6 +102,8 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		Lang:       lang,
 		Sessions:   store,
 		SessionDir: sessionDir,
+		Clock:      ov.Clock,
+		ManualTime: ov.ManualTime,
 		Complete: func(ctx context.Context, prompt string) (string, error) {
 			if ag == nil {
 				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
@@ -82,19 +114,19 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 			if ag == nil {
 				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
-			return ag.RunTurn(ctx, sessionID, input)
+			return runTurn(ctx, func() (string, error) { return ag.RunTurn(ctx, sessionID, input) })
 		},
 		RunTurnImages: func(ctx context.Context, sessionID, input string, images []llm.ImagePart) (string, error) {
 			if ag == nil {
 				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
-			return ag.RunTurnWithImages(ctx, sessionID, input, images)
+			return runTurn(ctx, func() (string, error) { return ag.RunTurnWithImages(ctx, sessionID, input, images) })
 		},
 		RunTurnMedia: func(ctx context.Context, sessionID, input string, images []llm.ImagePart, files []llm.FilePart) (string, error) {
 			if ag == nil {
 				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))
 			}
-			return ag.RunTurnWithMedia(ctx, sessionID, input, images, files)
+			return runTurn(ctx, func() (string, error) { return ag.RunTurnWithMedia(ctx, sessionID, input, images, files) })
 		},
 		Notice: func(ctx context.Context, sessionID, text string) error {
 			if ag == nil {
@@ -103,7 +135,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 			return ag.AppendNotice(ctx, sessionID, text)
 		},
 		NewSession: func() (string, error) {
-			m, err := store.Create()
+			m, err := store.CreateAt(now())
 			return m.ID, err
 		},
 		Compact: func(ctx context.Context, sessionID string) error {

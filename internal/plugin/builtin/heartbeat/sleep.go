@@ -47,7 +47,7 @@ const busyGrace = 5 * time.Minute
 // 持锁写是安全的：心跳自己的订阅回调只往叫醒通道里投一下、不取 p.mu（见 Init），
 // 其它订阅方的回调按公告板的约定只碰自己的锁。
 func (p *Plugin) publishSleepLocked() {
-	if p.asleep && p.pausedUntil.After(time.Now()) {
+	if p.asleep && p.pausedUntil.After(p.nowTime()) {
 		availability.Set(availability.State{
 			Source:   availSource,
 			Activity: prompt.T(p.lang, "prompt.heartbeat.availability.asleep", "睡觉"),
@@ -70,16 +70,26 @@ func (p *Plugin) clearPauseLocked() {
 	p.sleepGen++
 }
 
-// sleepCompactDueLocked 返回这一觉该整理上下文的时刻；不需要整理时返回零值。
+// resumeDecayAfterPauseLocked 把衰减检查基准推到醒来时刻：暂停期间跳过的检查不补算，
+// 但醒来后立刻做一次检查（若刚有人说话，空闲条件自然不满足，不会真的衰减）。
+// 生产和回放都走这里，避免回放把整段暂停当成连续空闲。
+func (p *Plugin) resumeDecayAfterPauseLocked(now time.Time) {
+	if now.IsZero() {
+		now = p.nowTime()
+	}
+	p.lastDecay = now.Add(-decayEvery)
+}
+
+// sleepCompactDueAt 返回这一觉该整理上下文的时刻；不需要整理时返回零值。
 // 调用方需持有 p.mu。
 //
 // 已经到了醒来时刻的一觉不再整理：电脑休眠跨过整段睡眠再恢复时，循环会同时看到
 // 「早该整理」与「早该醒」，先补一次整理只会推迟醒来、白付一次模型调用。
-func (p *Plugin) sleepCompactDueLocked() time.Time {
+func (p *Plugin) sleepCompactDueAt(now time.Time) time.Time {
 	if !p.dynamic || !p.asleep || p.sleepCompacted || p.compactPct <= 0 || p.compact == nil || p.status == nil {
 		return time.Time{}
 	}
-	if !time.Now().Before(p.pausedUntil) {
+	if !now.Before(p.pausedUntil) {
 		return time.Time{}
 	}
 	due := p.pausedAt.Add(sleepSettle)
@@ -92,16 +102,23 @@ func (p *Plugin) sleepCompactDueLocked() time.Time {
 	return due
 }
 
-// sleepCompact 在角色睡着时压缩最近活跃的会话——醒来之后心跳与对话落的正是那个会话。
+// sleepCompactDueLocked 是既有调用点与测试的入口：按当前时钟判断。
+// 调用方需持有 p.mu。
+func (p *Plugin) sleepCompactDueLocked() time.Time { return p.sleepCompactDueAt(p.nowTime()) }
+
+// sleepCompact 是既有测试的入口：按当前时钟整理。
+func (p *Plugin) sleepCompact(ctx context.Context) { p.sleepCompactAt(ctx, p.nowTime()) }
+
+// sleepCompactAt 在角色睡着时压缩最近活跃的会话——醒来之后心跳与对话落的正是那个会话。
 // 用量没到门槛就不压：上下文本来就短，整理一次只是白付一次模型调用。
 //
 // 查会话、问用量都在锁外，期间真人可能已经把人叫醒，所以动手压缩之前再认一次
 // 「还是这一觉、还该整理」，回写结果时也只写回同一觉。认过之后到压缩拿到会话锁之间
 // 仍有极短的窗口：真人轮次先拿到锁时压缩返回会话忙、按重试处理，而那时暂停已清、
 // 代号已换，重试不会发生；压缩先拿到锁时真人轮次排在它后面。
-func (p *Plugin) sleepCompact(ctx context.Context) {
+func (p *Plugin) sleepCompactAt(ctx context.Context, now time.Time) {
 	p.mu.Lock()
-	if p.sleepCompactDueLocked().IsZero() { // 等待期间被叫醒了，或者配置变了
+	if p.sleepCompactDueAt(now).IsZero() { // 等待期间被叫醒了，或者配置变了
 		p.mu.Unlock()
 		return
 	}
@@ -113,7 +130,7 @@ func (p *Plugin) sleepCompact(ctx context.Context) {
 	stillAsleep := func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return p.sleepGen == gen && !p.sleepCompactDueLocked().IsZero()
+		return p.sleepGen == gen && !p.sleepCompactDueAt(p.nowTime()).IsZero()
 	}
 
 	done := true
@@ -161,7 +178,7 @@ func (p *Plugin) sleepCompact(ctx context.Context) {
 	if done {
 		p.sleepCompacted = true
 	} else {
-		p.compactRetryAt = time.Now().Add(compactRetry)
+		p.compactRetryAt = now.Add(compactRetry)
 	}
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()

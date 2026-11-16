@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/clock"
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -32,6 +33,12 @@ const (
 type Plugin struct {
 	mu sync.Mutex
 
+	// clock 非 nil 表示时间由外部推进（评测）。单独一把锁：nowTime 会在持有
+	// p.mu 的路径里被调用。
+	clockMu sync.Mutex
+	clock   clock.Clock
+	manual  bool
+
 	lang       string // 进程语言，注入片段与工具文本据此取用
 	stateDir   string
 	runTurn    plugin.RunTurnFunc
@@ -47,6 +54,17 @@ type Plugin struct {
 }
 
 func New() *Plugin { return &Plugin{} }
+
+// nowTime 返回调度器视角的「现在」：注入钟优先，否则系统时间。
+func (p *Plugin) nowTime() time.Time {
+	p.clockMu.Lock()
+	c := p.clock
+	p.clockMu.Unlock()
+	if c != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
 
 func (p *Plugin) Name() string { return "scheduler" }
 
@@ -99,9 +117,14 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 
 	p.Stop()
 
+	p.clockMu.Lock()
+	p.clock = ictx.Clock
+	p.clockMu.Unlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
+	p.manual = ictx.ManualTime
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
@@ -109,11 +132,14 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if err := p.loadLocked(); err != nil {
 		return fmt.Errorf(i18n.T(ictx.Lang, "plugin.scheduler.err.load", "加载任务失败: %w"), err)
 	}
-	p.catchUpLocked()
+	p.catchUpAt(p.nowTime())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.ctx, p.cancel = ctx, cancel
 	p.wake = make(chan struct{}, 1)
+	if p.manual {
+		return nil // 手动时间线：不启循环，RunBackground 显式驱动
+	}
 	p.wg.Add(1)
 	go p.loop(ctx)
 	return nil

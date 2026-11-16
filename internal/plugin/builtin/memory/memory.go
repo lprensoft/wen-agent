@@ -95,6 +95,7 @@ type Plugin struct {
 	recallEntryRunes int
 	recallMaxBytes   int
 	recallMinScore   int
+	manual           bool // 手动时间线：轮次后的提炼/日切由 Settle 同步驱动
 
 	// 后台提炼与清扫的运行环境。ctx 由 Init 建、Stop 取消——广播进来的 ctx
 	// 在轮次结束时就被取消了，拿它去跑后台调用必然半路夭折。
@@ -120,8 +121,11 @@ type Plugin struct {
 	savedSeq   uint64
 	windows    map[windowKey]*window
 	extracting map[windowKey]bool
-	lastSweep  time.Time
-	sweeping   bool
+	// pending 是手动时间线下登记、等待 Settle 同步执行的轮次后工作。
+	// 不占 wg：预算中止时 StopAll 必须能正常返回。
+	pending   []func(ctx context.Context)
+	lastSweep time.Time
+	sweeping  bool
 	// 时间线的日切状态（由 turnMu 保护）与文件锁。
 	lastTimeline time.Time
 	timelining   bool
@@ -354,6 +358,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	defer p.mu.Unlock()
 
 	p.lang = ictx.Lang
+	p.manual = ictx.ManualTime
 	p.library = library
 	p.libBase = dir
 	p.store = NewStore(ictx.Lang, dir)
@@ -401,6 +406,7 @@ func (p *Plugin) Stop() { p.stopWorkers() }
 func (p *Plugin) stopWorkers() {
 	p.turnMu.Lock()
 	p.stopped = true
+	p.pending = nil
 	p.turnMu.Unlock()
 
 	p.mu.Lock()
@@ -454,6 +460,7 @@ type settings struct {
 	recallEntryRunes int
 	recallMaxBytes   int
 	recallMinScore   int
+	manual           bool
 	ctx              context.Context
 }
 
@@ -482,6 +489,7 @@ func (p *Plugin) snapshot() settings {
 		recallEntryRunes: p.recallEntryRunes,
 		recallMaxBytes:   p.recallMaxBytes,
 		recallMinScore:   p.recallMinScore,
+		manual:           p.manual,
 		ctx:              p.ctx,
 	}
 }
