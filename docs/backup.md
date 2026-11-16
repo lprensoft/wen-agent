@@ -21,7 +21,7 @@ wen export -c /srv/wen/config.yaml -o /backup/wen.tar.gz
 | 路径 | 内容 |
 |---|---|
 | `config.yaml` | 启动期配置（按 `-c` 指向的实际文件名） |
-| `models.json` | 提供商、密钥与当前模型 |
+| `models.json` | 提供商、嵌入服务、密钥与当前模型 |
 | `plugins.state.json` | 插件开关与界面上保存的配置 |
 | `auth.json` | 访问口令的 PBKDF2 派生值 |
 | `sessions/` | 全部会话正文 |

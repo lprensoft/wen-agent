@@ -1214,6 +1214,12 @@ body {
 }
 .btn-link:hover { text-decoration: underline; }
 
+/* 嵌入服务：与备用模型同一张卡片的样式，表单项竖排，按钮靠右 */
+.embedding-form { display: flex; flex-direction: column; gap: 12px; }
+.embedding-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.embedding-status { font-size: 12px; color: var(--text-dim); }
+.embedding-status.is-on { color: var(--ok); }
+#embedding-error { margin: 0; }
 /* ---------- 弹窗（插件配置 / 模型配置） ---------- */
 .modal-overlay {
   position: fixed;

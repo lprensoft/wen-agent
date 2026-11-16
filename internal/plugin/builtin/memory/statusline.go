@@ -33,5 +33,8 @@ func (p *Plugin) StatusLines(lang string) []string {
 		parts = append(parts, i18n.Tf(lang, "plugin.memory.status.decay",
 			"%d 天淡忘、%d 天移出", s.blurDays, s.forgetDays))
 	}
+	if _, ok := s.semanticOn(); ok {
+		parts = append(parts, i18n.T(lang, "plugin.memory.status.semantic", "语义召回"))
+	}
 	return []string{i18n.T(lang, "plugin.memory.status.prefix", "🧠 记忆：") + strings.Join(parts, " · ")}
 }
