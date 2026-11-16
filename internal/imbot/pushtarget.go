@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"wen/internal/atomicfile"
 )
 
 // PushTargetStore 按用户记住主动推送所需的凭据，并持久化到 <StateDir>/<filename>。
@@ -61,7 +63,7 @@ func (s *PushTargetStore) Set(userID, target string) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.Rename(tmp, s.path)
 }
 
 // Get 返回某个用户最近一次的推送凭据；没有时返回空串。

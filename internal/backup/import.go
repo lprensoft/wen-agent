@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
 
@@ -80,7 +81,7 @@ func Import(archivePath, targetDir, lang string) (Manifest, Stats, error) {
 			}
 		}
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	if err := atomicfile.Rename(tmp, target); err != nil {
 		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.commit", "写入目标目录失败：%v", err))
 	}
 	committed = true

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/availability"
 	"wen/internal/clock"
 	"wen/internal/cue"
@@ -463,7 +464,7 @@ func persistState(dir string, st state) {
 	}
 	_ = os.MkdirAll(dir, 0o755)
 	raw, _ := json.Marshal(st)
-	_ = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
+	_ = atomicfile.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
 }
 
 // normalize 把一个算出来的间隔规整成像样的心跳节奏：先取整到分钟，再限幅到

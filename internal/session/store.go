@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wen/internal/atomicfile"
 )
 
 // Store 以 JSONL 文件形式管理 session：<dir>/<id>.jsonl，
@@ -355,7 +357,7 @@ func (s *Store) updateMeta(id string, mutate func(*Meta)) error {
 	if err := os.WriteFile(tmp, out, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	return atomicfile.Rename(tmp, p)
 }
 
 // Replace 用给定消息整体替换 session 内容（meta 行保留，原子写入）。
@@ -388,7 +390,7 @@ func (s *Store) Replace(id string, msgs []StoredMessage) error {
 	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	return atomicfile.Rename(tmp, p)
 }
 
 // Delete 删除 session 文件。

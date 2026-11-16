@@ -18,6 +18,8 @@ internal/plugin/builtin/ the built-in plugins (registration order lives in built
 internal/agentplugin/    the Agent Plugins 1.0 client (reads external bundles, skills and MCP declarations)
 internal/imbot/          the shared skeleton for chat channels (dispatch / commands / session
                          binding / confirmation proxy / channel routing)
+internal/atomicfile/     "write a temp file, then rename": a crash never leaves half a file, and
+                         renames retry past a brief lock on Windows
 internal/clock/          a replaceable "what time is it": carried by the context; the evaluator
                          advances it
 internal/cue/            the "reason to speak" board: producers post events, the heartbeat takes
