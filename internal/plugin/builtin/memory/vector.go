@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -45,7 +46,7 @@ const (
 	embedTextRunes = 1500
 	// minSemanticRunes 以下的输入不做语义召回：「嗯」「好的」不值得为它发一次请求。
 	// 比词面那条（minInputTokens）宽，因为语义召回恰恰要接住「睡不好」这种短句。
-	minSemanticRunes = 4
+	minSemanticRunes = 3
 	// queryEmbedTimeout 是同步嵌入本轮输入的时限。它在轮次开头的路径上，
 	// 超过就放弃语义这一路，用纯词面——不能让一个慢服务拖住每一轮对话。
 	queryEmbedTimeout = 4 * time.Second
@@ -227,6 +228,17 @@ func dot(a, b []float32) float32 {
 	return sum
 }
 
+// semanticLen 是输入里非空白字符的个数。
+func semanticLen(s string) int {
+	n := 0
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			n++
+		}
+	}
+	return n
+}
+
 // embedText 是一条记忆送去嵌入的文本：标题、摘要与正文的开头。
 func embedText(e Entry) string {
 	return truncateRunes(strings.TrimSpace(e.Name+"\n"+e.Description+"\n"+e.Content), embedTextRunes)
@@ -306,30 +318,34 @@ func (p *Plugin) noteEmbedErr(lang string, err error) {
 // kickIndex 检查各可读库的向量索引是否与记忆对得上，对不上就起一个后台任务补齐。
 // 在每轮的 TurnPrompt 里调用，因此检查本身不联网、不阻塞——只比哈希。
 // 这一个触发点同时覆盖了所有让记忆变化的路径（工具保存、提炼、淡忘、手工改文件）。
-func (p *Plugin) kickIndex(s settings, entries []Entry) {
+//
+// 比对的是各库自己的完整清单，而不是本轮可见的那份：可见清单跨库按标题去过重，
+// 被另一个域里同名记忆遮住的条目不在其中，拿它当「这个库有什么」，那些条目的
+// 有效向量就会被当成已删除清掉，切回那个域时还要重新付费嵌入。
+func (p *Plugin) kickIndex(ctx context.Context, s settings) {
 	model, ok := s.semanticOn()
 	if !ok || s.ctx == nil || p.embedBlocked() {
 		return
 	}
-	byDomain := map[string][]Entry{}
-	for _, e := range entries {
-		byDomain[e.Domain] = append(byDomain[e.Domain], e)
-	}
-	for tag, es := range byDomain {
+	for _, tag := range p.readDomains(ctx) {
 		store := p.storeFor(tag)
 		if store == nil {
 			continue
 		}
-		if !p.vecIndexFor(store.Dir()).stale(model, entryHashes(es)) {
+		entries, err := store.List()
+		if err != nil {
 			continue
 		}
-		p.startSync(s, store, es)
+		if !p.vecIndexFor(store.Dir()).stale(model, entryHashes(entries)) {
+			continue
+		}
+		p.startSync(s, store)
 	}
 }
 
 // startSync 起一个后台同步，同一个库同时只跑一个。登记在 turnMu 内完成，
 // 与 Stop 的「先置 stopped 再 Wait」配合，不会漏等一个刚起来的 goroutine。
-func (p *Plugin) startSync(s settings, store *Store, entries []Entry) {
+func (p *Plugin) startSync(s settings, store *Store) {
 	dir := store.Dir()
 	p.turnMu.Lock()
 	if p.stopped || p.syncing[dir] {
@@ -350,14 +366,19 @@ func (p *Plugin) startSync(s settings, store *Store, entries []Entry) {
 			delete(p.syncing, dir)
 			p.turnMu.Unlock()
 		}()
-		p.syncIndex(s, store, entries)
+		p.syncIndex(s, store)
 	}()
 }
 
 // syncIndex 把一个库里缺失或过期的向量补齐，并丢掉已删除条目的。一批批落盘。
-func (p *Plugin) syncIndex(s settings, store *Store, entries []Entry) {
+// 条目取自库本身而不是调用方传入的清单，理由见 kickIndex。
+func (p *Plugin) syncIndex(s settings, store *Store) {
 	model, ok := s.semanticOn()
 	if !ok || s.ctx == nil {
+		return
+	}
+	entries, err := store.List()
+	if err != nil {
 		return
 	}
 	ix := p.vecIndexFor(store.Dir())
@@ -411,7 +432,7 @@ func (p *Plugin) syncIndex(s settings, store *Store, entries []Entry) {
 // 任何一步不成立都返回 nil——调用方据此退回纯词面，这一路从不报错。
 func (p *Plugin) semanticSims(ctx context.Context, s settings, input string, entries []Entry) map[string]float32 {
 	model, ok := s.semanticOn()
-	if !ok || p.embedBlocked() || len([]rune(strings.TrimSpace(input))) < minSemanticRunes {
+	if !ok || p.embedBlocked() || semanticLen(input) < minSemanticRunes {
 		return nil
 	}
 	byDomain := map[string][]Entry{}

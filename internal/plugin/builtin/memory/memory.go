@@ -637,7 +637,7 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 	}
 	var parts []string
 	// 向量索引在后台补齐，这里只比哈希、不联网，不拖慢本轮
-	p.kickIndex(s, entries)
+	p.kickIndex(ctx, s)
 	// 召回块排在索引之前：索引是目录，召回是内容，先看到内容再看到目录更顺。
 	// 被召回的条目在索引里照样列着，两处各司其职，不互相解释。
 	if block := p.recallBlock(ctx, s, ev.UserInput, entries); block != "" {

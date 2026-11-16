@@ -409,11 +409,7 @@ func TestIndexFollowsEditsAndDeletes(t *testing.T) {
 	ix := p.vecIndexFor(store.Dir())
 	sync := func() {
 		t.Helper()
-		entries, err := p.visibleEntries(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		p.syncIndex(p.snapshot(), store, entries)
+		p.syncIndex(p.snapshot(), store)
 	}
 
 	sync()
@@ -455,7 +451,7 @@ func TestStaleVectorIsNotUsedForRecall(t *testing.T) {
 	saveSleep(t, p, plugin.Scope{})
 	store := p.storeFor("")
 	entries, _ := p.visibleEntries(context.Background())
-	p.syncIndex(p.snapshot(), store, entries)
+	p.syncIndex(p.snapshot(), store)
 
 	s := p.snapshot()
 	if sims := p.semanticSims(context.Background(), s, sleepQuestion, entries); len(sims) != 1 {
@@ -477,7 +473,7 @@ func TestSemanticSkipsShortInputWithoutRequest(t *testing.T) {
 	saveSleep(t, p, plugin.Scope{})
 	store := p.storeFor("")
 	entries, _ := p.visibleEntries(context.Background())
-	p.syncIndex(p.snapshot(), store, entries)
+	p.syncIndex(p.snapshot(), store)
 
 	before := f.calls.Load()
 	if sims := p.semanticSims(context.Background(), p.snapshot(), "嗯", entries); sims != nil {
@@ -495,11 +491,7 @@ func TestSemanticRecallRespectsScope(t *testing.T) {
 	saveSleep(t, p, innerScope) // 写进 inner 库
 
 	innerStore := p.storeFor("inner")
-	innerEntries, _ := innerStore.List()
-	for i := range innerEntries {
-		innerEntries[i].Domain = "inner"
-	}
-	p.syncIndex(p.snapshot(), innerStore, innerEntries)
+	p.syncIndex(p.snapshot(), innerStore)
 	if p.vecIndexFor(innerStore.Dir()).view("fake|m|0") == nil {
 		t.Fatal("inner 库的索引应已建好")
 	}
@@ -517,5 +509,54 @@ func TestStatusLineMentionsSemanticRecallWhenOn(t *testing.T) {
 	p := newSemanticPlugin(t, f, nil)
 	if line := p.StatusLines("")[0]; !strings.Contains(line, "语义召回") {
 		t.Errorf("启用后状态行应提到语义召回：%s", line)
+	}
+}
+
+// 跨域同名的记忆：可见清单里只留靠前的那条，被遮住的那条仍在它自己的库里，
+// 它的有效向量不能因为「本轮看不见」就被当成已删除清掉。
+func TestShadowedEntryKeepsItsVector(t *testing.T) {
+	f := &fakeEmbedder{model: "fake|m|0"}
+	p := newSemanticPlugin(t, f, nil)
+	saveSleep(t, p, outerScope) // outer 库里有一条
+	saveSleep(t, p, innerScope) // inner 库里同名，进 inner 域时遮住它
+
+	outerStore, innerStore := p.storeFor("outer"), p.storeFor("inner")
+	p.syncIndex(p.snapshot(), outerStore)
+	p.syncIndex(p.snapshot(), innerStore)
+	calls := f.calls.Load()
+
+	turnPrompt(t, p, scoped(innerScope), sleepQuestion)
+	p.wg.Wait() // 触发的后台同步（如果有）跑完
+
+	if got := p.vecIndexFor(outerStore.Dir()).view("fake|m|0"); len(got) != 1 {
+		t.Fatalf("被遮住的条目在 outer 库里仍存在，向量不该被清掉，实际 %d 条", len(got))
+	}
+	entries, _ := outerStore.List()
+	if p.vecIndexFor(outerStore.Dir()).stale("fake|m|0", entryHashes(entries)) {
+		t.Error("outer 库的索引应与它自己的条目一致")
+	}
+	// 之后的轮次里这条也不该再引发任何重新嵌入（只有查询本轮输入的那一次请求）
+	if extra := f.calls.Load() - calls; extra > 1 {
+		t.Errorf("没有任何变化，却多发了 %d 次嵌入请求", extra)
+	}
+}
+
+// 「睡不好」只有三个字：词面凑不够四个 token，语义这一路正是为这种短句准备的，
+// 必须从真正的召回入口走一遍，而不是直接喂相似度。
+func TestThreeCharInputRecallsSemanticallyThroughTurnPrompt(t *testing.T) {
+	f := &fakeEmbedder{model: "fake|m|0"}
+	p := newSemanticPlugin(t, f, nil)
+	saveSleep(t, p, plugin.Scope{})
+	p.syncIndex(p.snapshot(), p.storeFor(""))
+
+	if got := turnPrompt(t, p, context.Background(), "睡不好"); !strings.Contains(got, "对咖啡因敏感") {
+		t.Fatalf("三个字的「睡不好」应能想起「失眠」那条：\n%s", got)
+	}
+	before := f.calls.Load()
+	for _, short := range []string{"嗯", "好的", "  好  "} {
+		turnPrompt(t, p, context.Background(), short)
+	}
+	if f.calls.Load() != before {
+		t.Error("一两个字的寒暄不值得发嵌入请求")
 	}
 }

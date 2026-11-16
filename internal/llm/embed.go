@@ -46,9 +46,11 @@ func EmbedTypeLabel(lang, typ string) string {
 }
 
 const (
-	// embedBatchSize 是一次请求带的文本条数上限。OpenAI 允许到 2048，但各家兼容实现
-	// 的上限不一，取一个到处都放得过的小值；代价只是首次建索引时多几个请求。
-	embedBatchSize = 32
+	// embedBatchSize 是一次请求带的文本条数上限。OpenAI 允许到 2048，但各家的上限不一，
+	// 已知最严的是通义千问 text-embedding-v4 的 10 条（预置里就有它），所以固定取 10：
+	// 一个到处都放得过的值，代价只是首次建索引时多几个请求。连接测试只发一条，
+	// 测不出批量上限，因此这个值必须保守，而不能靠测试连接兜底。
+	embedBatchSize = 10
 	// embedMaxRunes 是单条文本送出去的字数上限。OpenAI 的上限是 8192 token，
 	// 中文按一字一到两个 token 算，2000 字留足余量，也避免一条超长记忆拖慢整批。
 	embedMaxRunes = 2000

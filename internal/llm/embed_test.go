@@ -161,3 +161,38 @@ func TestEmbedIdentityIgnoresAddressAndKey(t *testing.T) {
 		t.Fatal("维度不同的向量不能混用")
 	}
 }
+
+// 通义千问 text-embedding-v4 一次最多 10 条，而预置里就有它；连接测试只发一条，
+// 测不出这个上限，所以批量大小本身必须守住。
+func TestEmbedBatchNeverExceedsStrictestKnownLimit(t *testing.T) {
+	if embedBatchSize > 10 {
+		t.Fatalf("embedBatchSize = %d，不能超过已知最严的 10", embedBatchSize)
+	}
+	var largest int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Input []string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		largest = max(largest, len(req.Input))
+		if len(req.Input) > 10 {
+			http.Error(w, "batch size is invalid, it should not be larger than 10", http.StatusBadRequest)
+			return
+		}
+		var data []map[string]any
+		for i := range req.Input {
+			data = append(data, map[string]any{"index": i, "embedding": []float32{1, 0}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+
+	texts := make([]string, 25)
+	for i := range texts {
+		texts[i] = "x"
+	}
+	if _, err := newTestEmbedder(t, EmbedTypeOpenAI, srv.URL, "", 0).Embed(context.Background(), texts); err != nil {
+		t.Fatal(err)
+	}
+	if largest > 10 {
+		t.Fatalf("最大一批 %d 条", largest)
+	}
+}
