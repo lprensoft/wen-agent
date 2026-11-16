@@ -80,6 +80,15 @@ type InitContext struct {
 	// 由 BackgroundWorker.RunBackground 或 TurnSettler.Settle 显式驱动。
 	// 为真时 Clock 必定非 nil。
 	ManualTime bool
+	// Embed 把一批文本变成向量，供插件做语义检索。服务由用户在设置页显式启用，
+	// 默认关闭：未启用时返回 ErrEmbedUnavailable，插件应静默降级到不用向量的做法。
+	// 配置可以在运行中被改掉，所以它始终非 nil，是否可用要看返回值。
+	// 每次调用都是一次真实的外部请求（可能收费），也会把文本发给第三方，
+	// 只放在值得的路径上：写入时批量算、查询时只算本轮输入。
+	Embed EmbedFunc
+	// EmbedModel 返回当前嵌入服务的向量身份，未启用时为空串。它廉价、无副作用，
+	// 供插件在不发请求的前提下判断「现在能不能用向量」。
+	EmbedModel EmbedModelFunc
 }
 
 // StatusInfo 是当前模型配置与会话用量的快照。

@@ -29,6 +29,9 @@ type File struct {
 	// （限流、服务端故障、网络问题）时切换，见 internal/agent。
 	Fallbacks []Selection `json:"fallbacks,omitempty"`
 	Current   Selection   `json:"current"`
+	// Embedding 是嵌入服务配置，见 embedding.go。它不属于「整档提交」的范围：
+	// Save 沿用已保存的值，只有 SetEmbedding 能改它，否则每次保存提供商都会把它抹掉。
+	Embedding *Embedding `json:"embedding,omitempty"`
 }
 
 type Provider struct {
@@ -293,6 +296,7 @@ func (s *Store) Save(lang string, next File) (File, error) {
 	own := carryOverKeys(next, s.viewLocked())
 	normalize(&own)
 	own.Version = 1
+	own.Embedding = s.own.Embedding
 	// 先校验提交的文档本身（重名、非法字段），再算坠碑与「未接管」条目
 	if err := validateDoc(lang, own); err != nil {
 		return File{}, err

@@ -25,6 +25,9 @@
 | PUT | `/api/models` | 整档保存；请求里 `api_key` 留空表示不修改 |
 | PUT | `/api/models/current` | `{"provider","model"}` 切换当前模型，立即热生效 |
 | POST | `/api/models/test` | 用一次极小的真实请求测试连接 |
+| GET | `/api/embedding` | 嵌入服务配置（`api_key` 只返回掩码），并带上接口类型与预置 |
+| PUT | `/api/embedding` | 保存嵌入服务配置，立即生效；`api_key` 留空且地址没变时表示不修改 |
+| POST | `/api/embedding/test` | 用一次真实的嵌入请求测试表单里的配置，返回 `{"ok":true,"dimensions":N}` |
 | GET | `/api/auth/status` | 访问控制状态（是否已设口令、当前请求是否已认证、是否对外监听），登录前即可访问 |
 | POST | `/api/auth/login` | `{"password"}` 登录，成功后下发会话 Cookie |
 | POST | `/api/auth/logout` | 退出登录 |

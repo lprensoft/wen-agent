@@ -42,6 +42,10 @@ const (
 	stopWait = 5 * time.Second
 )
 
+// defaultRecallSemantic：用户启用了嵌入服务时，记忆召回默认跟着用上语义这一路——
+// 启用嵌入本身就是显式授权，这一项只是给想把记忆正文留在本地的人一个单独的出口。
+const defaultRecallSemantic = true
+
 // 记忆库的存放范围。配置键沿用 scope，但代码里叫 library——「可见域」这个核心概念
 // 也叫 scope，同名会让这段逻辑难以阅读。
 const (
@@ -94,8 +98,22 @@ type Plugin struct {
 	recallMax        int
 	recallEntryRunes int
 	recallMaxBytes   int
-	recallMinScore   int
 	manual           bool // 手动时间线：轮次后的提炼/日切由 Settle 同步驱动
+	recallLevel      string
+	// semantic 是本插件是否允许用语义召回。嵌入服务由用户在设置页统一启用，
+	// 但记忆正文是否愿意发给它，是这个插件自己的一道闸。
+	semantic   bool
+	embed      plugin.EmbedFunc
+	embedModel plugin.EmbedModelFunc
+
+	// 向量索引与它的后台同步，见 vector.go。vecs 是按记忆库目录惰性创建的索引，
+	// 与配置无关，不随 Init 重置；syncing 由 turnMu 保护（与 wg 的登记同一把锁）。
+	vecMu   sync.Mutex
+	vecs    map[string]*vecIndex
+	syncing map[string]bool
+	// embedBlockedUntil 是嵌入失败后暂停使用的截止时刻。
+	embedMu           sync.Mutex
+	embedBlockedUntil time.Time
 
 	// 后台提炼与清扫的运行环境。ctx 由 Init 建、Stop 取消——广播进来的 ctx
 	// 在轮次结束时就被取消了，拿它去跑后台调用必然半路夭折。
@@ -153,7 +171,8 @@ func New() *Plugin {
 		recallMax:        defaultRecallMax,
 		recallEntryRunes: defaultRecallEntryRunes,
 		recallMaxBytes:   defaultRecallMaxBytes,
-		recallMinScore:   defaultRecallMinScore,
+		recallLevel:      defaultRecallLevel,
+		semantic:         defaultRecallSemantic,
 		windows:          map[windowKey]*window{},
 		extracting:       map[windowKey]bool{},
 	}
@@ -213,11 +232,35 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:   "recall_max",
 			Label: "自动想起的条数",
 			Type:  plugin.FieldInt,
-			Description: "每轮按你这句话里的词，从记忆里挑出最相关的几条，把正文直接带给角色——" +
-				"像聊到某件事自然想起来，不用它自己去翻。纯词面匹配，不多花模型调用。0 表示关闭。",
+			Description: "每轮按你这句话，从记忆里挑出最相关的几条，把正文直接带给角色——" +
+				"像聊到某件事自然想起来，不用它自己去翻。默认按词面匹配，不多花模型调用；" +
+				"在「模型」里启用了嵌入服务时，再加一路语义匹配。0 表示关闭。",
 			Default: defaultRecallMax,
 			Min:     plugin.IntPtr(0),
 			Max:     plugin.IntPtr(5),
+		},
+		{
+			Key:   "recall_level",
+			Label: "想起来的积极程度",
+			Type:  plugin.FieldSelect,
+			Description: "决定一条记忆要和这句话有多相关才会被想起。克制：只在很相关时才提，" +
+				"偶尔会漏；适中：默认；积极：稍沾边就想起，记性好、爱提旧事，也更容易想歪。" +
+				"同时作用于词面与语义两路。",
+			Default: defaultRecallLevel,
+			Options: []plugin.ConfigOption{
+				{Value: levelConservative, Label: "克制"},
+				{Value: levelBalanced, Label: "适中"},
+				{Value: levelEager, Label: "积极"},
+			},
+		},
+		{
+			Key:   "recall_semantic",
+			Label: "用语义匹配补充",
+			Type:  plugin.FieldBool,
+			Description: "在「模型」里启用嵌入服务后，用语义相似度接住词面对不上的说法" +
+				"（「睡不好」想起「失眠」）。开启意味着记忆的标题、摘要与正文开头，以及你每一句话，" +
+				"都会发给你选的那家嵌入服务。没启用嵌入服务时这一项不起作用。",
+			Default: defaultRecallSemantic,
 		},
 		{
 			Key:         "recall_entry_runes",
@@ -237,16 +280,6 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default: defaultRecallMaxBytes,
 			Min:     plugin.IntPtr(512),
 			Max:     plugin.IntPtr(8 * 1024),
-		},
-		{
-			Key:   "recall_min_score",
-			Label: "想起来的最低相关度",
-			Type:  plugin.FieldInt,
-			Description: "一条记忆至少要和这句话有多相关才会被想起：标题或摘要里对上一个词算 3 分，" +
-				"正文里对上一个词算 1 分；标题与摘要一个词都没对上时，正文要对上 4 个词才算。调低更容易想起、也更容易想歪。",
-			Default: defaultRecallMinScore,
-			Min:     plugin.IntPtr(1),
-			Max:     plugin.IntPtr(20),
 		},
 		{
 			Key:   "auto_extract",
@@ -380,7 +413,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.recallMax = plugin.CfgInt(cfg, "recall_max", defaultRecallMax)
 	p.recallEntryRunes = plugin.CfgInt(cfg, "recall_entry_runes", defaultRecallEntryRunes)
 	p.recallMaxBytes = plugin.CfgInt(cfg, "recall_max_bytes", defaultRecallMaxBytes)
-	p.recallMinScore = plugin.CfgInt(cfg, "recall_min_score", defaultRecallMinScore)
+	p.recallLevel = plugin.CfgString(cfg, "recall_level", defaultRecallLevel)
+	p.semantic = plugin.CfgBool(cfg, "recall_semantic", defaultRecallSemantic)
+	p.embed, p.embedModel = ictx.Embed, ictx.EmbedModel
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 
 	p.turnMu.Lock()
@@ -459,8 +494,11 @@ type settings struct {
 	recallMax        int
 	recallEntryRunes int
 	recallMaxBytes   int
-	recallMinScore   int
 	manual           bool
+	recallLevel      string
+	semantic         bool
+	embed            plugin.EmbedFunc
+	embedModel       plugin.EmbedModelFunc
 	ctx              context.Context
 }
 
@@ -488,8 +526,11 @@ func (p *Plugin) snapshot() settings {
 		recallMax:        p.recallMax,
 		recallEntryRunes: p.recallEntryRunes,
 		recallMaxBytes:   p.recallMaxBytes,
-		recallMinScore:   p.recallMinScore,
 		manual:           p.manual,
+		recallLevel:      p.recallLevel,
+		semantic:         p.semantic,
+		embed:            p.embed,
+		embedModel:       p.embedModel,
 		ctx:              p.ctx,
 	}
 }
@@ -604,6 +645,8 @@ func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, e
 		return "", err
 	}
 	var parts []string
+	// 向量索引在后台补齐，这里只比哈希、不联网，不拖慢本轮
+	p.kickIndex(ctx, s)
 	// 召回块排在索引之前：索引是目录，召回是内容，先看到内容再看到目录更顺。
 	// 被召回的条目在索引里照样列着，两处各司其职，不互相解释。
 	if block := p.recallBlock(ctx, s, ev.UserInput, entries); block != "" {
@@ -627,7 +670,8 @@ func (p *Plugin) recallBlock(ctx context.Context, s settings, input string, entr
 	if s.recallMax <= 0 || len(entries) == 0 || plugin.IsEphemeralInput(ctx) {
 		return ""
 	}
-	hits := pickRecalls(input, entries, s.recallMax, s.recallMinScore)
+	sims := p.semanticSims(ctx, s, input, entries)
+	hits := pickRecalls(input, entries, s.recallMax, levelFor(s.recallLevel), sims)
 	block, n := renderRecalls(s.lang, hits, s.recallEntryRunes, s.recallMaxBytes)
 	if n == 0 {
 		return ""

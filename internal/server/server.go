@@ -91,6 +91,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/models", s.saveModels)
 	mux.HandleFunc("PUT /api/models/current", s.setCurrentModel)
 	mux.HandleFunc("POST /api/models/test", s.testModel)
+	mux.HandleFunc("GET /api/embedding", s.getEmbedding)
+	mux.HandleFunc("PUT /api/embedding", s.saveEmbedding)
+	mux.HandleFunc("POST /api/embedding/test", s.testEmbedding)
 
 	mux.HandleFunc("GET /api/auth/status", s.authStatus)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
