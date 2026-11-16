@@ -14,7 +14,10 @@ func TestNowFallsBackToWallClock(t *testing.T) {
 		t.Fatalf("没有装钟时应当返回系统时间，得到 %v", got)
 	}
 	// nil 的 ctx 也走同一条回退：工具链里偶尔会有拿不到 ctx 的调用点
-	if got := Now(nil); got.Before(before) || got.After(after) {
+	before = time.Now()
+	got = Now(nil)
+	after = time.Now()
+	if got.Before(before) || got.After(after) {
 		t.Fatalf("nil ctx 应当回退到系统时间，得到 %v", got)
 	}
 }
