@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"wen/internal/atomicfile"
 )
 
 // CacheDirName 是工具清单缓存所在的目录，与各插件包平级。
@@ -106,7 +108,7 @@ func (s *Store) SaveTools(bundle string, tools []ToolInfo) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return atomicfile.WriteFile(path, data, 0o644)
 }
 
 // DropTools 删掉某个插件包的缓存，卸载时用。

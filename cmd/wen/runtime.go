@@ -97,6 +97,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 	}
 
 	lang := resolveLang(cfg)
+	embed, embedModel := embedFuncs(lang, func() *modelcfg.Store { return models })
 	ictx := plugin.InitContext{
 		Workdir:    workdir,
 		Lang:       lang,
@@ -104,6 +105,8 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 		SessionDir: sessionDir,
 		Clock:      ov.Clock,
 		ManualTime: ov.ManualTime,
+		Embed:      embed,
+		EmbedModel: embedModel,
 		Complete: func(ctx context.Context, prompt string) (string, error) {
 			if ag == nil {
 				return "", fmt.Errorf("%s", tr("cli.err.no_model", "模型尚未就绪"))

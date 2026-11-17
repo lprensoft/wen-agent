@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 
 	"wen/internal/plugin"
@@ -132,7 +133,7 @@ func saveWindowState(lang, dir string, windows map[windowKey]*window, marks dayM
 		return
 	}
 	// 0600：里面是对话原文
-	if err := os.WriteFile(windowPath(dir), raw, 0o600); err != nil {
+	if err := atomicfile.WriteFile(windowPath(dir), raw, 0o600); err != nil {
 		i18n.Logf(lang, "log.memory.window_write_failed", "记忆提炼：窗口缓冲写入失败：%v", err)
 	}
 }

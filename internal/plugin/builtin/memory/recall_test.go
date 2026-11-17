@@ -62,6 +62,11 @@ func TestTokenizeMixedScripts(t *testing.T) {
 
 // ---------- 打分与阈值 ----------
 
+var (
+	balancedLevel = recallLevels[levelBalanced]
+	looseLevel    = recallLevel{minScore: 1, contentOnly: 1, semantic: 0.45}
+)
+
 func entryAt(name, desc, content string, updated time.Time) Entry {
 	return Entry{Name: name, Description: desc, Type: "事实", Content: content, Updated: updated}
 }
@@ -91,7 +96,7 @@ func TestPassesThresholds(t *testing.T) {
 		{"什么都没命中", recallHit{}, false},
 	}
 	for _, c := range cases {
-		if got := c.hit.passes(4); got != c.want {
+		if got := c.hit.passes(balancedLevel); got != c.want {
 			t.Errorf("%s：passes = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -102,7 +107,7 @@ func TestPickRecallsSuppressesLongEntries(t *testing.T) {
 	short := entryAt("小白那只猫", "家里的猫", "一只橘猫。", now)
 	long := entryAt("小白那只猫的一年", "家里的猫",
 		strings.Repeat("它早上会跳到床头叫人起床，中午趴在窗台晒太阳，晚上钻进被窝。", 12), now)
-	hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", []Entry{long, short}, 5, 4)
+	hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", []Entry{long, short}, 5, balancedLevel, nil)
 	if len(hits) != 2 {
 		t.Fatalf("两条都该够格，实际 %d 条", len(hits))
 	}
@@ -116,7 +121,7 @@ func TestPickRecallsTieBreaksByUpdated(t *testing.T) {
 	// 两条文本完全相同（pickRecalls 是纯函数，不关心同名），只差更新时间
 	older := entryAt("小白那只猫", "家里的猫", "一只橘猫。", now.Add(-48*time.Hour))
 	newer := entryAt("小白那只猫", "家里的猫", "一只橘猫。", now)
-	hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", []Entry{older, newer}, 5, 4)
+	hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", []Entry{older, newer}, 5, balancedLevel, nil)
 	if len(hits) != 2 {
 		t.Fatalf("两条都该够格，实际 %d 条", len(hits))
 	}
@@ -130,10 +135,10 @@ func TestPickRecallsTieBreaksByUpdated(t *testing.T) {
 
 func TestPickRecallsIgnoresShortInput(t *testing.T) {
 	e := entryAt("好的", "好的好的", "好的好的好的", time.Now())
-	if hits := pickRecalls("好的", []Entry{e}, 5, 1); len(hits) != 0 {
+	if hits := pickRecalls("好的", []Entry{e}, 5, looseLevel, nil); len(hits) != 0 {
 		t.Errorf("「好的」这种短输入不该触发召回，实际召回 %d 条", len(hits))
 	}
-	if hits := pickRecalls("嗯", []Entry{e}, 5, 1); len(hits) != 0 {
+	if hits := pickRecalls("嗯", []Entry{e}, 5, looseLevel, nil); len(hits) != 0 {
 		t.Errorf("「嗯」不该触发召回，实际召回 %d 条", len(hits))
 	}
 }
@@ -144,10 +149,10 @@ func TestPickRecallsRespectsMax(t *testing.T) {
 	for _, n := range []string{"小白那只猫一", "小白那只猫二", "小白那只猫三"} {
 		entries = append(entries, entryAt(n, "家里的猫", "一只橘猫。", now))
 	}
-	if hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", entries, 2, 4); len(hits) != 2 {
+	if hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", entries, 2, balancedLevel, nil); len(hits) != 2 {
 		t.Errorf("最多召回 2 条，实际 %d 条", len(hits))
 	}
-	if hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", entries, 0, 4); len(hits) != 0 {
+	if hits := pickRecalls("你还记得小白那只猫现在怎么样了吗", entries, 0, balancedLevel, nil); len(hits) != 0 {
 		t.Errorf("上限为 0 表示关闭，实际召回 %d 条", len(hits))
 	}
 }

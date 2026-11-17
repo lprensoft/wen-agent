@@ -21,7 +21,7 @@ It includes:
 | Path | Contents |
 |---|---|
 | `config.yaml` | Startup configuration (under the actual file name given with `-c`) |
-| `models.json` | Providers, keys and the current model |
+| `models.json` | Providers, the embedding service, keys and the current model |
 | `plugins.state.json` | Plugin switches and settings saved in the UI |
 | `auth.json` | The PBKDF2-derived access password |
 | `sessions/` | Every conversation |

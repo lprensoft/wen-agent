@@ -25,6 +25,9 @@
 | PUT | `/api/models` | Saves the whole document; an empty `api_key` in the request means "leave it alone" |
 | PUT | `/api/models/current` | `{"provider","model"}` switches the current model, effective immediately |
 | POST | `/api/models/test` | Tests a connection with one very small real request |
+| GET | `/api/embedding` | Embedding-service configuration (`api_key` is returned masked), with the interface types and presets |
+| PUT | `/api/embedding` | Saves the embedding-service configuration, effective immediately; an empty `api_key` with an unchanged address means "leave it alone" |
+| POST | `/api/embedding/test` | Tests the configuration in the form with one real embedding request, returning `{"ok":true,"dimensions":N}` |
 | GET | `/api/auth/status` | Access-control state (whether a password is set, whether this request is authenticated, whether the server listens beyond localhost); reachable before signing in |
 | POST | `/api/auth/login` | `{"password"}` signs in and issues a session cookie |
 | POST | `/api/auth/logout` | Signs out |

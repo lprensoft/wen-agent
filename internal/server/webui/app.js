@@ -1565,6 +1565,7 @@ async function openSettings() {
   settingsView.classList.remove("hidden");
   settingsPluginsEl.textContent = t("common.loading");
   loadModels();
+  loadEmbedding();
   await loadSettingsPlugins();
   // 关闭设置不会重置当前栏目：再次打开时若还停在角色状态，要重新取快照，
   // 否则刚聊完的记忆与现场会一直是上次打开时的那一份。
@@ -2888,6 +2889,149 @@ const providerTitleEl = $("#provider-modal-title");
 let providerEditing = null; // 正在编辑的提供商名，null 表示新增
 let providerInputs = {};
 
+// ---------- 嵌入服务 ----------
+// 默认关闭。启用后，记忆正文与每轮的用户输入会发给所选的服务——这个决定必须看得见，
+// 所以开关旁边写着直白的说明；保存与测试分开，先测通再打开。
+
+const embeddingFormEl = $("#embedding-form");
+const embeddingErrorEl = $("#embedding-error");
+const embeddingStatusEl = $("#embedding-status");
+let embeddingInputs = null;
+
+async function loadEmbedding() {
+  try {
+    const res = await fetch(withLang("/api/embedding"));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    renderEmbedding(await res.json());
+  } catch (e) {
+    showEmbeddingMsg(t("embedding.loadFailed", { msg: e.message }));
+  }
+}
+
+// kind：error（默认，红）/ info（进行中，蓝）/ ok（成功，绿）
+function showEmbeddingMsg(msg, kind) {
+  embeddingErrorEl.textContent = msg;
+  embeddingErrorEl.classList.toggle("hidden", !msg);
+  embeddingErrorEl.classList.toggle("is-info", kind === "info");
+  embeddingErrorEl.classList.toggle("is-ok", kind === "ok");
+}
+
+function renderEmbedding(doc) {
+  showEmbeddingMsg("");
+  embeddingStatusEl.textContent = doc.enabled ? t("embedding.on") : t("embedding.off");
+  embeddingStatusEl.classList.toggle("is-on", !!doc.enabled);
+  embeddingFormEl.textContent = "";
+
+  const enabled = switchInput(doc.enabled);
+
+  const presetSelect = document.createElement("select");
+  const pick = document.createElement("option");
+  pick.value = "";
+  pick.textContent = t("embedding.presetPick");
+  presetSelect.appendChild(pick);
+  for (const preset of doc.presets || []) {
+    const opt = document.createElement("option");
+    opt.value = preset.key;
+    opt.textContent = preset.name + " · " + preset.model;
+    presetSelect.appendChild(opt);
+  }
+
+  const typeSelect = document.createElement("select");
+  for (const ty of doc.types || []) {
+    const opt = document.createElement("option");
+    opt.value = ty.value;
+    opt.textContent = ty.label;
+    typeSelect.appendChild(opt);
+  }
+  typeSelect.value = doc.type || ((doc.types || [])[0] || {}).value || "";
+  const urlInput = textInput(doc.base_url);
+  const keyInput = textInput("");
+  keyInput.type = "password";
+  keyInput.placeholder = doc.has_api_key
+    ? t("provider.apiKeyPlaceholder", { masked: doc.api_key_masked })
+    : "";
+  const modelInput = textInput(doc.model);
+  const dimInput = numberInput(doc.dimensions || "", t("embedding.dimensionsDefault"), { min: 0, max: 8192 });
+
+  // 预置只是填表单：挑一条把接口、地址与模型填上，密钥与维度仍由用户自己决定
+  presetSelect.addEventListener("change", () => {
+    const preset = (doc.presets || []).find((x) => x.key === presetSelect.value);
+    if (!preset) return;
+    typeSelect.value = preset.type;
+    urlInput.value = preset.base_url;
+    modelInput.value = preset.model;
+    dimInput.value = "";
+  });
+
+  embeddingInputs = {
+    enabled: enabled.input, type: typeSelect, base_url: urlInput,
+    api_key: keyInput, model: modelInput, dimensions: dimInput,
+  };
+  embeddingFormEl.append(
+    fieldEl(t("embedding.enable"), enabled.wrap, t("embedding.enableDesc")),
+    fieldEl(t("embedding.preset"), presetSelect),
+    fieldEl(t("embedding.type"), typeSelect, t("embedding.typeDesc")),
+    fieldEl(t("embedding.baseUrl"), urlInput, t("embedding.baseUrlDesc")),
+    fieldEl(t("embedding.apiKey"), keyInput, t("embedding.apiKeyDesc")),
+    fieldEl(t("embedding.model"), modelInput, t("embedding.modelDesc")),
+    fieldEl(t("embedding.dimensions"), dimInput, t("embedding.dimensionsDesc")),
+  );
+}
+
+function embeddingPayload() {
+  const dims = parseInt(embeddingInputs.dimensions.value, 10);
+  return {
+    enabled: embeddingInputs.enabled.checked,
+    type: embeddingInputs.type.value,
+    base_url: embeddingInputs.base_url.value.trim(),
+    api_key: embeddingInputs.api_key.value.trim(),
+    model: embeddingInputs.model.value.trim(),
+    dimensions: Number.isFinite(dims) && dims > 0 ? dims : 0,
+  };
+}
+
+async function embeddingRequest(method, url, body) {
+  const res = await fetch(withLang(url), {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "HTTP " + res.status);
+  }
+  return res.json();
+}
+
+async function saveEmbedding() {
+  if (!embeddingInputs) return;
+  const saveBtn = $("#btn-embedding-save");
+  saveBtn.disabled = true;
+  try {
+    renderEmbedding(await embeddingRequest("PUT", "/api/embedding", embeddingPayload()));
+    showEmbeddingMsg(t("embedding.saved"), "ok");
+  } catch (e) {
+    showEmbeddingMsg(t("embedding.saveFailed", { msg: e.message }));
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+async function testEmbedding() {
+  if (!embeddingInputs) return;
+  const testBtn = $("#btn-embedding-test");
+  showEmbeddingMsg(t("provider.testing"), "info");
+  testBtn.disabled = true;
+  try {
+    const out = await embeddingRequest("POST", "/api/embedding/test", embeddingPayload());
+    showEmbeddingMsg(t("embedding.testOk", { dimensions: out.dimensions }), "ok");
+  } catch (e) {
+    showEmbeddingMsg(e.message);
+  } finally {
+    testBtn.disabled = false;
+  }
+}
+
 // ---------- 预置提供商 ----------
 
 const presetModal = $("#preset-modal");
@@ -3319,6 +3463,8 @@ function fieldEl(label, input, desc) {
 // 添加提供商先进预置列表，挑不到再走「自定义」到手工表单
 $("#btn-add-provider").addEventListener("click", openPresetModal);
 $("#btn-add-fallback").addEventListener("click", addFallback);
+$("#btn-embedding-save").addEventListener("click", saveEmbedding);
+$("#btn-embedding-test").addEventListener("click", testEmbedding);
 $("#btn-preset-cancel").addEventListener("click", closePresetModal);
 $("#btn-preset-close").addEventListener("click", closePresetModal);
 presetModal.addEventListener("mousedown", (e) => {
@@ -3454,6 +3600,7 @@ function retranslate() {
   if (!settingsView.classList.contains("hidden")) {
     loadSettingsPlugins();
     loadModels();
+    loadEmbedding();
     const nav = $(".settings-nav-item.active");
     if (nav && nav.dataset.section === "access") loadAccessState();
     if (nav && nav.dataset.section === "state") loadState();

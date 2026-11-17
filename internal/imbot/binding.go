@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"wen/internal/atomicfile"
 )
 
 // Binding 维护远端用户 → 当前会话 ID 的映射，持久化到 <StateDir>/sessions.json，
@@ -70,7 +72,7 @@ func (b *Binding) Set(userID, sessionID string) error {
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, b.path)
+	return atomicfile.Rename(tmp, b.path)
 }
 
 // Deduper 按消息 ID 去重：平台会因网络重试、断线重连、长轮询游标回绕等原因重复

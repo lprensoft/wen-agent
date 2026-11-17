@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 	"wen/internal/llm"
 )
@@ -813,7 +814,7 @@ func (m *Manager) saveStateLocked() {
 	raw, _ := json.MarshalIndent(state, "", "  ")
 	_ = os.MkdirAll(filepath.Dir(m.statePath), 0o755)
 	// 0600：插件配置里可能有用户不愿外泄的内容（提示词设定、触发词等），与 models.json 一致
-	if err := os.WriteFile(m.statePath, raw, 0o600); err != nil {
+	if err := atomicfile.WriteFile(m.statePath, raw, 0o600); err != nil {
 		i18n.Logf(m.lang(), "log.plugin.save_state_failed", "保存插件状态失败: %v", err)
 	}
 }
