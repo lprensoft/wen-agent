@@ -4,6 +4,7 @@ package webfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,10 @@ type Plugin struct {
 	maxBytes int
 	client   *http.Client
 	lang     string
+
+	// allowLocal 只在测试里置真：httptest 的地址就是 127.0.0.1，而正常的抓取一律
+	// 不许碰本机与内网（见 plugin.BlockedHost）。不可导出，外部没有打开它的办法。
+	allowLocal bool
 }
 
 func New() *Plugin {
@@ -65,8 +70,31 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.lang = ictx.Lang
 	p.timeout = time.Duration(plugin.CfgInt(cfg, "timeout_seconds", 20)) * time.Second
 	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
-	p.client = &http.Client{Timeout: p.timeout}
+	p.client = p.newClient()
 	return nil
+}
+
+// newClient 建一个带出站检查的客户端。
+//
+// 重定向要单独看：Transit 的拨号检查管得住「跳到内网」，但那是在代理之外的路径上
+// 才算数，而写死的地址（http://127.0.0.1/）在任何路径上都该当场回绝。设了
+// CheckRedirect 之后标准库的十跳上限就失效了，所以这里自己收尾。
+func (p *Plugin) newClient() *http.Client {
+	lang := p.lang
+	c := &http.Client{Timeout: p.timeout}
+	if !p.allowLocal {
+		c.Transport = plugin.GuardedTransport()
+	}
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errTooManyRedirects(lang)
+		}
+		if !p.allowLocal && plugin.BlockedHost(req.URL.Hostname()) {
+			return plugin.ErrBlockedAddr
+		}
+		return nil
+	}
+	return c
 }
 
 func (p *Plugin) Tools() []plugin.Tool { return []plugin.Tool{&tool{p: p}} }
@@ -79,7 +107,7 @@ func (t *tool) Name() string { return "fetch_url" }
 
 func (t *tool) Description() string {
 	return prompt.T(t.p.lang, "prompt.web_fetch.tool.fetch_url.desc",
-		"抓取指定 URL 的网页并返回其文本内容（HTML 会剥离标签）。仅支持 http/https，内容过长会被截断。")
+		"抓取指定 URL 的网页并返回其文本内容（HTML 会剥离标签）。仅支持 http/https 的公网地址（本机与内网不行），内容过长会被截断。")
 }
 
 // schemaZH 是参数 Schema。整段一个键：它是手写的 JSON，拆成一个字段一个键的话，
@@ -107,6 +135,11 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("%s", prompt.T(t.p.lang, "prompt.web_fetch.result.scheme", "仅支持 http/https 地址"))
 	}
+	// 写死的本机与内网地址在这里就回绝，不等拨号：这一层与代理无关，也给出了一句
+	// 模型能懂的话，而不是一个 connection refused。
+	if !t.p.allowLocal && plugin.BlockedHost(u.Hostname()) {
+		return "", blockedErr(t.p.lang)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
 	if err != nil {
@@ -117,10 +150,13 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 
 	client := t.p.client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = t.p.newClient()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, plugin.ErrBlockedAddr) {
+			return "", blockedErr(t.p.lang)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -145,6 +181,17 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 			"\n...[内容超过 %d 字节，已截断]", t.p.maxBytes)
 	}
 	return out, nil
+}
+
+// blockedErr 是「地址不该抓」那句话。它给人也看、也给模型看，所以走提示词语言包：
+// 模型读到「本机或内网」才不会再换个写法重试。
+func blockedErr(lang string) error {
+	return fmt.Errorf("%s", prompt.T(lang, "prompt.web_fetch.result.blocked",
+		"这个地址指向本机或内网，抓不了；只能抓公网地址。"))
+}
+
+func errTooManyRedirects(lang string) error {
+	return fmt.Errorf("%s", prompt.T(lang, "prompt.web_fetch.result.redirects", "重定向太多次，抓不到这个页面。"))
 }
 
 func looksLikeHTML(s string) bool {
