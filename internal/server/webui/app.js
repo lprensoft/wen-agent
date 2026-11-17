@@ -759,15 +759,10 @@ function addBubble(role, text, images = [], files = []) {
   if (role === "assistant") {
     bubble.classList.add("md");
     renderMarkdown(bubble, text);
+    // 图片是在工具执行中发出去的，接着才是这一轮的话：排在正文之前。
+    addImages(bubble, images, bubble.firstChild);
   } else {
-    for (const src of images) {
-      const img = document.createElement("img");
-      img.className = "chat-image";
-      img.src = src;
-      img.alt = t("chat.imageAlt");
-      img.loading = "lazy";
-      bubble.appendChild(img);
-    }
+    addImages(bubble, images);
     addFileCards(bubble, files);
     if (text) {
       const line = document.createElement("div");
@@ -779,6 +774,56 @@ function addBubble(role, text, images = [], files = []) {
   messagesEl.appendChild(wrap);
   scrollBottom();
   return bubble;
+}
+
+// 会话图片的地址。助手发出去的图片与用户发来的共用同一个附件接口。
+function imageSrc(name) {
+  return `/api/sessions/${encodeURIComponent(currentSession)}/images/${encodeURIComponent(name)}`;
+}
+
+// addImages 把一组图片地址塞进容器；before 非空时插在它前面（用于「先图后话」）。
+function addImages(container, images, before = null) {
+  if (!images || images.length === 0) return;
+  const frag = document.createDocumentFragment();
+  for (const src of images) {
+    const img = document.createElement("img");
+    img.className = "chat-image";
+    img.src = src;
+    img.alt = t("chat.imageAlt");
+    img.loading = "lazy";
+    // 气泡里只放缩略图，点开才按原尺寸看细节
+    img.addEventListener("click", () => openImageViewer(src));
+    frag.appendChild(img);
+  }
+  if (before) container.insertBefore(frag, before);
+  else container.appendChild(frag);
+}
+
+// openImageViewer 打开一张原图。点击遮罩或按 Esc 关闭；图片本身就是遮罩的一部分，
+// 所以点图也能关，不需要另做关闭按钮。
+function openImageViewer(src) {
+  const overlay = document.createElement("div");
+  overlay.className = "image-viewer";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", t("chat.imageAlt"));
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = t("chat.imageAlt");
+  overlay.appendChild(img);
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+    document.body.classList.remove("viewing-image");
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
+  overlay.addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+  document.body.classList.add("viewing-image");
+  document.body.appendChild(overlay);
 }
 
 function formatFileSize(n) {
@@ -815,7 +860,7 @@ function addSysBlock(text, kind) {
   return div;
 }
 
-function addSummaryBlock(text, files = []) {
+function addSummaryBlock(text, files = [], images = []) {
   hideHint();
   const details = document.createElement("details");
   details.className = "thinking-block";
@@ -825,6 +870,8 @@ function addSummaryBlock(text, files = []) {
   const div = document.createElement("div");
   div.className = "thinking-content";
   div.textContent = text;
+  // 压缩后原来的消息行被物理删除，她发过的照片靠引用搬到摘要上，否则一压缩就没了
+  addImages(div, images);
   addFileCards(div, files);
   details.appendChild(div);
   messagesEl.appendChild(details);
@@ -1034,7 +1081,8 @@ function renderHistory(messages) {
   for (const m of messages) {
     if (m.kind === "summary") {
       const files = (m.files || []).filter((file) => file.name || file.stored);
-      addSummaryBlock(m.content, files);
+      const media = (m.media || []).filter((img) => img.name).map((img) => imageSrc(img.name));
+      addSummaryBlock(m.content, files, media);
     } else if (m.kind === "notice") {
       // 会话注记：只给人看的一行，模型从来看不到它
       addSysBlock(m.content, "notice");
@@ -1049,12 +1097,14 @@ function renderHistory(messages) {
     } else if (m.role === "user") {
       const images = (m.images || [])
         .filter((img) => img.name)
-        .map((img) => `/api/sessions/${encodeURIComponent(currentSession)}/images/${encodeURIComponent(img.name)}`);
+        .map((img) => imageSrc(img.name));
       const files = (m.files || []).filter((file) => file.name || file.stored);
       addBubble("user", m.content, images, files);
     } else if (m.role === "assistant") {
       if (m.reasoning_content) addThinkingBlock(m.reasoning_content, false);
-      if (m.content) addBubble("assistant", m.content);
+      // 她发出去的图片挂在 assistant 消息上（m.media），只给界面看
+      const images = (m.media || []).filter((img) => img.name).map((img) => imageSrc(img.name));
+      if (m.content || images.length) addBubble("assistant", m.content, images);
       for (const tc of m.tool_calls || []) {
         toolBlocks[tc.id] = { el: addToolBlock(tc.name, tc.arguments), args: tc.arguments };
       }
@@ -1185,6 +1235,7 @@ async function sendMessageNow(targetSession) {
   let assistantBubble = null; // 惰性创建，收到第一个 delta 才建
   let assistantRaw = "";      // 当前气泡的原始 Markdown 文本
   let sawText = false;        // 本轮是否出现过任何正文增量
+  let sawMedia = false;       // 本轮是否发过图片（只发图时不该提示「没有回复」）
   let sawError = false;       // 本轮是否报过错（报过就不再提示空回复）
   let thinkingBlock = null;   // 当前轮的思考块
   let compactBlock = null;    // 自动压缩的动态展示块
@@ -1246,6 +1297,15 @@ async function sendMessageNow(targetSession) {
       } else if (ev.type === "tool_result") {
         const tb = toolBlocks[ev.tool_call_id];
         if (tb) setToolDetail(tb.el.querySelector(".tool-detail"), tb.args, ev.tool_result);
+      } else if (ev.type === "media") {
+        // 她在这一轮里发出了一张图片：先把正在流的正文定稿，再单出一张图。
+        finishBubble();
+        finishThinking();
+        const images = (ev.media || []).filter((img) => img.name).map((img) => imageSrc(img.name));
+        if (images.length) {
+          sawMedia = true;
+          addBubble("assistant", "", images);
+        }
       } else if (ev.type === "confirm_request") {
         finishBubble();   // 等待期间正文气泡先定稿
         finishThinking();
@@ -1291,7 +1351,7 @@ async function sendMessageNow(targetSession) {
         finishBubble();
         finishThinking();
         // 一次没有任何正文的成功轮次：不提示的话界面完全静默，像什么都没发生
-        if (!sawText && !sawError) addSysBlock(t("chat.noText"));
+        if (!sawText && !sawMedia && !sawError) addSysBlock(t("chat.noText"));
       }
     }
   } catch (e) {

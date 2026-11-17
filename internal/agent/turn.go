@@ -27,8 +27,9 @@ func (a *Agent) SetTurnSink(fn TurnSink) {
 func (a *Agent) endTurn(ctx context.Context, ev plugin.TurnEndEvent) {
 	// 心跳这类轮次可以「保持安静」：模型给出空回复就等于什么都没说。
 	// 它仍要广播给插件（心跳靠 OnTurnEnd 记账），但不算新消息——否则界面上会
-	// 亮起一个点、弹一条通知，点进去却什么都没有。
-	if strings.TrimSpace(ev.FinalText) == "" {
+	// 亮起一个点、弹一条通知，点进去却什么都没有。发了图片的轮次例外：
+	// 文字是空的，但对方确实收到了东西。
+	if strings.TrimSpace(ev.FinalText) == "" && !ev.HasMedia {
 		a.plugins.NotifyTurnEnd(ctx, ev)
 		return
 	}

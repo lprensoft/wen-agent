@@ -26,6 +26,7 @@ const (
 	EventCompactDelta EventType = "compact_delta" // 自动压缩摘要增量
 	EventCompactDone  EventType = "compact_done"  // 自动压缩结束（Error 非空表示失败）
 	EventPrompt       EventType = "prompt"        // 本次 LLM 调用的完整请求体（仅在开启提示词追踪时发出）
+	EventMedia        EventType = "media"         // 助手这一轮发出去的图片（已落盘，界面按引用取）
 	EventDone         EventType = "done"          // 本轮请求结束
 	EventError        EventType = "error"
 )
@@ -43,6 +44,7 @@ type Event struct {
 	ToolResult string          `json:"tool_result,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	Prompt     json.RawMessage `json:"prompt,omitempty"` // EventPrompt 专用：序列化后的请求体
+	Media      []llm.ImagePart `json:"media,omitempty"`  // EventMedia 专用：已落盘的图片引用
 }
 
 type Options struct {
@@ -281,6 +283,34 @@ func (a *Agent) RunTurnWithMedia(ctx context.Context, sessionID, input string, i
 
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, files []llm.FilePart, emit func(Event)) (string, error) {
 	startedAt := clock.Now(ctx)
+	// 本轮所在的会话：后台轮次没有入站消息可依附，插件（如媒体出口）靠它找到
+	// 「这条消息该发给谁」。
+	ctx = plugin.WithSessionID(ctx, sessionID)
+	// 工具在轮次中把图片发给对方之后，经这里落盘并记进本轮。图片只能挂在
+	// assistant 消息上，而带 tool_use 的那条在工具执行前就已落盘（store 只追加），
+	// 所以先攒着，附到下一条 assistant 上——顺序正好是先图后话。
+	var pendingMedia []llm.ImagePart
+	mediaSent := false
+	ctx = plugin.WithReplyMedia(ctx, func(img llm.ImagePart) error {
+		name, err := a.store.PutImage(sessionID, img.MediaType, img.Data)
+		if err != nil {
+			return err
+		}
+		ref := llm.ImagePart{Name: name, MediaType: img.MediaType, Size: len(img.Data)}
+		pendingMedia = append(pendingMedia, ref)
+		mediaSent = true
+		emit(Event{Type: EventMedia, Media: []llm.ImagePart{ref}})
+		return nil
+	})
+	// 轮次没走完（护栏终止、模型报错）就没有下一条 assistant 可挂，图片已在
+	// 消息通道送出去了，只是进不了会话——留一行日志，不为此造一条空消息。
+	defer func() {
+		if len(pendingMedia) > 0 {
+			i18n.Logf(a.opts.Lang, "log.agent.media_unrecorded",
+				"agent: 本轮发出的 %d 张图片没能记进会话（轮次未收尾）", len(pendingMedia))
+		}
+	}()
+
 	targets, opts := a.snapshot()
 
 	meta, history, err := a.store.Get(sessionID)
@@ -444,16 +474,20 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 		if err != nil {
 			// 给插件一个把失败转成正常回复的机会（如角色扮演场景把内容拦截
 			// 演成一句走神）。转译成功即按正常轮次收尾，原始错误进会话注记。
-			text, ok := a.translateFailure(ctx, sessionID, scope.Write, origin, r.content, err, emit)
+			// 本轮已经发出去的图片要挂在转译出来的那条 assistant 消息上，
+			// 否则图片一路送到了、会话里却没有它。
+			text, ok := a.translateFailure(ctx, sessionID, scope.Write, origin, r.content, err, pendingMedia, emit)
 			if !ok {
 				return "", err
 			}
+			pendingMedia = nil
 			a.endTurn(ctx, plugin.TurnEndEvent{
 				SessionID:   sessionID,
 				Origin:      origin,
 				Interactive: true, // 转译只发生在真人在场的轮次
 				UserInput:   userInput,
 				FinalText:   text,
+				HasMedia:    mediaSent,
 				StartedAt:   startedAt,
 				EndedAt:     clock.Now(ctx),
 			})
@@ -480,7 +514,10 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 			ResponsesOrigin: r.rawOrigin,
 			ToolCalls:       r.toolCalls,
 		}
-		if err := a.append(ctx, sessionID, assistant, scope.Write, origin); err != nil {
+		// 本轮已经发出去的图片挂在 assistant 消息上：只给界面看，不进模型上下文
+		media := pendingMedia
+		pendingMedia = nil
+		if err := a.appendMedia(ctx, sessionID, assistant, scope.Write, origin, media); err != nil {
 			return "", err
 		}
 		msgs = append(msgs, assistant)
@@ -510,6 +547,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 				Interactive: plugin.IsInteractive(ctx),
 				UserInput:   userInput,
 				FinalText:   r.content,
+				HasMedia:    mediaSent,
 				StartedAt:   startedAt,
 				EndedAt:     clock.Now(ctx),
 			})
@@ -679,7 +717,10 @@ func (a *Agent) streamOne(ctx context.Context, provider llm.Provider, opts Optio
 //
 // partial 是失败前已经流出去的半截文本：它不落盘（与失败路径一致），但界面上
 // 已经显示了，转译文本得另起一段接在后面，避免两段话粘成一句。
-func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, partial string, cause error, emit func(Event)) (string, bool) {
+//
+// media 是本轮在失败前已经发出去的图片：转译既然把这一轮按成功收尾，图片就得
+// 跟着落进会话，否则消息通道收到了、网页界面却看不到。
+func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, partial string, cause error, media []llm.ImagePart, emit func(Event)) (string, bool) {
 	if !plugin.IsInteractive(ctx) || ctx.Err() != nil {
 		return "", false
 	}
@@ -692,7 +733,7 @@ func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, pa
 		out = "\n\n" + text
 	}
 	emit(Event{Type: EventDelta, Content: out})
-	if err := a.append(ctx, sessionID, llm.Message{Role: llm.RoleAssistant, Content: text}, tag, origin); err != nil {
+	if err := a.appendMedia(ctx, sessionID, llm.Message{Role: llm.RoleAssistant, Content: text}, tag, origin, media); err != nil {
 		// 落不了盘就退回原始错误：界面已经流出的台词与历史会不一致，
 		// 但那是磁盘故障级别的场景，一致性让位于把问题报出来。
 		return "", false
@@ -935,6 +976,14 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
 // origin 是本轮的发起方（同样整轮一致），空串 = 前台界面。
 func (a *Agent) append(ctx context.Context, sessionID string, msg llm.Message, tag, origin string) error {
 	return a.appendKind(ctx, sessionID, msg, tag, origin, "")
+}
+
+// appendMedia 落盘一条带出站图片的消息。media 是助手这一轮发出去的图片引用，
+// 只给界面看（见 session.StoredMessage.Media），不随历史进入模型上下文。
+func (a *Agent) appendMedia(ctx context.Context, sessionID string, msg llm.Message, tag, origin string, media []llm.ImagePart) error {
+	return a.store.Append(sessionID, session.StoredMessage{
+		Message: msg, Tag: tag, Origin: origin, Media: media, TS: clock.Now(ctx),
+	})
 }
 
 // appendKind 用 ctx 里的钟给消息盖时间戳。历史里的「距上一条消息」与日界线都由
