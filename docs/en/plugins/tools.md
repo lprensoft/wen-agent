@@ -37,7 +37,7 @@ There is one reason it is off by default: **it sends queries derived from the co
 
 It works without a key: Tavily's keyless mode returns exactly the same fields as a keyed one, just with tighter rate limits. `api_key` buys quota, not availability.
 
-A heartbeat turn may not search: at that moment nobody is talking to the character, and letting it go online on its own is a different feature — looking up a name, a company or a hospital the other person mentioned in the middle of the night reads as stalking, not care. Scheduled tasks are the exception: a person asked for those.
+Turns the machine starts on its own may not search — heartbeats, self-reflection, reminders coming due. At those moments nobody is talking to the character, and letting it go online by itself is a different feature; looking up a name, a company or a hospital the other person mentioned in the middle of the night reads as stalking, not care. Scheduled tasks are the exception: a person asked for those.
 
 Each result carries a title, source site, date and snippet, with the link on its own line for the model (that is what it follows into `fetch_url` when it wants to read more); the prompt tells the character not to read links out in a reply. The date is not decoration: the classic misuse of search is treating a page from years ago as the way things are now.
 

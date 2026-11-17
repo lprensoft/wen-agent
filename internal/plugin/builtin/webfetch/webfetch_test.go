@@ -3,6 +3,7 @@ package webfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -101,6 +102,40 @@ func TestRejectPrivateAddress(t *testing.T) {
 	}
 	if n := hits.Load(); n != 0 {
 		t.Errorf("a refused address must not reach the server, got %d requests", n)
+	}
+}
+
+func TestRedirectCallback(t *testing.T) {
+	p := New()
+	if err := p.Init(plugin.InitContext{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cb := p.client.CheckRedirect
+	if cb == nil {
+		t.Fatal("the client has no redirect callback")
+	}
+
+	public, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err := cb(public, nil); err != nil {
+		t.Errorf("a public hop should pass: %v", err)
+	}
+
+	// 跳到元数据地址：拨号那一层在没有代理时也能拦，但走代理时只有这里拦得住，
+	// 所以这条分支不能只是摆设。
+	private, _ := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	if err := cb(private, nil); !errors.Is(err, plugin.ErrBlockedAddr) {
+		t.Errorf("a hop to a metadata address should be refused, got %v", err)
+	}
+
+	loop, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/", nil)
+	if err := cb(loop, nil); !errors.Is(err, plugin.ErrBlockedAddr) {
+		t.Errorf("a hop to loopback should be refused, got %v", err)
+	}
+
+	// 设了回调之后十跳上限由我们自己维持
+	via := make([]*http.Request, 10)
+	if err := cb(public, via); err == nil {
+		t.Error("the eleventh hop should be refused")
 	}
 }
 

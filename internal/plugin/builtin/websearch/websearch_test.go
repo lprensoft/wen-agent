@@ -249,15 +249,28 @@ func TestSearchRendersEmptySnippet(t *testing.T) {
 	}
 }
 
-func TestSearchRefusedDuringHeartbeat(t *testing.T) {
+func TestSearchRefusedInBackgroundTurn(t *testing.T) {
 	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("a heartbeat turn must not reach the network")
+		t.Error("a background turn must not reach the network")
 	})
 	raw, _ := json.Marshal(map[string]any{"query": "半夜想查的事"})
-	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	// 心跳、自我反思、日程提醒都是这个标记：输入不是人写的
+	ctx := plugin.WithEphemeralInput(context.Background())
 	_, err := p.Tools()[0].Execute(ctx, raw)
 	if err == nil || !strings.Contains(err.Error(), "没有真人") {
-		t.Fatalf("a heartbeat turn should be refused, got %v", err)
+		t.Fatalf("a background turn should be refused, got %v", err)
+	}
+}
+
+func TestSearchAllowedForScheduledTask(t *testing.T) {
+	// 定时任务是人自己排的：它由插件发起（因此带发起方），但输入不是一次性提示
+	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, twoResults)
+	})
+	raw, _ := json.Marshal(map[string]any{"query": "早报"})
+	ctx := plugin.WithTurnOrigin(context.Background(), "scheduler")
+	if _, err := p.Tools()[0].Execute(ctx, raw); err != nil {
+		t.Fatalf("a scheduled task should be able to search: %v", err)
 	}
 }
 

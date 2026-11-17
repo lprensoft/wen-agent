@@ -31,27 +31,37 @@ var ErrBlockedAddr = errors.New("blocked non-public address")
 
 // BlockedIP 报告这个地址是否不该出站。
 //
-// IsPrivate 覆盖 10/8、172.16/12、192.168/16 与 fc00::/7；Go 的这几个判断都先看
-// IPv4 映射形式，所以 ::ffff:127.0.0.1 也会被挡住。补充的四个是标准库没管的：
-// 运营商级 NAT、192.0.0.0/24、基准测试网段与 240/4 保留段。
+// IPv4 用标准库的判据打底（IsPrivate 覆盖 10/8、172.16/12、192.168/16；这几个判断
+// 都先看映射形式，所以 ::ffff:127.0.0.1 也挡得住），再补标准库没管的几段：
+// 0.0.0.0/8（Linux 上整段都路由回本机，只挡 0.0.0.0 一个地址不够）、运营商级 NAT、
+// 192.0.0.0/24 与 240/4 保留段。
+//
+// 198.18.0.0/15 是刻意放过的。它是 RFC 2544 的基准测试段，本就没有服务住在那里；而
+// Clash 这类代理的 fake-ip 模式正拿它当公网域名的占位地址，拦掉的话那些人的 fetch_url
+// 会全线失败，换来的是零安全收益。
+//
+// IPv6 反过来做白名单：只放行 2000::/3（全球单播就是这一块）。这一刀下去把 ::1、
+// fe80::/10、fc00::/7、ff00::/8 全收了，也顺手挡住 NAT64 的 64:ff9b::/96——它能把
+// 一段公网前缀映射回内网 IPv4，包括 169.254.169.254。去嗅每个转换前缀的形状容易写错，
+// 不如只认真正分配给公网的那一块。
 func BlockedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+	if len(ip) == 0 {
 		return true
 	}
 	v4 := ip.To4()
 	if v4 == nil {
-		return false
+		return ip[0]&0xe0 != 0x20
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+		return true
 	}
 	switch {
+	case v4[0] == 0: // 0.0.0.0/8
+		return true
 	case v4[0] == 100 && v4[1]&0xc0 == 64: // 100.64.0.0/10
 		return true
 	case v4[0] == 192 && v4[1] == 0 && v4[2] == 0: // 192.0.0.0/24
-		return true
-	case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19): // 198.18.0.0/15
 		return true
 	case v4[0] >= 240: // 240.0.0.0/4
 		return true

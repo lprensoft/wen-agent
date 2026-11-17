@@ -1157,7 +1157,7 @@
   "prompt.web_search.err.auth": "the search service rejected the key (HTTP %d); check api_key on the settings page.",
   "prompt.web_search.err.bad_response": "could not read the search service's reply (HTTP %d): %s",
   "prompt.web_search.err.empty_query": "the query is empty",
-  "prompt.web_search.err.heartbeat": "No one is talking to you right now, so you cannot search the web. Wait until they speak, and do not pretend you searched.",
+  "prompt.web_search.err.background": "No one is talking to you this turn, so you cannot search the web. Wait until they speak, and do not pretend you searched.",
   "prompt.web_search.err.http": "search failed (HTTP %d): %s",
   "prompt.web_search.err.network": "search failed: %w",
   "prompt.web_search.err.provider_limit": "the search service is rate-limiting us (HTTP %d); try again in a while.",

@@ -205,12 +205,13 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 		Freshness string `json:"freshness"`
 	}
 	s := t.p.snapshot()
-	// 心跳那一拍不算「对方在说话」。让它自己在没人时上网查，正是这次刻意没做的那件事，
-	// 而且半夜查对方提过的人名、公司、医院，读起来是跟踪不是关心。定时任务不在此列：
-	// 那是人自己排的。
-	if plugin.TurnOriginFrom(ctx) == "heartbeat" {
-		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.web_search.err.heartbeat",
-			"这一拍没有真人在跟你说话，不能联网查。等对方开口了再查，也别假装查过。"))
+	// 机器自发的轮次（心跳、自我反思、日程到点的提醒）不算「对方在说话」。让它自己在
+	// 没人时上网查，正是这次刻意没做的那件事；而且半夜查对方提过的人名、公司、医院，
+	// 读起来是跟踪不是关心。判定用「输入是不是机器注入的」而不是某个插件名：后台轮次
+	// 还会多起来，而一次性标记是它们共同的形状。定时任务不带这个标记——那是人自己排的。
+	if plugin.IsEphemeralInput(ctx) {
+		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.web_search.err.background",
+			"这一轮没有真人在跟你说话，不能联网查。等对方开口了再查，也别假装查过。"))
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", plugin.BadArgs(s.lang, err)
