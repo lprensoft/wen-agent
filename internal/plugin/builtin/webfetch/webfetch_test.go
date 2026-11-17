@@ -3,10 +3,12 @@ package webfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"wen/internal/plugin"
@@ -15,6 +17,9 @@ import (
 func newTool(t *testing.T, cfg map[string]any) plugin.Tool {
 	t.Helper()
 	p := New()
+	// httptest 的地址就是 127.0.0.1，而生产路径一律不许抓本机；地址检查本身由
+	// TestRejectPrivateAddress 单独盯。
+	p.allowLocal = true
 	if err := p.Init(plugin.InitContext{}, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -27,12 +32,11 @@ func fetch(t *testing.T, tool plugin.Tool, url string) (string, error) {
 	return tool.Execute(context.Background(), args)
 }
 
-func TestStripHTML(t *testing.T) {
+func TestFetchStripsHTML(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><html><head><title>标题</title>
-<script>var x = "不应出现";</script><style>body{color:red}</style></head>
-<body><h1>你好</h1><p>第一段内容</p><p>第二段 &amp; 符号</p></body></html>`)
+		fmt.Fprint(w, `<!doctype html><html><body><h1>你好</h1><p>第一段内容</p>
+<script>var x = "不应出现";</script></body></html>`)
 	}))
 	defer srv.Close()
 
@@ -40,12 +44,13 @@ func TestStripHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"你好", "第一段内容", "第二段 & 符号", "[HTTP 200]"} {
+	// 剥标签本身的细节由 internal/plugin 的 TestStripHTML 盯；这里只确认它确实被接上了
+	for _, want := range []string{"[HTTP 200]", "你好", "第一段内容"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	for _, ban := range []string{"<script", "不应出现", "color:red", "<p>"} {
+	for _, ban := range []string{"<script", "不应出现", "<p>"} {
 		if strings.Contains(out, ban) {
 			t.Errorf("should not contain %q in:\n%s", ban, out)
 		}
@@ -65,6 +70,72 @@ func TestTruncate(t *testing.T) {
 	}
 	if !strings.Contains(out, "已截断") {
 		t.Errorf("expected truncation note, got %d bytes", len(out))
+	}
+}
+
+func TestRejectPrivateAddress(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+
+	// 不置 allowLocal：这就是生产路径上的那份配置
+	p := New()
+	if err := p.Init(plugin.InitContext{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	tool := p.Tools()[0]
+
+	for _, u := range []string{
+		srv.URL,                  // 127.0.0.1
+		"http://localhost:8080/", // 名字指向本机
+		"http://169.254.169.254/latest/meta-data/", // 云厂商元数据
+		"http://[::1]:8080/",                       // IPv6 回环
+		"http://10.0.0.1/admin",                    // 私网
+	} {
+		if _, err := fetch(t, tool, u); err == nil {
+			t.Errorf("%s should have been refused", u)
+		} else if !strings.Contains(err.Error(), "公网") {
+			t.Errorf("%s: expected the public-only message, got %v", u, err)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("a refused address must not reach the server, got %d requests", n)
+	}
+}
+
+func TestRedirectCallback(t *testing.T) {
+	p := New()
+	if err := p.Init(plugin.InitContext{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cb := p.client.CheckRedirect
+	if cb == nil {
+		t.Fatal("the client has no redirect callback")
+	}
+
+	public, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err := cb(public, nil); err != nil {
+		t.Errorf("a public hop should pass: %v", err)
+	}
+
+	// 跳到元数据地址：拨号那一层在没有代理时也能拦，但走代理时只有这里拦得住，
+	// 所以这条分支不能只是摆设。
+	private, _ := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	if err := cb(private, nil); !errors.Is(err, plugin.ErrBlockedAddr) {
+		t.Errorf("a hop to a metadata address should be refused, got %v", err)
+	}
+
+	loop, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:8080/", nil)
+	if err := cb(loop, nil); !errors.Is(err, plugin.ErrBlockedAddr) {
+		t.Errorf("a hop to loopback should be refused, got %v", err)
+	}
+
+	// 设了回调之后十跳上限由我们自己维持
+	via := make([]*http.Request, 10)
+	if err := cb(public, via); err == nil {
+		t.Error("the eleventh hop should be refused")
 	}
 }
 

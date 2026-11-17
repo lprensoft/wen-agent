@@ -7,7 +7,7 @@
 These plugins are listed here only for completeness. `web_fetch` and `media` are on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it.
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
-- **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size.
+- **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size. Public addresses only; see below.
 - **`media`** — sends an image or file from the working directory to whoever this conversation belongs to (`send_image` / `send_file`), on message channels and background turns alike; see below for the limits and the path confinement.
 
 | Plugin | Setting | Default | Description |
@@ -15,6 +15,10 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 | `read_file` | `max_bytes` | 65536 | The most bytes one read returns |
 | `web_fetch` | `timeout_seconds` | 20 | The longest to wait for a single page |
 | `web_fetch` | `max_bytes` | 65536 | The most bytes extracted from a single page |
+
+`fetch_url` reaches public addresses only: loopback, private networks, cloud metadata endpoints and any redirect between them are refused. The check sits at the dialling layer, so a 302 cannot get around it, and the address that is checked is the address that is connected to (a page teaching the model to fetch `169.254.169.254` is the usual shape of this risk).
+
+When an HTTP proxy is configured, the hop to the proxy itself is not checked: local proxies are common, and refusing them would leave those users unable to fetch anything at all; the target host is resolved by the proxy, which this layer cannot see. If you really need to read something on a network this machine can reach, use `exec_command`, the path that already asks a human first.
 
 ## Sending media (media plugin)
 
