@@ -1772,7 +1772,7 @@
   "plugin.web_search.desc": "Searches the web and returns a few page snippets",
   "plugin.web_search.field.api_key.desc": "Leave it empty to use the free keyless mode, which is rate-limited more tightly; a key buys quota, not availability.",
   "plugin.web_search.field.api_key.label": "Tavily API Key",
-  "plugin.web_search.field.max_per_hour.desc": "The most real queries sent in one hour. Anything beyond that is refused, so an eager conversation cannot burn the quota.",
+  "plugin.web_search.field.max_per_hour.desc": "The most searches in one hour; failed requests do not count. Anything beyond that is refused, so an eager conversation cannot burn the quota.",
   "plugin.web_search.field.max_per_hour.label": "Hourly cap",
   "plugin.web_search.field.results.desc": "How many page snippets one search returns.",
   "plugin.web_search.field.results.label": "Results per search",

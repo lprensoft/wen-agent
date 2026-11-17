@@ -64,11 +64,27 @@ func (b *book) store(key, out string, now time.Time) {
 	b.entries[key] = entry{at: now, out: out}
 }
 
-// reserve 占一次配额：允许则记下时刻并返回 true，超限返回 false 且不记账。
-// 被拒的调用不记账，否则「查得太多了」会把窗口永远填满，一小时后也恢复不了。
-func (b *book) reserve(perHour int, now time.Time) bool {
+// allow 报告现在还能不能再发一次，不记账。记账由 record 在拿到结果之后做，理由见那边。
+func (b *book) allow(perHour int, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.prune(now)
+	return perHour <= 0 || len(b.sent) < perHour
+}
+
+// record 记下一次真正拿到结果的请求。
+//
+// 记账与放行分开，而不是「放行即记账」：失败（密钥错、被限流、断网）不占额度。否则
+// 密钥填错时二十次 401 会把这一小时填满，人改好密钥回来却撞上「查得太多了」——那正是
+// 最想立刻再试的时刻。
+func (b *book) record(now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, now)
+}
+
+// prune 丢掉一小时以前的时刻。只在锁内调用。
+func (b *book) prune(now time.Time) {
 	cut := now.Add(-time.Hour)
 	kept := b.sent[:0]
 	for _, t := range b.sent {
@@ -77,9 +93,4 @@ func (b *book) reserve(perHour int, now time.Time) bool {
 		}
 	}
 	b.sent = kept
-	if perHour > 0 && len(b.sent) >= perHour {
-		return false
-	}
-	b.sent = append(b.sent, now)
-	return true
 }

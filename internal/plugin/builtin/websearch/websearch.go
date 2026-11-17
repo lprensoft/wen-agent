@@ -99,7 +99,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:         "max_per_hour",
 			Label:       "每小时上限",
 			Type:        plugin.FieldInt,
-			Description: "一小时内最多真的发出去几次查询，超出的调用直接回绝，防止聊得兴起把额度烧光。",
+			Description: "一小时内最多查几次，失败的请求不算；超出的调用直接回绝，防止聊得兴起把额度烧光。",
 			Default:     defaultPerHour,
 			Min:         plugin.IntPtr(1),
 			Max:         plugin.IntPtr(200),
@@ -117,7 +117,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 }
 
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
-	timeout := time.Duration(plugin.CfgInt(cfg, "timeout_seconds", defaultTimeout)) * time.Second
+	timeout := time.Duration(clamp(plugin.CfgInt(cfg, "timeout_seconds", defaultTimeout), 1, 120)) * time.Second
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -150,6 +150,9 @@ type settings struct {
 	perHour  int
 	client   *http.Client
 	endpoint string
+	// book 也走快照：Init 第一次初始化时会写它，Execute 不持锁读同一个字段就是一条
+	// 数据竞争。那条写只发生在还没有工具可调的时候，但让读者去依赖这个时序没有好处。
+	book *book
 }
 
 func (p *Plugin) snapshot() settings {
@@ -162,6 +165,7 @@ func (p *Plugin) snapshot() settings {
 		perHour:  p.perHour,
 		client:   p.client,
 		endpoint: p.endpoint,
+		book:     p.book,
 	}
 }
 
@@ -201,6 +205,13 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 		Freshness string `json:"freshness"`
 	}
 	s := t.p.snapshot()
+	// 心跳那一拍不算「对方在说话」。让它自己在没人时上网查，正是这次刻意没做的那件事，
+	// 而且半夜查对方提过的人名、公司、医院，读起来是跟踪不是关心。定时任务不在此列：
+	// 那是人自己排的。
+	if plugin.TurnOriginFrom(ctx) == "heartbeat" {
+		return "", fmt.Errorf("%s", prompt.T(s.lang, "prompt.web_search.err.heartbeat",
+			"这一拍没有真人在跟你说话，不能联网查。等对方开口了再查，也别假装查过。"))
+	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", plugin.BadArgs(s.lang, err)
 	}
@@ -211,12 +222,14 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	}
 	fresh := normalizeFreshness(a.Freshness)
 
+	// 缓存与限流都用真实时间，不跟 plugin.Clock 走：那个钟管的是「现在几点」这类业务
+	// 时刻（评测会推着它走），而十分钟的缓存寿命就是现实里的十分钟。
 	now := time.Now()
 	key := q + "\x00" + fresh
-	if out, at, ok := t.p.book.lookup(key, now); ok {
+	if out, at, ok := s.book.lookup(key, now); ok {
 		return out + "\n" + cachedNote(s.lang, now.Sub(at)), nil
 	}
-	if !t.p.book.reserve(s.perHour, now) {
+	if !s.book.allow(s.perHour, now) {
 		return "", fmt.Errorf("%s", prompt.Tf(s.lang, "prompt.web_search.err.quota",
 			"这个小时已经查了 %d 次，先不查了。等一会儿再说，或者不查也行。", s.perHour))
 	}
@@ -225,12 +238,15 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	if err != nil {
 		return "", err
 	}
+	// 记账放在成功之后：失败的请求不该占额度——密钥填错时每次都是 401，记账的话这一
+	// 小时就再也查不了了，而刚改好密钥的人正是最想马上再试的那个。
+	s.book.record(now)
 	if len(hits) == 0 {
 		return prompt.T(s.lang, "prompt.web_search.result.empty",
 			"没有搜到结果。别编，如实说没查到，或者换个说法再查一次。"), nil
 	}
 	out := render(s.lang, q, hits)
-	t.p.book.store(key, out, now)
+	s.book.store(key, out, now)
 	return out, nil
 }
 
@@ -255,10 +271,15 @@ func render(lang, q string, hits []hit) string {
 		if src == "" {
 			src = prompt.T(lang, "prompt.web_search.result.unknown_source", "来源未明")
 		}
+		snip := excerpt(plugin.StripHTML(h.Content), maxSnippetRunes)
+		if snip == "" {
+			// 只有标题没有摘要的结果是真会出现的。留一个空行，模型看到的是一个说不清
+			// 是「没内容」还是「渲染坏了」的空洞。
+			snip = prompt.T(lang, "prompt.web_search.result.no_snippet", "（这条只有标题，没有摘要）")
+		}
 		b.WriteString("\n\n")
 		b.WriteString(prompt.Tf(lang, "prompt.web_search.result.item", "%d. %s（%s · %s）\n%s",
-			i+1, titleOf(lang, plugin.StripHTML(h.Title)), src, dateOf(lang, h.Published),
-			excerpt(plugin.StripHTML(h.Content), maxSnippetRunes)))
+			i+1, titleOf(lang, plugin.StripHTML(h.Title)), src, dateOf(lang, h.Published), snip))
 		if h.URL != "" {
 			b.WriteString(prompt.Tf(lang, "prompt.web_search.result.link", "\n链接：%s", h.URL))
 		}

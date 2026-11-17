@@ -33,13 +33,15 @@ There is one reason it is off by default: **it sends queries derived from the co
 
 It works without a key: Tavily's keyless mode returns exactly the same fields as a keyed one, just with tighter rate limits. `api_key` buys quota, not availability.
 
+A heartbeat turn may not search: at that moment nobody is talking to the character, and letting it go online on its own is a different feature — looking up a name, a company or a hospital the other person mentioned in the middle of the night reads as stalking, not care. Scheduled tasks are the exception: a person asked for those.
+
 Each result carries a title, source site, date and snippet, with the link on its own line for the model (that is what it follows into `fetch_url` when it wants to read more); the prompt tells the character not to read links out in a reply. The date is not decoration: the classic misuse of search is treating a page from years ago as the way things are now.
 
 | Setting | Default | Description |
 |---|---|---|
 | `api_key` | empty | A Tavily key; leave it empty for the free keyless mode |
 | `results` | 5 | How many snippets one search returns |
-| `max_per_hour` | 20 | The most real queries sent in one hour; anything beyond that is refused |
+| `max_per_hour` | 20 | The most searches in one hour (failures do not count); anything beyond that is refused |
 | `timeout_seconds` | 20 | The longest to wait for a single search |
 
 ## How command execution is kept safe (exec_command plugin)

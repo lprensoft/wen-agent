@@ -276,6 +276,8 @@ func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
 //     直接读到会话文件与记忆目录（dual_persona 正是为此把它们声明为冲突）。
 //     要用就去设置页打开，那是个看得见的选择。
 //  3. 空目录：skills 的技能目录与 bookshelf 的书架是空的，开着只多几个用不上的工具。
+//  4. 出站：web_search 会把从对话里推出来的查询发给第三方。web_fetch 发出去的只是
+//     明摆着的地址，搜索发出去的是你们刚说的话里改写出来的词——这一步得让人自己点。
 //
 // 其余插件用声明的默认参数就能直接工作，因此默认启用——**包括整个角色演绎组**。
 // 它们从前全在这张表里，理由是「依赖默认关闭的 roleplay」，而 roleplay 关着的理由

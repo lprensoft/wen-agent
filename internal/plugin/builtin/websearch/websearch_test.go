@@ -36,22 +36,31 @@ func run(t *testing.T, p *Plugin, args map[string]any) (string, error) {
 	return p.Tools()[0].Execute(context.Background(), raw)
 }
 
+// capReq 把桩服务收到的请求交回测试 goroutine。桩服务跑在另一个 goroutine 里，直接
+// 写共享变量在 -race 下就是一条竞争；channel 顺带给出那条 happens-before 边。
+type capReq struct {
+	header http.Header
+	body   map[string]any
+}
+
+func capture(ch chan capReq, reply string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		ch <- capReq{header: r.Header.Clone(), body: body}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, reply)
+	}
+}
+
 const twoResults = `{"results":[
 	{"title":"杭州马拉松","url":"https://www.zhihu.com/question/1","content":"报名 9 月 1 日开始，<b>名额有限</b>","published_date":"Tue, 11 Mar 2025 17:00:00 GMT"},
 	{"title":"","url":"https://example.com/x","content":"没有日期的页面","published_date":""}
 ]}`
 
 func TestSearchRendersSnippets(t *testing.T) {
-	var gotHeader http.Header
-	var gotBody map[string]any
-	p := newPlugin(t, nil, func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Clone()
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Errorf("request body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, twoResults)
-	})
+	ch := make(chan capReq, 4)
+	p := newPlugin(t, nil, capture(ch, twoResults))
 
 	out, err := run(t, p, map[string]any{"query": "  杭州  马拉松  "})
 	if err != nil {
@@ -59,23 +68,24 @@ func TestSearchRendersSnippets(t *testing.T) {
 	}
 
 	// 无 key 时走 keyless：这条鉴权头发错了，请求会在真机上 401，而桩服务看不出来
-	if got := gotHeader.Get("X-Tavily-Access-Mode"); got != "keyless" {
-		t.Errorf("X-Tavily-Access-Mode = %q, want keyless", got)
+	got := <-ch
+	if got.header.Get("X-Tavily-Access-Mode") != "keyless" {
+		t.Errorf("X-Tavily-Access-Mode = %q, want keyless", got.header.Get("X-Tavily-Access-Mode"))
 	}
-	if got := gotHeader.Get("Authorization"); got != "" {
-		t.Errorf("keyless must not send Authorization, got %q", got)
+	if got.header.Get("Authorization") != "" {
+		t.Errorf("keyless must not send Authorization, got %q", got.header.Get("Authorization"))
 	}
-	if got := gotBody["query"]; got != "杭州 马拉松" {
-		t.Errorf("query = %v, want the whitespace collapsed", got)
+	if got.body["query"] != "杭州 马拉松" {
+		t.Errorf("query = %v, want the whitespace collapsed", got.body["query"])
 	}
-	if got := gotBody["max_results"]; got != float64(defaultResults) {
-		t.Errorf("max_results = %v, want %d", got, defaultResults)
+	if got.body["max_results"] != float64(defaultResults) {
+		t.Errorf("max_results = %v, want %d", got.body["max_results"], defaultResults)
 	}
-	if got := gotBody["include_answer"]; got != false {
-		t.Errorf("include_answer = %v, want false", got)
+	if got.body["include_answer"] != false {
+		t.Errorf("include_answer = %v, want false", got.body["include_answer"])
 	}
-	if _, ok := gotBody["time_range"]; ok {
-		t.Errorf("no freshness given, time_range should be absent, got %v", gotBody["time_range"])
+	if v, ok := got.body["time_range"]; ok {
+		t.Errorf("no freshness given, time_range should be absent, got %v", v)
 	}
 
 	for _, want := range []string{
@@ -93,25 +103,21 @@ func TestSearchRendersSnippets(t *testing.T) {
 }
 
 func TestSearchKeyAndFreshness(t *testing.T) {
-	var gotHeader http.Header
-	var gotBody map[string]any
-	p := newPlugin(t, map[string]any{"api_key": "tvly-test"}, func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Clone()
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		fmt.Fprint(w, twoResults)
-	})
+	ch := make(chan capReq, 4)
+	p := newPlugin(t, map[string]any{"api_key": "tvly-test"}, capture(ch, twoResults))
 
 	if _, err := run(t, p, map[string]any{"query": "新闻", "freshness": "week"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := gotHeader.Get("Authorization"); got != "Bearer tvly-test" {
-		t.Errorf("Authorization = %q, want Bearer tvly-test", got)
+	got := <-ch
+	if h := got.header.Get("Authorization"); h != "Bearer tvly-test" {
+		t.Errorf("Authorization = %q, want Bearer tvly-test", h)
 	}
-	if got := gotHeader.Get("X-Tavily-Access-Mode"); got != "" {
-		t.Errorf("a key was given, keyless header should be absent, got %q", got)
+	if h := got.header.Get("X-Tavily-Access-Mode"); h != "" {
+		t.Errorf("a key was given, keyless header should be absent, got %q", h)
 	}
-	if got := gotBody["time_range"]; got != "week" {
-		t.Errorf("time_range = %v, want week", got)
+	if v := got.body["time_range"]; v != "week" {
+		t.Errorf("time_range = %v, want week", v)
 	}
 }
 
@@ -204,6 +210,54 @@ func TestSearchBadResponse(t *testing.T) {
 	_, err := run(t, p, map[string]any{"query": "随便"})
 	if err == nil || !strings.Contains(err.Error(), "读不懂") {
 		t.Fatalf("expected a readable error, got %v", err)
+	}
+}
+
+func TestSearchFailureDoesNotSpendQuota(t *testing.T) {
+	var calls atomic.Int32
+	p := newPlugin(t, map[string]any{"max_per_hour": 1}, func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"detail":"boom"}`)
+			return
+		}
+		fmt.Fprint(w, twoResults)
+	})
+
+	if _, err := run(t, p, map[string]any{"query": "会失败的一次"}); err == nil {
+		t.Fatal("the first call should have failed")
+	}
+	// 失败不占额度：密钥填错、对方抽风之后，人改好再试的那一刻不该撞上「查得太多了」
+	if _, err := run(t, p, map[string]any{"query": "第二次"}); err != nil {
+		t.Fatalf("a failed call must not spend the quota: %v", err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("server saw %d calls, want 2", n)
+	}
+}
+
+func TestSearchRendersEmptySnippet(t *testing.T) {
+	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"results":[{"title":"只有标题","url":"https://example.com/a","content":"","published_date":""}]}`)
+	})
+	out, err := run(t, p, map[string]any{"query": "只有标题的东西"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "没有摘要") {
+		t.Errorf("an empty snippet should be said out loud, got:\n%s", out)
+	}
+}
+
+func TestSearchRefusedDuringHeartbeat(t *testing.T) {
+	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a heartbeat turn must not reach the network")
+	})
+	raw, _ := json.Marshal(map[string]any{"query": "半夜想查的事"})
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	_, err := p.Tools()[0].Execute(ctx, raw)
+	if err == nil || !strings.Contains(err.Error(), "没有真人") {
+		t.Fatalf("a heartbeat turn should be refused, got %v", err)
 	}
 }
 
