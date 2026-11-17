@@ -47,37 +47,46 @@ func turnSessionFrom(ctx context.Context) string {
 	return sid
 }
 
-// SendTurnImage 把一张图片发回当前对话的出口。出口按分通道路由裁决：
-// 路由指定了别的通道时，图片发到那条通道；投不出去就返回失败，绝不回落到
-// 来源通道——否则另一人格窗口里会出现不属于它的内容。路由未指定时按
-// 「回复来源消息」处理，复用本轮的回复凭据。
+// SendTurnImage 把一张图片发给这一轮该发给的人。出口与这一轮的文字一致：
+// 前台 IM 轮次沿用它自己的回复凭据与分通道路由；后台轮次（心跳、定时任务）
+// 按会话找到绑定的用户主动推送；前台界面轮次没有外部出口——那里的文字走 SSE，
+// 图片由核心记进会话与界面，不在这里投。
 func SendTurnImage(ctx context.Context, img llm.ImagePart) error {
 	origin := plugin.TurnOriginFrom(ctx)
-	if origin == "" || !IsChannel(origin) {
+	if origin != "" && IsChannel(origin) {
+		if _, ok := turnMessageFrom(ctx); !ok {
+			return ErrNoMediaChannel
+		}
+		sessionID := turnSessionFrom(ctx)
+		if sessionID == "" {
+			return ErrNoMediaChannel
+		}
+		target := Target(sessionID)
+		if target == "" {
+			target = origin
+		}
+		regMu.RLock()
+		core := liveCores[target]
+		regMu.RUnlock()
+		if core == nil {
+			return ErrMediaTargetUnavailable
+		}
+		if target == origin {
+			return core.sendTurnImage(ctx, img)
+		}
+		return core.pushImageTo(ctx, sessionID, img)
+	}
+	// 前台界面（origin 为空）没有外部出口；后台轮次没有入站消息，但有会话。
+	if origin == "" {
 		return ErrNoMediaChannel
 	}
-	if _, ok := turnMessageFrom(ctx); !ok {
-		return ErrNoMediaChannel
-	}
-	sessionID := turnSessionFrom(ctx)
+	sessionID := plugin.SessionIDFrom(ctx)
 	if sessionID == "" {
 		return ErrNoMediaChannel
 	}
-
-	target := Target(sessionID)
-	if target == "" {
-		target = origin
-	}
-	regMu.RLock()
-	core := liveCores[target]
-	regMu.RUnlock()
-	if core == nil {
-		return ErrMediaTargetUnavailable
-	}
-	if target == origin {
-		return core.sendTurnImage(ctx, img)
-	}
-	return core.pushImageTo(ctx, sessionID, img)
+	return deliverMedia(ctx, sessionID, func(c *Core, users []string) error {
+		return c.pushImageUsers(ctx, users, img)
+	})
 }
 
 func (c *Core) sendTurnImage(ctx context.Context, img llm.ImagePart) error {
@@ -98,15 +107,20 @@ func (c *Core) sendTurnImage(ctx context.Context, img llm.ImagePart) error {
 // pushImageTo 把图片发到路由指定的另一条通道。收件人的选法与文本转投一致
 // （见 recipientsFor）；没有收件人或通道未运行就报错，不退回来源通道。
 func (c *Core) pushImageTo(ctx context.Context, sessionID string, img llm.ImagePart) error {
+	users, ok := c.recipientsFor(ctx, sessionID)
+	if !ok {
+		return ErrMediaTargetUnavailable
+	}
+	return c.pushImageUsers(ctx, users, img)
+}
+
+// pushImageUsers 把图片发给一组已经选好的收件人，至少一人成功就算成功。
+func (c *Core) pushImageUsers(ctx context.Context, users []string, img llm.ImagePart) error {
 	sender, ok := c.cfg.Sender.(ImageSender)
 	if !ok {
 		return ErrMediaUnsupported
 	}
 	if !c.Running() {
-		return ErrMediaTargetUnavailable
-	}
-	users, ok := c.recipientsFor(ctx, sessionID)
-	if !ok {
 		return ErrMediaTargetUnavailable
 	}
 	pctx, cancel := c.mediaCtx(ctx)

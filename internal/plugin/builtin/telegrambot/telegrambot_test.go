@@ -60,6 +60,8 @@ type fakeTG struct {
 	photos chan sentPhoto
 	docs   chan sentPhoto
 
+	reactions chan reactionCall
+
 	// 下一次 sendMessage 的强制结果（用完即弃）
 	failNext atomic.Value // func() (int, string, int) -> code, description, retryAfter
 	actions  atomic.Int64
@@ -74,8 +76,18 @@ type draftMsg struct {
 
 func newFakeTG(t *testing.T) *fakeTG {
 	t.Helper()
-	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64), photos: make(chan sentPhoto, 8), docs: make(chan sentPhoto, 8)}
+	f := &fakeTG{sent: make(chan sentMsg, 64), drafts: make(chan draftMsg, 64), photos: make(chan sentPhoto, 8), docs: make(chan sentPhoto, 8), reactions: make(chan reactionCall, 8)}
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /bot"+testToken+"/setMessageReaction", func(w http.ResponseWriter, r *http.Request) {
+		var c reactionCall
+		json.NewDecoder(r.Body).Decode(&c)
+		select {
+		case f.reactions <- c:
+		default:
+		}
+		writeOK(w, true)
+	})
 
 	mux.HandleFunc("POST /bot"+testToken+"/getUpdates", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

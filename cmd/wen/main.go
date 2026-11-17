@@ -43,6 +43,7 @@ import (
 	"wen/internal/plugin/builtin/phone"
 	"wen/internal/plugin/builtin/presence"
 	"wen/internal/plugin/builtin/qqbot"
+	"wen/internal/plugin/builtin/reaction"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/relationship"
 	"wen/internal/plugin/builtin/roleplay"
@@ -400,6 +401,8 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// 租户域，凭证互不通用，分成两个插件才能同时连两边
 		qqbot.New(), wechatbot.New(),
 		larkbot.NewFeishu(), larkbot.NewLark(), telegrambot.New(), discordbot.New(), wecombot.New(), dingtalkbot.New(), slackbot.New(),
+		// reaction 紧跟各通道：它只对消息通道发起的轮次有效，网页与后台轮次里它报告没有可回应的消息
+		reaction.New(),
 		// self_update 排在最后：它不注入任何提示词，注册顺序对它只剩展示含义，
 		// 而「程序维护」这一节摆在设置页最下面也是对的——它与角色、记忆、通道都无关
 		selfupdate.New(selfupdate.Options{Restart: restart}),

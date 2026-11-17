@@ -22,7 +22,7 @@ func (t *sendImageTool) Name() string { return "send_image" }
 
 func (t *sendImageTool) Description() string {
 	return prompt.T(t.p.lang, "prompt.media.tool.send_image.desc",
-		"把工作目录里的一张图片发给当前正在交谈的人。只支持 IM 通道；图片须为 PNG 或 JPEG，单张不超过 5 MB。发送成功后本轮会收到简短确认，可以在之后的回复里继续说话。")
+		"把工作目录里的一张图片发给这个会话的收件人。图片会留在对话里（网页界面可见），并从绑定到这条对话的消息通道发出去；心跳、定时任务这类后台轮次同样可用。图片须为 PNG 或 JPEG，单张不超过 5 MB。发送成功后本轮会收到简短确认，可以在之后的回复里继续说话。")
 }
 
 const schemaZH = `{
@@ -69,11 +69,26 @@ func (t *sendImageTool) Execute(ctx context.Context, args json.RawMessage) (stri
 	}
 	img.Name = filepath.Base(path)
 
+	// 先记进会话与界面：这是「她给你看的东西」留在对话里的那一份，与投递成功
+	// 与否无关——通道一时投不出去，对方在网页上仍看得到她发过什么。
+	recorded := false
+	if attach := plugin.ReplyMediaFrom(ctx); attach != nil {
+		if err := attach(img); err != nil {
+			i18n.Logf(lang, "log.media.record_failed", "media: 图片记进会话失败: %v", err)
+		} else {
+			recorded = true
+		}
+	}
+
 	if err := imbot.SendTurnImage(ctx, img); err != nil {
 		switch {
 		case errors.Is(err, imbot.ErrNoMediaChannel):
+			if recorded {
+				return i18n.T(lang, "plugin.media.saved",
+					"图片已经留在当前对话里，但没有可送达的消息通道。"), nil
+			}
 			return "", fmt.Errorf("%s", i18n.T(lang, "plugin.media.err.no_channel",
-				"当前对话不是从 IM 通道发起的，无法发送图片。"))
+				"当前对话没有可送达的消息通道，图片没有发出。"))
 		case errors.Is(err, imbot.ErrMediaTargetUnavailable):
 			return "", fmt.Errorf("%s", i18n.T(lang, "plugin.media.err.target_unavailable",
 				"图片要发往的通道当前不可用，未发送。"))

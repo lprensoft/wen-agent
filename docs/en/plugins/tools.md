@@ -8,7 +8,7 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
 - **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size. Public addresses only; see below.
-- **`media`** — sends an image or file from the working directory back to the current IM chat (`send_image` / `send_file`); see below for the limits and the path confinement.
+- **`media`** — sends an image or file from the working directory to whoever this conversation belongs to (`send_image` / `send_file`), on message channels and background turns alike; see below for the limits and the path confinement.
 
 | Plugin | Setting | Default | Description |
 |---|---|---|---|
@@ -24,29 +24,10 @@ When an HTTP proxy is configured, the hop to the proxy itself is not checked: lo
 
 `media` is on by default and provides two tools:
 
-- `send_image`: sends a PNG / JPEG / GIF from the working directory (5 MB per image) back to the current IM user.
-- `send_file`: sends an ordinary file from the working directory (20 MB per file) back to the current IM user. The content is not parsed; the MIME type comes from the extension and a content sniff.
+- `send_image`: sends a PNG / JPEG / GIF from the working directory (5 MB per image) to whoever this conversation belongs to, and keeps it in the conversation — the same image shows up in the assistant's bubble in the web UI.
+- `send_file`: sends an ordinary file from the working directory (20 MB per file). The content is not parsed; the MIME type comes from the extension and a content sniff.
 
-The outlet follows the split-channel router: when a reply is routed to another channel, the media goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. It only works on IM turns started by a real person; calls from the web UI or background turns such as the heartbeat fail with a clear error. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. When the platform says "possibly delivered but unconfirmed", the tool says so explicitly instead of treating it as an ordinary failure, so the model does not send it twice. See [chat channels](im.md) for each channel's upload flow and limits; QQ's official rich-media API still marks its file type as not open, so `send_file` reports that clearly.
-
-## Web search (web_search plugin)
-
-`web_search` is off by default and provides `search_web`: give it keywords, get back a few page snippets. It is a different thing from `fetch_url` — this side is "I don't know the address, let me find a couple of sources", that side is "I already have the address".
-
-There is one reason it is off by default: **it sends queries derived from the conversation to a third party**. What `fetch_url` sends is a plainly visible address; what a search sends is words rewritten from what you two just said, and those may carry the other person's private business. The prompt the plugin injects therefore tells the character never to use them as a query, but the real boundary is that switch: turn it on from the settings page if you want the character to be able to look things up.
-
-It works without a key: Tavily's keyless mode returns exactly the same fields as a keyed one, just with tighter rate limits. `api_key` buys quota, not availability.
-
-Turns the machine starts on its own may not search — heartbeats, self-reflection, reminders coming due. At those moments nobody is talking to the character, and letting it go online by itself is a different feature; looking up a name, a company or a hospital the other person mentioned in the middle of the night reads as stalking, not care. Scheduled tasks are the exception: a person asked for those.
-
-Each result carries a title, source site, date and snippet, with the link on its own line for the model (that is what it follows into `fetch_url` when it wants to read more); the prompt tells the character not to read links out in a reply. The date is not decoration: the classic misuse of search is treating a page from years ago as the way things are now.
-
-| Setting | Default | Description |
-|---|---|---|
-| `api_key` | empty | A Tavily key; leave it empty for the free keyless mode |
-| `results` | 5 | How many snippets one search returns |
-| `max_per_hour` | 20 | The most searches in one hour (failures do not count); anything beyond that is refused |
-| `timeout_seconds` | 20 | The longest to wait for a single search |
+The outlet follows this turn's text: an IM turn started by a real person uses its own reply credentials and the split-channel router; background turns such as heartbeats and scheduled tasks have no inbound message and push to the users bound to the session; a web UI turn has no external exit, so the image stays in the session and the web UI. When the router sends a reply to another channel, the media goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. When a channel is available but nobody is bound to this session, the image still goes into the conversation and the tool says plainly that there was no channel to deliver it to. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. When the platform says "possibly delivered but unconfirmed", the tool says so explicitly instead of treating it as an ordinary failure, so the model does not send it twice. See [chat channels](im.md) for each channel's upload flow and limits; QQ's official rich-media API still marks its file type as not open, so `send_file` reports that clearly.
 
 ## How command execution is kept safe (exec_command plugin)
 

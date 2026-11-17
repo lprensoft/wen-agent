@@ -119,8 +119,11 @@ type TurnEndEvent struct {
 	Interactive bool   // 本轮是否有真人在交互
 	UserInput   string
 	FinalText   string // 助手的最终文本
-	StartedAt   time.Time
-	EndedAt     time.Time
+	// HasMedia 表示这一轮对方收到了图片（无论文字是不是空）。界面据此判断
+	// 「有没有新内容」——只发一张图的心跳回复，文字是空的，但显然有话要说。
+	HasMedia  bool
+	StartedAt time.Time
+	EndedAt   time.Time
 }
 
 // TurnObserver 是插件的可选能力：观察每轮对话的结束。

@@ -67,6 +67,11 @@ type StoredMessage struct {
 	Kind string `json:"kind,omitempty"` // "" 普通消息；KindSummary 压缩摘要
 	Tag  string `json:"tag,omitempty"`  // 可见域标签，空串 = 共享（所有域可读）
 	// Origin 是本轮对话的发起方插件名，空串 = 前台界面。供审计与界面区分后台轮次。
-	Origin string    `json:"origin,omitempty"`
-	TS     time.Time `json:"ts"`
+	Origin string `json:"origin,omitempty"`
+	// Media 是助手这一轮发出去的图片，只给界面看：它不进入模型上下文，也
+	// 不是什么「用户发来的图」——那是 llm.Message.Images，两者刻意分开，
+	// 否则组装历史时要么把图片塞进 assistant 消息（Anthropic 不接受），
+	// 要么得在每处组装点再加一次过滤。
+	Media []llm.ImagePart `json:"media,omitempty"`
+	TS    time.Time       `json:"ts"`
 }
