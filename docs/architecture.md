@@ -70,7 +70,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 
 `RunTurn` / `RunTurnImages` 与 `Notice` 由 Manager 包一层自动注入发起方标记，插件无法伪装成前台；`RunTurn` 在会话忙时立即返回 `ErrSessionBusy` 而不排队——后台任务堆在锁上，只会在解锁瞬间连环轰炸同一个会话。`Notice` 写出的内容落盘、在界面实时展示，但永不进入模型上下文，也不进压缩摘要：后台工作在轮次收尾之后才跑完，那时事件流已经关闭，结果否则只能进日志。
 
-再写一条消息通道的话，通道无关的部分（入站分发与去重、命令集、按用户串行、会话绑定、确认代理、通道路由）在 `internal/imbot` 里，插件只需实现 `imbot.Sender`（把一段文本发给某个用户）并把入站消息归一化成 `imbot.Message`（图片放 `Images`，普通文件放 `Files`，由会话层落盘；消息里只存相对引用，每次组装上下文时按当前会话目录补路径说明）。要在对话中把媒体发回用户，再实现可选的 `imbot.ImageSender` / `imbot.FileSender`：轮次里的 `send_image` / `send_file` 工具分别经 `imbot.SendTurnImage` / `imbot.SendTurnFile` 找到出口——出口按会话的路由裁决，未指定时才用发起通道；投不出去就失败，不回落。
+再写一条消息通道的话，通道无关的部分（入站分发与去重、命令集、按用户串行、会话绑定、确认代理、通道路由）在 `internal/imbot` 里，插件只需实现 `imbot.Sender`（把一段文本发给某个用户）并把入站消息归一化成 `imbot.Message`（图片放 `Images`，普通文件放 `Files`，由会话层落盘；消息里只存相对引用，每次组装上下文时按当前会话目录补路径说明）。要在对话中把媒体发给对方，再实现可选的 `imbot.ImageSender` / `imbot.FileSender`：轮次里的 `send_image` / `send_file` 工具分别经 `imbot.SendTurnImage` / `imbot.SendTurnFile` 找到出口——出口跟着这一轮的文字走：前台 IM 轮次用发起通道（或路由指定的那条），心跳、定时任务这类后台轮次按会话推给绑定的用户，前台界面轮次没有外部出口；投不出去就失败，不回落。图片还会经核心记进会话（`StoredMessage.Media`，只给界面看、不进模型上下文），网页界面因此看得到她发出去的照片。
 
 ### 可见域
 

@@ -8,7 +8,7 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
 - **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size.
-- **`media`** — sends an image or file from the working directory back to the current IM chat (`send_image` / `send_file`); see below for the limits and the path confinement.
+- **`media`** — sends an image or file from the working directory to whoever this conversation belongs to (`send_image` / `send_file`), on message channels and background turns alike; see below for the limits and the path confinement.
 
 | Plugin | Setting | Default | Description |
 |---|---|---|---|
@@ -20,10 +20,10 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 
 `media` is on by default and provides two tools:
 
-- `send_image`: sends a PNG / JPEG / GIF from the working directory (5 MB per image) back to the current IM user.
-- `send_file`: sends an ordinary file from the working directory (20 MB per file) back to the current IM user. The content is not parsed; the MIME type comes from the extension and a content sniff.
+- `send_image`: sends a PNG / JPEG / GIF from the working directory (5 MB per image) to whoever this conversation belongs to, and keeps it in the conversation — the same image shows up in the assistant's bubble in the web UI.
+- `send_file`: sends an ordinary file from the working directory (20 MB per file). The content is not parsed; the MIME type comes from the extension and a content sniff.
 
-The outlet follows the split-channel router: when a reply is routed to another channel, the media goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. It only works on IM turns started by a real person; calls from the web UI or background turns such as the heartbeat fail with a clear error. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. When the platform says "possibly delivered but unconfirmed", the tool says so explicitly instead of treating it as an ordinary failure, so the model does not send it twice. See [chat channels](im.md) for each channel's upload flow and limits; QQ's official rich-media API still marks its file type as not open, so `send_file` reports that clearly.
+The outlet follows this turn's text: an IM turn started by a real person uses its own reply credentials and the split-channel router; background turns such as heartbeats and scheduled tasks have no inbound message and push to the users bound to the session; a web UI turn has no external exit, so the image stays in the session and the web UI. When the router sends a reply to another channel, the media goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. When a channel is available but nobody is bound to this session, the image still goes into the conversation and the tool says plainly that there was no channel to deliver it to. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. When the platform says "possibly delivered but unconfirmed", the tool says so explicitly instead of treating it as an ordinary failure, so the model does not send it twice. See [chat channels](im.md) for each channel's upload flow and limits; QQ's official rich-media API still marks its file type as not open, so `send_file` reports that clearly.
 
 ## How command execution is kept safe (exec_command plugin)
 

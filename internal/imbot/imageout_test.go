@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -141,7 +142,7 @@ func TestSendTurnImageRejectsNonChannelTurn(t *testing.T) {
 	}
 }
 
-func TestSendTurnImageRejectsBackgroundTurn(t *testing.T) {
+func TestSendTurnImageRejectsBackgroundTurnWithoutSession(t *testing.T) {
 	Declare("test_bot", "Test")
 	sender := newFakeImageSender()
 	var gotErr error
@@ -154,7 +155,193 @@ func TestSendTurnImageRejectsBackgroundTurn(t *testing.T) {
 	c.Handle(context.Background(), Message{UserID: "u1", Text: "发张图"})
 	sender.expect(t)
 	if !errors.Is(gotErr, ErrNoMediaChannel) {
-		t.Fatalf("后台轮次应拒绝发图，得到 %v", gotErr)
+		t.Fatalf("找不到会话时应报没有出口，得到 %v", gotErr)
+	}
+}
+
+// 后台轮次（心跳、定时任务）没有入站消息，按会话找到绑定用户主动推送。
+func TestSendTurnImageFromBackgroundTurn(t *testing.T) {
+	Declare("bg_bot", "Background")
+	sender := newFakeImageSender()
+	c := newNamedImageCore(t, "bg_bot", sender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := c.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	img := llm.ImagePart{Name: "a.png", MediaType: "image/png", Data: []byte("png")}
+	if err := SendTurnImage(ctx, img); err != nil {
+		t.Fatalf("后台轮次应能发图: %v", err)
+	}
+	got := sender.last(t)
+	if got.userID != "u1" || got.replyTo != "" || got.img.MediaType != "image/png" {
+		t.Fatalf("后台投递结果不符: %+v", got)
+	}
+}
+
+// 后台轮次也要跟着分通道路由走：人格在哪条通道上，图片就发到哪条。
+func TestSendTurnImageFromBackgroundTurnFollowsRouter(t *testing.T) {
+	Declare("origin_bg", "Origin")
+	Declare("target_bg", "Target")
+	SetRouter(func(string) string { return "target_bg" })
+	t.Cleanup(func() { SetRouter(nil) })
+
+	originSender := newFakeImageSender()
+	targetSender := newFakeImageSender()
+	target := newNamedImageCore(t, "target_bg", targetSender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := target.Bind("u2", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	newNamedImageCore(t, "origin_bg", originSender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	if err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := targetSender.last(t); got.userID != "u2" {
+		t.Fatalf("应发给路由指定的通道: %+v", got)
+	}
+	if n := originSender.count(); n != 0 {
+		t.Fatalf("不应回到来源通道，实际 %d 张", n)
+	}
+}
+
+// 有通道但没人跟机器人说过话：报没有出口，由核心把图片记进会话。
+func TestSendTurnImageBackgroundNoRecipient(t *testing.T) {
+	Declare("empty_bot", "Empty")
+	sender := newFakeImageSender()
+	newNamedImageCore(t, "empty_bot", sender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-other")
+	if err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"}); !errors.Is(err, ErrNoMediaChannel) {
+		t.Fatalf("没有收件人时应报没有出口，得到 %v", err)
+	}
+	if n := sender.count(); n != 0 {
+		t.Fatalf("没有收件人时不该发出图片，实际 %d 张", n)
+	}
+}
+
+// 后台轮次没有路由时只投给已经绑定到这个会话的人：用户只有一个时也不能把他
+// 从别的会话改绑过来，否则一次后台发图就会把那边的文字一起带到这里。
+func TestSendTurnImageDoesNotAdoptAcrossSessions(t *testing.T) {
+	Declare("no_adopt_bot", "No Adopt")
+	sender := newFakeImageSender()
+	c := newNamedImageCore(t, "no_adopt_bot", sender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := c.Bind("u1", "sess-private"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-other")
+	err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"})
+	if !errors.Is(err, ErrNoMediaChannel) {
+		t.Fatalf("没绑到该会话时应报没有出口，得到 %v", err)
+	}
+	if n := sender.count(); n != 0 {
+		t.Fatalf("不该发给别的会话的用户，实际 %d 张", n)
+	}
+	if users := c.UsersFor("sess-private"); len(users) != 1 || users[0] != "u1" {
+		t.Fatalf("原有绑定被改写: %v", users)
+	}
+	if users := c.UsersFor("sess-other"); len(users) != 0 {
+		t.Fatalf("不该自动改绑到新会话: %v", users)
+	}
+}
+
+// 一条通道真的发失败了、另一条没有收件人时，不能把失败改写成「没有可送达的
+// 通道」：工具会把它当成功（图片留在对话里），真正的上传错误与日志都被吞掉。
+func TestSendTurnImageKeepsSendErrorWhenOtherChannelHasNoRecipient(t *testing.T) {
+	Declare("aa_fail", "Fail")
+	Declare("bb_empty", "Empty")
+	failSender := newFakeImageSender()
+	failSender.err = errors.New("upload failed")
+	failCore := newNamedImageCore(t, "aa_fail", failSender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := failCore.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	newNamedImageCore(t, "bb_empty", newFakeImageSender(), func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"})
+	if err == nil || errors.Is(err, ErrNoMediaChannel) {
+		t.Fatalf("应保留真实发送失败，得到 %v", err)
+	}
+	if !strings.Contains(err.Error(), "upload failed") {
+		t.Fatalf("错误里丢了原始原因: %v", err)
+	}
+}
+
+// 装了路由时自动接管仍是那条路的手段：目标通道上的唯一用户会被接进当前会话。
+func TestSendTurnImageRouterAdoptsOnlyKnownUser(t *testing.T) {
+	Declare("adopt_origin", "Origin")
+	Declare("adopt_target", "Target")
+	SetRouter(func(string) string { return "adopt_target" })
+	t.Cleanup(func() { SetRouter(nil) })
+
+	targetSender := newFakeImageSender()
+	target := newNamedImageCore(t, "adopt_target", targetSender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := target.Bind("u2", "sess-private"); err != nil {
+		t.Fatal(err)
+	}
+	newNamedImageCore(t, "adopt_origin", newFakeImageSender(), func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	if err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"}); err != nil {
+		t.Fatalf("路由指定的通道应接住这次投递: %v", err)
+	}
+	if got := targetSender.last(t); got.userID != "u2" {
+		t.Fatalf("应发给路由目标上的唯一用户: %+v", got)
+	}
+	if users := target.UsersFor("sess-1"); len(users) != 1 || users[0] != "u2" {
+		t.Fatalf("路由投递应把唯一用户接进当前会话: %v", users)
+	}
+}
+
+// 一条通道报「送达状态未知」、另一条没有收件人时，不能把前者压成「没有可送达的
+// 通道」——那会让模型再发一次，对方收到两份。
+func TestSendTurnImageKeepsDeliveryUnknownAcrossChannels(t *testing.T) {
+	Declare("aa_unknown", "Unknown")
+	Declare("bb_empty", "Empty")
+	unknownSender := newFakeImageSender()
+	unknownSender.err = ErrMediaDeliveryUnknown
+	unknownCore := newNamedImageCore(t, "aa_unknown", unknownSender, func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+	if err := unknownCore.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	newNamedImageCore(t, "bb_empty", newFakeImageSender(), func(context.Context, string, string) (string, error) {
+		return "ok", nil
+	})
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	err := SendTurnImage(ctx, llm.ImagePart{MediaType: "image/png"})
+	if !errors.Is(err, ErrMediaDeliveryUnknown) {
+		t.Fatalf("应保留送达状态未知，得到 %v", err)
 	}
 }
 

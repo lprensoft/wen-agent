@@ -21,7 +21,7 @@ func (t *sendFileTool) Name() string { return "send_file" }
 
 func (t *sendFileTool) Description() string {
 	return prompt.T(t.p.lang, "prompt.media.tool.send_file.desc",
-		"把工作目录里的一个文件发给当前正在交谈的人。只支持 IM 通道；单个文件不超过 20 MB。发送成功后本轮会收到简短确认，可以在之后的回复里继续说话。")
+		"把工作目录里的一个文件发给这个会话的收件人，从绑定到这条对话的消息通道发出去；心跳、定时任务这类后台轮次同样可用。单个文件不超过 20 MB。发送成功后本轮会收到简短确认，可以在之后的回复里继续说话。")
 }
 
 const fileSchemaZH = `{
@@ -71,7 +71,7 @@ func (t *sendFileTool) Execute(ctx context.Context, args json.RawMessage) (strin
 		switch {
 		case errors.Is(err, imbot.ErrNoMediaChannel):
 			return "", fmt.Errorf("%s", i18n.T(lang, "plugin.media.file.err.no_channel",
-				"当前对话不是从 IM 通道发起的，无法发送文件。"))
+				"当前对话没有可送达的消息通道，文件没有发出。"))
 		case errors.Is(err, imbot.ErrMediaTargetUnavailable):
 			return "", fmt.Errorf("%s", i18n.T(lang, "plugin.media.file.err.target_unavailable",
 				"文件要发往的通道当前不可用，未发送。"))

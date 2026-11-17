@@ -109,8 +109,79 @@ func TestSendImageWithoutIMTurn(t *testing.T) {
 	p := newInited(t, work)
 
 	_, err := execute(t, p, "a.png")
-	if err == nil || !strings.Contains(err.Error(), "不是从 IM 通道发起") {
-		t.Fatalf("Web UI 轮次应明确拒绝，得到 %v", err)
+	if err == nil || !strings.Contains(err.Error(), "没有可送达的消息通道") {
+		t.Fatalf("没有出口也没有界面时应明确拒绝，得到 %v", err)
+	}
+}
+
+// TestSendImageRecordsIntoConversation 前台界面轮次没有外部出口，但图片要留在
+// 会话里：工具经核心的出站媒体回调登记，并如实告诉模型「送不出去」。
+func TestSendImageRecordsIntoConversation(t *testing.T) {
+	work := t.TempDir()
+	writeFile(t, work, "a.png", testPNG)
+	p := newInited(t, work)
+
+	var got []llm.ImagePart
+	ctx := plugin.WithReplyMedia(context.Background(), func(img llm.ImagePart) error {
+		if len(img.Data) == 0 {
+			t.Error("回调应拿到图片字节")
+		}
+		got = append(got, img)
+		return nil
+	})
+	out, err := p.Tools()[0].Execute(ctx, []byte(`{"path":"a.png"}`))
+	if err != nil {
+		t.Fatalf("记进会话后不该失败: %v", err)
+	}
+	if len(got) != 1 || got[0].MediaType != "image/png" {
+		t.Fatalf("应登记一张图片，得到 %+v", got)
+	}
+	if !strings.Contains(out, "留在当前对话") {
+		t.Fatalf("应说清图片在对话里，得到 %q", out)
+	}
+}
+
+// TestSendImageFromBackgroundTurn 心跳这类后台轮次没有入站消息，按会话找到
+// 绑定的用户主动推送。
+func TestSendImageFromBackgroundTurn(t *testing.T) {
+	imbot.Declare("media_bg", "Media Background")
+	work := t.TempDir()
+	writeFile(t, work, "a.png", testPNG)
+	p := newInited(t, work)
+	tool := p.Tools()[0]
+
+	sender := &imageSender{ch: make(chan imageRecord, 1)}
+	core, err := imbot.New(imbot.Config{
+		PluginName: "media_bg",
+		Sender:     sender,
+		Lang:       "zh",
+		StateDir:   t.TempDir(),
+		Allow:      func(string) bool { return true },
+		RunTurn:    func(context.Context, string, string) (string, error) { return "", nil },
+		NewSession: func() (string, error) { return "sess-1", nil },
+		Sessions:   fakeSessions{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core.Start(context.Background())
+	t.Cleanup(core.Stop)
+	if err := core.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := plugin.WithTurnOrigin(context.Background(), "heartbeat")
+	ctx = plugin.WithSessionID(ctx, "sess-1")
+	if _, err := tool.Execute(ctx, []byte(`{"path":"a.png"}`)); err != nil {
+		t.Fatalf("后台轮次应能发图: %v", err)
+	}
+	select {
+	case got := <-sender.ch:
+		if got.userID != "u1" || got.img.MediaType != "image/png" {
+			t.Fatalf("投递结果不符: %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待后台发图超时")
 	}
 }
 
