@@ -237,3 +237,7 @@ func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.I
 func (s sender) SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
 	return s.p.sendFile(ctx, userID, replyTo, f)
 }
+
+func (s sender) React(ctx context.Context, userID, replyTo, reaction string) error {
+	return s.p.react(ctx, userID, replyTo, reaction)
+}

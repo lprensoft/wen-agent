@@ -299,3 +299,8 @@ func (s sender) SendImage(ctx context.Context, userID, replyTo string, img llm.I
 func (s sender) SendFile(ctx context.Context, userID, replyTo string, f llm.FilePart) error {
 	return s.p.sendFile(ctx, userID, replyTo, f)
 }
+
+// React 的回复凭据就是入站消息的 message_id，用户标识不参与表情回应。
+func (s sender) React(ctx context.Context, userID, replyTo, reaction string) error {
+	return s.p.react(ctx, replyTo, reaction)
+}

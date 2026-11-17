@@ -34,12 +34,19 @@ type sentMsg struct {
 
 // fakeLark 是飞书开放平台的假服务端。
 type fakeLark struct {
-	srv      *httptest.Server
-	sent     chan sentMsg
-	uploaded chan uploadedImage
-	files    chan uploadedFile
-	tokens   atomic.Int64 // 取 token 的次数，用来验证缓存
-	expire   atomic.Int64 // 下发的 token 有效期（秒）
+	srv       *httptest.Server
+	sent      chan sentMsg
+	uploaded  chan uploadedImage
+	files     chan uploadedFile
+	reactions chan reactionCall
+	tokens    atomic.Int64 // 取 token 的次数，用来验证缓存
+	expire    atomic.Int64 // 下发的 token 有效期（秒）
+}
+
+// reactionCall 是假服务端收到的一次添加表情回应。
+type reactionCall struct {
+	MessageID string
+	EmojiType string
 }
 
 type uploadedImage struct {
@@ -57,9 +64,21 @@ type uploadedFile struct {
 
 func newFakeLark(t *testing.T) *fakeLark {
 	t.Helper()
-	f := &fakeLark{sent: make(chan sentMsg, 32), uploaded: make(chan uploadedImage, 8), files: make(chan uploadedFile, 8)}
+	f := &fakeLark{sent: make(chan sentMsg, 32), uploaded: make(chan uploadedImage, 8), files: make(chan uploadedFile, 8), reactions: make(chan reactionCall, 8)}
 	f.expire.Store(7200)
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /open-apis/im/v1/messages/{id}/reactions", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ReactionType struct {
+				EmojiType string `json:"emoji_type"`
+			} `json:"reaction_type"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.reactions <- reactionCall{MessageID: r.PathValue("id"), EmojiType: body.ReactionType.EmojiType}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"msg":"success","data":{}}`))
+	})
 
 	mux.HandleFunc("POST /open-apis/auth/v3/tenant_access_token/internal", func(w http.ResponseWriter, r *http.Request) {
 		n := f.tokens.Add(1)
