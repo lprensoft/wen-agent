@@ -43,6 +43,7 @@ type fakeDiscord struct {
 	sends      chan sentMessage
 	images     chan sentImage
 	typing     chan string
+	reactions  chan reactionCall
 	ready      chan struct{}
 	heartbeats chan struct{}
 
@@ -59,6 +60,7 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		sends:      make(chan sentMessage, 32),
 		images:     make(chan sentImage, 8),
 		typing:     make(chan string, 32),
+		reactions:  make(chan reactionCall, 8),
 		ready:      make(chan struct{}, 4),
 		heartbeats: make(chan struct{}, 8),
 	}
@@ -169,6 +171,14 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 	})
 	mux.HandleFunc("POST /api/v10/channels/{channel}/typing", func(w http.ResponseWriter, r *http.Request) {
 		f.typing <- r.PathValue("channel")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("PUT /api/v10/channels/{channel}/messages/{message}/reactions/{emoji}/@me", func(w http.ResponseWriter, r *http.Request) {
+		f.reactions <- reactionCall{
+			Channel: r.PathValue("channel"),
+			Message: r.PathValue("message"),
+			Emoji:   r.PathValue("emoji"),
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	f.srv = httptest.NewServer(mux)

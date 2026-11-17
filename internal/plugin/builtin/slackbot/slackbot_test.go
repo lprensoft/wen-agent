@@ -39,10 +39,11 @@ type fakeSlack struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	sends  chan sentMsg
-	images chan sentImage
-	acks   chan string
-	ready  chan struct{}
+	sends     chan sentMsg
+	images    chan sentImage
+	acks      chan string
+	reactions chan map[string]any
+	ready     chan struct{}
 
 	writeMu sync.Mutex
 
@@ -56,14 +57,26 @@ type fakeSlack struct {
 
 func newFakeSlack(t *testing.T) *fakeSlack {
 	f := &fakeSlack{
-		t:      t,
-		sends:  make(chan sentMsg, 64),
-		images: make(chan sentImage, 8),
-		acks:   make(chan string, 64),
-		ready:  make(chan struct{}, 4),
+		t:         t,
+		sends:     make(chan sentMsg, 64),
+		images:    make(chan sentImage, 8),
+		acks:      make(chan string, 64),
+		reactions: make(chan map[string]any, 8),
+		ready:     make(chan struct{}, 4),
 	}
 	up := websocket.Upgrader{}
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/reactions.add", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer xoxb-test" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid_auth"})
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.reactions <- body
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
 
 	mux.HandleFunc("/apps.connections.open", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer xapp-test" {

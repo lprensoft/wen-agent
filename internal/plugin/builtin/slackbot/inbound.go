@@ -212,6 +212,8 @@ func (p *Plugin) handleEvent(ctx context.Context, raw json.RawMessage, envelopeI
 	core.Handle(ctx, imbot.Message{
 		UserID:  channelID,
 		DedupID: dedup,
+		// ts 是这条消息在频道里的标识，表情回应要靠它找到消息
+		ReplyTo: payload.Event.TS,
 		Text:    text,
 		Images:  images,
 		Files:   files,
