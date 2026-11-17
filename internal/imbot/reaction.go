@@ -49,13 +49,11 @@ type ReactionSender interface {
 // 但直接报「不支持」——对模型来说这是通道的事实，不是「这一轮没有消息」。
 //
 // 一轮只回应一次：多次回应只会在对方眼前堆出一排表情。失败不计入，模型可以换一个再试。
-func (c *Core) turnReactFunc(ctx context.Context, msg Message, sid string) plugin.ReactFunc {
+func (c *Core) turnReactFunc(ctx context.Context, msg Message, sid string, st *reactState) plugin.ReactFunc {
 	rs, ok := c.cfg.Sender.(ReactionSender)
 	if !ok {
 		return func(string) error { return ErrReactionUnsupported }
 	}
-	var mu sync.Mutex
-	sent := false
 	return func(reaction string) error {
 		if msg.ReplyTo == "" {
 			return ErrNoReactionTarget
@@ -64,9 +62,9 @@ func (c *Core) turnReactFunc(ctx context.Context, msg Message, sid string) plugi
 		if target := Target(sid); target != "" && target != c.cfg.PluginName {
 			return ErrNoReactionTarget
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		if sent {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		if st.sent {
 			return ErrReactionAlreadySent
 		}
 		rctx, cancel := c.mediaCtx(ctx)
@@ -74,7 +72,20 @@ func (c *Core) turnReactFunc(ctx context.Context, msg Message, sid string) plugi
 		if err := rs.React(rctx, msg.UserID, msg.ReplyTo, reaction); err != nil {
 			return err
 		}
-		sent = true
+		st.sent = true
 		return nil
 	}
+}
+
+// reactState 记录本轮是否已经用表情回应过对方。轮次结束时据此判断：已经回应过的
+// 那一轮没有文本是正常的，不应再补一句「本轮没有文本回复」。
+type reactState struct {
+	mu   sync.Mutex
+	sent bool
+}
+
+func (s *reactState) reacted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sent
 }
