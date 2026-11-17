@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -137,7 +136,7 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	text := string(raw)
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "html") || looksLikeHTML(text) {
-		text = stripHTML(text)
+		text = plugin.StripHTML(text)
 	}
 
 	out := fmt.Sprintf("[HTTP %d] %s\n\n%s", resp.StatusCode, a.URL, strings.TrimSpace(text))
@@ -151,28 +150,4 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 func looksLikeHTML(s string) bool {
 	head := strings.ToLower(s[:min(512, len(s))])
 	return strings.Contains(head, "<html") || strings.Contains(head, "<!doctype html")
-}
-
-var (
-	reScript = regexp.MustCompile(`(?is)<(script|style|noscript)\b.*?</\s*(script|style|noscript)\s*>`)
-	reTag    = regexp.MustCompile(`(?s)<[^>]*>`)
-	reBlank  = regexp.MustCompile(`\n{3,}`)
-	reSpaces = regexp.MustCompile(`[ \t]{2,}`)
-)
-
-// stripHTML 粗剥 HTML：去掉 script/style/标签，压缩空白，保留可读文本。
-func stripHTML(s string) string {
-	s = reScript.ReplaceAllString(s, " ")
-	// 常见块级标签换成换行，避免文本黏连
-	s = regexp.MustCompile(`(?i)</\s*(p|div|li|h[1-6]|tr|br)\s*>|<br\s*/?>`).ReplaceAllString(s, "\n")
-	s = reTag.ReplaceAllString(s, " ")
-	s = strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'").Replace(s)
-	s = reSpaces.ReplaceAllString(s, " ")
-	// 去掉每行首尾空白后压缩连续空行
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSpace(lines[i])
-	}
-	s = strings.Join(lines, "\n")
-	return reBlank.ReplaceAllString(s, "\n\n")
 }

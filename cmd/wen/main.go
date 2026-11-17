@@ -57,6 +57,7 @@ import (
 	"wen/internal/plugin/builtin/unspoken"
 	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
+	"wen/internal/plugin/builtin/websearch"
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/plugin/builtin/wecombot"
 	"wen/internal/runlock"
@@ -290,6 +291,7 @@ var defaultOffPlugins = map[string]bool{
 
 	"dual_persona": true, // 不填触发词就永远切不过去
 	"weather":      true, // 不填城市就查不了天气，且开箱即联网
+	"web_search":   true, // 会把从对话里推出来的查询发给第三方，开不开得让人自己决定
 	"phone":        true, // 不填订阅源就没得刷，且开箱即联网
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
 	"bookshelf":    true, // 书架是空的，不放书就没有可读的
@@ -360,7 +362,7 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
 	return []plugin.Plugin{
-		readfile.New(), execcmd.New(), webfetch.New(), media.New(),
+		readfile.New(), execcmd.New(), webfetch.New(), websearch.New(), media.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义；growth 紧跟两套人格设定：成长是长在设定之上的一层，
 		// 它的 [这些日子的变化] 读起来是「设定之后的补充」；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，

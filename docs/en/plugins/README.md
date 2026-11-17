@@ -6,13 +6,14 @@ The core (agent / session / server / llm) contains no concrete tools; every capa
 
 Everything a plugin sends to the model — the prompts it injects, the block names, the tool descriptions and their parameters — **follows `lang:`** (see [Configuration and models](../configuration.md#language)). That includes the editable prompts among the settings (the heartbeat prompt, the fallback line and so on): under English the textarea is pre-filled with the English version, and "restore defaults" returns to it.
 
-**Out of the box you get a character, not an assistant.** Everything except the sixteen marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
+**Out of the box you get a character, not an assistant.** Everything except the seventeen marked "off" below is enabled, and `roleplay` ships with a character sheet and sample lines of its own — start talking without changing a setting and the other side is someone with a personality, a life, and the habit of speaking first. Rewrite the sheet or turn the group off if that is not what you want.
 
 | Group | Plugin | In one line | Default |
 |---|---|---|---|
 | [Basic tools](tools.md) | `read_file` | Reads a local text file | off |
 | | `media` | Sends an image or file from the working directory back to the current IM chat | on |
 | | `web_fetch` | Fetches the text of a web page | on |
+| | `web_search` | Searches the web and returns a few page snippets | off |
 | | `exec_command` | Runs commands, intercepting destructive ones for a human to confirm | off |
 | [Memory and search](memory.md) | `memory` | Long-term memory across sessions: automatic distillation, revision on contradiction, a daily timeline, optional forgetting | on |
 | | `session_search` | Looks past conversations up by keyword and date, including the full pre-compaction archives | on |

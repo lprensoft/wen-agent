@@ -25,6 +25,23 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 
 The outlet follows the split-channel router: when a reply is routed to another channel, the media goes there too, and if that channel cannot deliver it the call fails rather than falling back to the originating channel. It only works on IM turns started by a real person; calls from the web UI or background turns such as the heartbeat fail with a clear error. Paths are confined to the working directory, and symlinks are resolved before the check so a link cannot reach files outside it. When the platform says "possibly delivered but unconfirmed", the tool says so explicitly instead of treating it as an ordinary failure, so the model does not send it twice. See [chat channels](im.md) for each channel's upload flow and limits; QQ's official rich-media API still marks its file type as not open, so `send_file` reports that clearly.
 
+## Web search (web_search plugin)
+
+`web_search` is off by default and provides `search_web`: give it keywords, get back a few page snippets. It is a different thing from `fetch_url` — this side is "I don't know the address, let me find a couple of sources", that side is "I already have the address".
+
+There is one reason it is off by default: **it sends queries derived from the conversation to a third party**. What `fetch_url` sends is a plainly visible address; what a search sends is words rewritten from what you two just said, and those may carry the other person's private business. The prompt the plugin injects therefore tells the character never to use them as a query, but the real boundary is that switch: turn it on from the settings page if you want the character to be able to look things up.
+
+It works without a key: Tavily's keyless mode returns exactly the same fields as a keyed one, just with tighter rate limits. `api_key` buys quota, not availability.
+
+Each result carries a title, source site, date and snippet, with the link on its own line for the model (that is what it follows into `fetch_url` when it wants to read more); the prompt tells the character not to read links out in a reply. The date is not decoration: the classic misuse of search is treating a page from years ago as the way things are now.
+
+| Setting | Default | Description |
+|---|---|---|
+| `api_key` | empty | A Tavily key; leave it empty for the free keyless mode |
+| `results` | 5 | How many snippets one search returns |
+| `max_per_hour` | 20 | The most real queries sent in one hour; anything beyond that is refused |
+| `timeout_seconds` | 20 | The longest to wait for a single search |
+
 ## How command execution is kept safe (exec_command plugin)
 
 This tool hands an arbitrary string to `cmd /C` or `sh -c`, which makes it the one place in the system capable of irreversible damage. **It is off by default** — you want it when you are using this as an agent that does work for you, which is not what it should be out of the box; turn it on from the settings page, where it is a visible choice. Once on, the approach taken is **intercept before executing and ask a human**, not a sandbox.

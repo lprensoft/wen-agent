@@ -27,12 +27,11 @@ func fetch(t *testing.T, tool plugin.Tool, url string) (string, error) {
 	return tool.Execute(context.Background(), args)
 }
 
-func TestStripHTML(t *testing.T) {
+func TestFetchStripsHTML(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><html><head><title>标题</title>
-<script>var x = "不应出现";</script><style>body{color:red}</style></head>
-<body><h1>你好</h1><p>第一段内容</p><p>第二段 &amp; 符号</p></body></html>`)
+		fmt.Fprint(w, `<!doctype html><html><body><h1>你好</h1><p>第一段内容</p>
+<script>var x = "不应出现";</script></body></html>`)
 	}))
 	defer srv.Close()
 
@@ -40,12 +39,13 @@ func TestStripHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"你好", "第一段内容", "第二段 & 符号", "[HTTP 200]"} {
+	// 剥标签本身的细节由 internal/plugin 的 TestStripHTML 盯；这里只确认它确实被接上了
+	for _, want := range []string{"[HTTP 200]", "你好", "第一段内容"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	for _, ban := range []string{"<script", "不应出现", "color:red", "<p>"} {
+	for _, ban := range []string{"<script", "不应出现", "<p>"} {
 		if strings.Contains(out, ban) {
 			t.Errorf("should not contain %q in:\n%s", ban, out)
 		}
