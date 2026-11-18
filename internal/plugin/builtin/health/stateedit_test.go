@@ -82,6 +82,38 @@ func TestCareOnlyEditKeepsCappedPeak(t *testing.T) {
 	}
 }
 
+// 旧请求（没有 Originals）无法判断跨档是用户改的还是病程自己走的：只改处理方式，
+// 不能顺手把刚从「有点不舒服」升到「难受」的病程又按旧档位压回去。
+func TestLegacyCareOnlyDoesNotChangeSeverityAcrossBand(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	now := time.Now()
+	id := seedCondition(t, p, now) // 表单此刻会显示「有点不舒服」
+	store := p.storeFor("")
+	snap, _ := store.Current(now)
+	name := snap.Active[0].Cond.Name
+	mod := sevModerate.ZH()
+	if _, _, err := store.Apply(name, Update{Severity: &mod}, now, p.snapshot().limits()); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := store.Current(now)
+	if before.Active[0].Severity < 40 {
+		t.Fatalf("病程没有跨档，测不出问题：%d", before.Active[0].Severity)
+	}
+
+	if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
+		"severity": sevMild.ZH(), "care": careMeds,
+	})); err != nil {
+		t.Fatalf("只改处理方式 = %v", err)
+	}
+	after, _ := store.Current(now)
+	if after.Active[0].Severity < 40 {
+		t.Errorf("旧表单把病程压回去了：%d", after.Active[0].Severity)
+	}
+	if after.Active[0].Cond.Care != careMeds {
+		t.Errorf("处理方式没改到：%q", after.Active[0].Cond.Care)
+	}
+}
+
 func TestRecoverConditionFromState(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	now := time.Now()
@@ -205,14 +237,18 @@ func TestHealthEditRejectsBadInput(t *testing.T) {
 	now := time.Now()
 	id := seedCondition(t, p, now)
 
-	if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
-		"severity": "不存在的程度", "care": careMeds,
-	})); err == nil {
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Row: id, Op: stateOpEdit,
+		Values:    map[string]string{"severity": "不存在的程度", "care": careMeds},
+		Originals: map[string]string{"severity": sevMild.ZH(), "care": careTough},
+	}); err == nil {
 		t.Error("未知严重度应拒绝")
 	}
-	if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
-		"severity": sevMild.ZH(), "care": "不存在的处理",
-	})); err == nil {
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Row: id, Op: stateOpEdit,
+		Values:    map[string]string{"severity": sevMild.ZH(), "care": "不存在的处理"},
+		Originals: map[string]string{"severity": sevMild.ZH(), "care": careTough},
+	}); err == nil {
 		t.Error("未知处理方式应拒绝")
 	}
 	if err := p.EditState(healthEditReq(stateOpEdit, "nope", map[string]string{

@@ -27,7 +27,7 @@ func TestEditIndexKeepsBodyAndDecay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.EditState(editReq(stateOpEdit, stateSectionIndex, "喜欢乌龙茶",
+	if err := p.EditState(editReq(stateOpEdit, stateSectionIndex, entryID(before),
 		map[string]string{"description": "只喝无糖的茶", "type": "事实"})); err != nil {
 		t.Fatalf("EditState = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestUnchangedIndexFieldNotOverwritten(t *testing.T) {
 	cur, _ := store.Get("喜欢乌龙茶")
 
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -129,15 +129,15 @@ func TestUnchangedIndexFieldNotOverwritten(t *testing.T) {
 	}
 }
 
-// 旧页面拿的是原样文件标识：大小写不同的新条目不能被它删到。
-func TestSlugMatchIsExact(t *testing.T) {
+// 旧页面拿的是条目身份：删除后重建的同名/同 slug 条目不能被它删到。
+func TestEntryIdentityIsExact(t *testing.T) {
 	p := stateTestPlugin(t)
 	store := p.storeFor("")
 	if _, err := store.Save(Entry{Name: "Trip", Type: "事实"}, false); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := store.List()
-	oldSlug := entries[0].Slug
+	oldSlug := entryID(entries[0])
 
 	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldSlug, nil)); err != nil {
 		t.Fatalf("删旧条目 = %v", err)
@@ -154,6 +154,30 @@ func TestSlugMatchIsExact(t *testing.T) {
 	}
 }
 
+// 两个不同标题折成同一个文件名时，旧页面也只能操作它打开时那一条。
+func TestEntryIdentitySurvivesSlugReuse(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "周末：搬家", Type: "经历"}, false); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := store.List()
+	oldID := entryID(entries[0])
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldID, nil)); err != nil {
+		t.Fatalf("删旧条目 = %v", err)
+	}
+	if _, err := store.Save(Entry{Name: "周末 搬家", Type: "经历"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldID, nil)); err == nil {
+		t.Error("旧页面凭据不该删到复用了同一 slug 的新条目")
+	}
+	entries, _ = store.List()
+	if len(entries) != 1 || entries[0].Name != "周末 搬家" {
+		t.Fatalf("新条目被误删：%+v", entries)
+	}
+}
+
 // 两个请求分别只改摘要和分类：后一个请求不能拿旧快照把前一个的改动盖回去。
 func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 	p := stateTestPlugin(t)
@@ -165,7 +189,7 @@ func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 
 	// 第一个窗口：只改摘要。
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "新摘要", "type": "偏好"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -173,7 +197,7 @@ func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 	}
 	// 第二个窗口（旧快照）：只改分类。
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -221,7 +245,11 @@ func TestDeleteIndexAndNotReadyTargets(t *testing.T) {
 	if _, err := p.storeFor("").Save(Entry{Name: "周末的湖边", Type: "经历"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, "周末的湖边", nil)); err != nil {
+	lake, err := p.storeFor("").Get("周末的湖边")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryID(lake), nil)); err != nil {
 		t.Fatalf("删除 = %v", err)
 	}
 	if _, err := p.storeFor("").Get("周末的湖边"); err == nil {
@@ -230,10 +258,10 @@ func TestDeleteIndexAndNotReadyTargets(t *testing.T) {
 	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, "不存在", nil)); err == nil {
 		t.Error("删不存在的记忆应拒绝")
 	}
-	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, "周末的湖边", nil)); err == nil {
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryID(lake), nil)); err == nil {
 		t.Error("删第二次应拒绝")
 	}
-	req := editReq(stateOpEdit, stateSectionIndex, "周末的湖边", map[string]string{"description": "x"})
+	req := editReq(stateOpEdit, stateSectionIndex, entryID(lake), map[string]string{"description": "x"})
 	req.Domain = "nope"
 	if err := p.EditState(req); err == nil {
 		t.Error("磁盘上不存在的域应拒绝")

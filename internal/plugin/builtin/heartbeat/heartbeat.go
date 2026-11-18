@@ -113,6 +113,11 @@ type Plugin struct {
 	curContext  string    // 当前情境（模型经工具切换，持久化）
 	pausedUntil time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
 	pausedAt    time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
+	// 本轮心跳从公告板取走的开口理由：TurnPrompt 在可见域裁决之后按可读域领取，
+	// 轮次失败时由 settleCues 放回。单独一把锁，TurnPrompt 不在 p.mu 内。
+	cueMu     sync.Mutex
+	takenCues []cue.Cue
+	cueScope  plugin.Scope // 最近一次心跳轮次的可见域，用来判断理由值不值得提前叫醒
 	// 这段暂停里角色自己也在睡（见 sleep.go）。asleep 与 sleepCompacted 持久化，
 	// compactRetryAt 只在内存里——重启丢掉的只是一次重试的等待。
 	asleep         bool
@@ -170,15 +175,60 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		paused = p.pauseStateLocked(plugin.IsInteractive(ctx), until)
 	}
 	p.mu.Unlock()
-	if !dynamic || cur <= 0 {
-		return "", nil
+	text := ""
+	switch {
+	case !dynamic || cur <= 0:
+	case paused != "":
+		text = paused
+	default:
+		text = prompt.Tf(lang, "prompt.heartbeat.state",
+			"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
+			humanDur(lang, cur))
 	}
-	if paused != "" {
-		return paused, nil
+	if plugin.TurnOriginFrom(ctx) == p.Name() {
+		if cues := p.takeCues(ctx); len(cues) > 0 {
+			text = withCues(lang, text, cues)
+		}
 	}
-	return prompt.Tf(lang, "prompt.heartbeat.state",
-		"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
-		humanDur(lang, cur)), nil
+	return text, nil
+}
+
+// takeCues 按本轮已裁决的可见域领取开口理由，其余留在公告板上。
+//
+// 这里而不是 beat() 里领取，是因为只有走到这一步才知道目标轮次落在哪个人格上：
+// 表人格的心跳不该读到里人格的私密约定，里人格的提醒也不该被这一轮消费掉。
+func (p *Plugin) takeCues(ctx context.Context) []cue.Cue {
+	sc := plugin.ScopeFrom(ctx)
+	cues := cue.TakeFor(clock.Now(ctx), func(c cue.Cue) bool { return sc.CanRead(c.Domain) })
+	p.cueMu.Lock()
+	p.cueScope = sc
+	if len(cues) > 0 {
+		p.takenCues = append(p.takenCues, cues...)
+	}
+	p.cueMu.Unlock()
+	return cues
+}
+
+// cueScopeSnapshot 取最近一次心跳轮次的可读域。还没跑过心跳时为零值，
+// 此时不限制（与升级前的行为一致）。
+func (p *Plugin) cueScopeSnapshot() plugin.Scope {
+	p.cueMu.Lock()
+	defer p.cueMu.Unlock()
+	return p.cueScope
+}
+
+// settleCues 收尾本轮领取的理由：成功即已送达，失败放回公告板等下一拍。
+func (p *Plugin) settleCues(ok bool) {
+	p.cueMu.Lock()
+	cues := p.takenCues
+	p.takenCues = nil
+	p.cueMu.Unlock()
+	if ok {
+		return
+	}
+	for _, c := range cues {
+		cue.Post(c)
+	}
 }
 
 // Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用

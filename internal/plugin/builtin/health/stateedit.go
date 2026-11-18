@@ -31,14 +31,11 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	if err != nil {
 		return p.stateEditFailed(req.Lang, err)
 	}
-	var (
-		view View
-		cond Condition
-	)
+	var cond Condition
 	found := false
 	for _, v := range snap.Active {
 		if v.Cond.ID == req.Row {
-			view, cond, found = v, v.Cond, true
+			cond, found = v.Cond, true
 			break
 		}
 	}
@@ -48,16 +45,10 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 
 	switch req.Op {
 	case stateOpEdit:
-		// 新界面会带回打开表单时的值，用户没动过的项一律不写。旧客户端（没有
-		// Originals）退回按峰值档位比较：只改处理方式时不要把它发回去。
-		curWord := viewSeverityWord(view)
-		sendSeverity := req.Touched("severity")
-		if req.Originals == nil {
-			// 旧客户端原样回传它看到的档位：与此刻回显的档位（或历史峰值档位）
-			// 相同就当作没改，只改处理方式不会顺手改变病程。
-			raw := strings.TrimSpace(req.Values["severity"])
-			sendSeverity = raw != "" && raw != curWord && raw != severityWord(cond.Peak)
-		}
+		// 新界面会带回打开表单时的值，用户没动过的项一律不写。没有 Originals
+		// 的旧请求无法区分「用户主动调档」与「表单打开后病程自己跨了档」，
+		// 一律只改处理方式；状态页自己的表单总是带 Originals。
+		sendSeverity := req.Touched("severity") && req.Originals != nil
 		sendCare := req.Touched("care")
 		if req.Originals == nil {
 			sendCare = strings.TrimSpace(req.Values["care"]) != ""

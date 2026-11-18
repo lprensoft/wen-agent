@@ -105,6 +105,7 @@ func (p *Plugin) postDueCues(now time.Time) {
 			if now.Sub(c.Onset) < cueTTL {
 				cue.Post(cue.Cue{
 					Source: cueSource,
+					Domain: tag,
 					Key:    cueKey(tag, c.ID),
 					Text:   onsetText(p.langOf(), c),
 					Expire: c.Onset.Add(cueTTL),

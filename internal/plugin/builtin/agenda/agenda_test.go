@@ -890,7 +890,7 @@ func TestTickEndAndCatchUp(t *testing.T) {
 		t.Fatalf("结束输入不符：\n%s", in)
 	}
 	cues := cue.Take(h.clk.now())
-	if len(cues) != 1 || cues[0].Key != "back|a1" || cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" ||
+	if len(cues) != 1 || cues[0].Key != backKey("", "a1") || cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" ||
 		!cues[0].Expire.Equal(at(16, 35).Add(90*time.Minute)) {
 		t.Fatalf("结束后应投「刚回来」理由: %+v", cues)
 	}
@@ -1163,7 +1163,7 @@ func TestBackCueAfterFailedEndTurn(t *testing.T) {
 	recvInput(t, h)
 
 	cues := cue.Take(h.clk.now())
-	if len(cues) != 1 || cues[0].Key != "back|a1" ||
+	if len(cues) != 1 || cues[0].Key != backKey("", "a1") ||
 		cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" {
 		t.Fatalf("轮次失败也该投「刚回来」: %+v", cues)
 	}

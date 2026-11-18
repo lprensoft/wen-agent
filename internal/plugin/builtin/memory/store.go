@@ -6,6 +6,7 @@ package memory
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -47,6 +48,10 @@ func typeRank(t string) int {
 
 // Entry 是一条记忆。
 type Entry struct {
+	// ID 是状态页操作用的稳定身份：新建时生成一次、此后随 frontmatter 落盘。
+	// 标题或文件名都可能被复用（不同标题折成同一个 slug），只有它能区分
+	// 「删掉旧条目后新建的那一条」。
+	ID          string
 	Slug        string // 文件名（不含扩展名）
 	Name        string // 标题
 	Description string // 一句话钩子，进索引
@@ -250,14 +255,17 @@ func (s *Store) SaveAt(e Entry, replace bool, now time.Time) (Entry, error) {
 	e.Updated = now
 	e.LastUsed = now  // 写入本身就是一次「用到」
 	e.Blurred = false // 正文是刚写进来的，不再是塌缩后的残余
+	e.ID = ""
 	if exists {
 		e.Slug = old.Slug // 沿用原文件名，避免标题大小写变化产生第二个文件
+		e.ID = old.ID
 		e.Created = old.Created
 		// 淡忘标记只增不减。自动提炼在修订一条记忆时未必会重复带上这个标记，
 		// 若按缺省值覆盖，一条本该淡忘的记忆会被一次无关的修订变成永久记忆。
 		// 确实要取消淡忘，删掉重存或直接改文件头。
 		e.Decay = e.Decay || old.Decay
 	} else {
+		e.ID = newEntryID()
 		e.Created = now
 	}
 	if e.Created.IsZero() {
@@ -332,50 +340,50 @@ func (s *Store) Touch(name string, now time.Time) (bool, error) {
 	return true, nil
 }
 
-// GetBySlug 按落盘文件名精确查找。状态页的操作凭据用它，不走按标题的
-// findEntry——那条路径会剥掉「分类/标题」前缀，标题本身带斜杠时会指错条目。
-func (s *Store) GetBySlug(slug string) (Entry, error) {
+// GetByID 按条目身份精确查找。状态页凭据用它：标题与文件名都可能被复用，
+// 只有新建时生成的 ID 能区分「删掉旧条目后新建的那一条」。
+func (s *Store) GetByID(id string) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	if e, ok := findBySlug(entries, slug); ok {
+	if e, ok := findByID(entries, id); ok {
 		return e, nil
 	}
-	return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+	return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 }
 
-// UpdateIndexFields 按落盘标识精确匹配，只改传了的字段（nil 表示没改）。
+// UpdateIndexFields 按条目身份精确匹配，只改传了的字段（nil 表示没改）。
 //
 // 两个窗口分别改摘要和分类时，各自只提交自己动过的那一项；读、合并、写都在
 // 同一把锁内完成，不会用另一份过期快照把对方刚写的字段盖回去。
-func (s *Store) UpdateIndexFields(slug string, description, typ *string, now time.Time) (Entry, error) {
+func (s *Store) UpdateIndexFields(id string, description, typ *string, now time.Time) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	e, ok := findBySlug(entries, slug)
+	e, ok := findByID(entries, id)
 	if !ok {
-		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+		return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 	}
 	return s.updateIndexLocked(e, description, typ, now)
 }
 
-// DeleteBySlug 与 Delete 相同，但按落盘标识精确匹配。
-func (s *Store) DeleteBySlug(slug string) (Entry, error) {
+// DeleteByID 按条目身份精确匹配删除。
+func (s *Store) DeleteByID(id string) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	e, ok := findBySlug(entries, slug)
+	e, ok := findByID(entries, id)
 	if !ok {
-		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+		return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 	}
 	p, err := s.path(e.Slug)
 	if err != nil {
@@ -388,15 +396,36 @@ func (s *Store) DeleteBySlug(slug string) (Entry, error) {
 	return e, nil
 }
 
-func findBySlug(entries []Entry, slug string) (Entry, bool) {
-	// 只认完全相等的文件标识：这是服务端下发的原样身份，容忍大小写会让
-	// 旧页面上的「Trip」在它被删除、又新建了「trip」之后删到新那条。
+// entryID 返回条目的稳定身份。老文件没有 id 字段时用「文件名 + 创建时刻」
+// 推导：删除后重建的条目会拿到新的随机 ID（或新的文件时间），旧页面因此对不上。
+func entryID(e Entry) string {
+	if e.ID != "" {
+		return e.ID
+	}
+	created := e.Created
+	if created.IsZero() {
+		created = e.Updated
+	}
+	return "legacy:" + e.Slug + ":" + created.UTC().Format(time.RFC3339Nano)
+}
+
+func findByID(entries []Entry, id string) (Entry, bool) {
 	for _, e := range entries {
-		if e.Slug == slug {
+		if entryID(e) == id {
 			return e, true
 		}
 	}
 	return Entry{}, false
+}
+
+func newEntryID() string {
+	// 前缀让身份永远是字符串：纯十六进制有极小概率全是数字，YAML 会把它
+	// 解成整数，整段 frontmatter 就解析失败了。
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "m" + fmt.Sprintf("%x", b)
+	}
+	return fmt.Sprintf("mt%x", time.Now().UnixNano())
 }
 
 // UpdateIndex 改一条记忆的摘要与分类，不动正文、正文状态与「最后一次用到」。
@@ -535,6 +564,7 @@ func sameDay(a, b time.Time) bool {
 
 // frontmatter 是记忆文件头部的 YAML 结构。时间用字符串承载，格式不合法时退回文件时间而不是报错。
 type frontmatter struct {
+	ID          string `yaml:"id,omitempty"`
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Type        string `yaml:"type"`
@@ -573,6 +603,7 @@ func (s *Store) read(fname string) (Entry, error) {
 		Updated: fi.ModTime(),
 	}
 	if fm != nil {
+		e.ID = strings.TrimSpace(fm.ID)
 		if fm.Name != "" {
 			e.Name = strings.TrimSpace(fm.Name)
 		}
@@ -634,6 +665,7 @@ func render(e Entry) []byte {
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
 	fm := frontmatter{
+		ID:          e.ID,
 		Name:        e.Name,
 		Description: e.Description,
 		Type:        e.Type,

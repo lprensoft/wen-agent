@@ -124,9 +124,14 @@ func (p *Plugin) nextBeatLockedAt(now time.Time) time.Time {
 func (p *Plugin) nextBeatAt(now time.Time) (next time.Time, busySeen bool, busyUntil, busyEndedAt time.Time) {
 	busySeen, busyUntil, busyEndedAt = p.busySeen, p.busyUntil, p.busyEndedAt
 	next = p.lastBeat.Add(p.cur)
-	if p.dynamic && cue.Pending(now) {
-		if c := p.lastBeat.Add(p.minIv); c.Before(next) {
-			next = c
+	// 只让「这一轮读得到」的理由把下一拍提前：别的人格域的提醒留在公告板上，
+	// 不该把表人格的心跳反复叫醒却每次都拿不到东西。
+	if p.dynamic {
+		sc := p.cueScopeSnapshot()
+		if cue.PendingFor(now, func(c cue.Cue) bool { return sc.CanRead(c.Domain) }) {
+			if c := p.lastBeat.Add(p.minIv); c.Before(next) {
+				next = c
+			}
 		}
 	}
 	if p.dynamic {
@@ -230,14 +235,11 @@ func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
-	cues := cue.Take(now)
-	input := withCues(lang, gapNote(lang, beatPrompt, lastActive, now, cur), cues)
-	if _, err := runTurn(tctx, sid, input); err != nil {
-		// 理由没送达就放回公告板等下一拍（已过期的会被 Post 拒收），别让一次
-		// 会话忙把「刚下起雨」整个吞掉
-		for _, c := range cues {
-			cue.Post(c)
-		}
+	input := gapNote(lang, beatPrompt, lastActive, now, cur)
+	_, err = runTurn(tctx, sid, input)
+	// 理由在 TurnPrompt（可见域裁决之后）才被领取；失败就放回公告板等下一拍。
+	p.settleCues(err == nil)
+	if err != nil {
 		if errors.Is(err, plugin.ErrTurnNotStarted) {
 			p.mu.Lock()
 			if p.lastBeat.Equal(now) {

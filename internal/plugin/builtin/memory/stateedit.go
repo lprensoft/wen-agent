@@ -38,7 +38,7 @@ func (p *Plugin) editIndex(req plugin.StateEditRequest) error {
 	}
 	switch req.Op {
 	case stateOpEdit:
-		if _, err := store.GetBySlug(req.Row); err != nil {
+		if _, err := store.GetByID(req.Row); err != nil {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
 		}
 		var descPtr, typPtr *string
@@ -67,10 +67,10 @@ func (p *Plugin) editIndex(req plugin.StateEditRequest) error {
 		}
 		return nil
 	case stateOpDelete:
-		if _, err := store.GetBySlug(req.Row); err != nil {
+		if _, err := store.GetByID(req.Row); err != nil {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
 		}
-		if _, err := store.DeleteBySlug(req.Row); err != nil {
+		if _, err := store.DeleteByID(req.Row); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
 		return nil
