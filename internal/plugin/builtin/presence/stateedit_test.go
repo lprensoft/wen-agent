@@ -37,6 +37,34 @@ func TestEditPresenceFromState(t *testing.T) {
 	}
 }
 
+// 表单把六项一起带回来：没变的字段不该被刷新更新时间。
+func TestUnchangedFieldsKeepUpdatedTime(t *testing.T) {
+	p := newTestPlugin(t)
+	old := time.Now().Add(-48 * time.Hour)
+	if _, _, err := p.storeFor("").Apply(map[string]string{
+		"location": "书房", "attire": "灰色毛衣",
+	}, old); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := p.storeFor("").Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.EditState(editReq(map[string]string{
+		"location": "书房", "attire": "灰色毛衣", "activity": "看电影",
+	})); err != nil {
+		t.Fatalf("修改 = %v", err)
+	}
+	after, _, _ := p.storeFor("").Load()
+	if !after["location"].Updated.Equal(before["location"].Updated) {
+		t.Errorf("没变的字段被刷新了：%v → %v", before["location"].Updated, after["location"].Updated)
+	}
+	if after["activity"].Text != "看电影" {
+		t.Errorf("变化的字段没写进去：%+v", after["activity"])
+	}
+}
+
 func TestPresenceEditRejectsBadInput(t *testing.T) {
 	p := newTestPlugin(t)
 	if err := p.EditState(editReq(map[string]string{"focus": strings.Repeat("字", 81)})); err == nil {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/availability"
 	"wen/internal/plugin"
 )
 
@@ -57,6 +58,33 @@ func TestCancelPlanItemFromState(t *testing.T) {
 	// 已经结束的项不能再取消。
 	if err := p.EditState(editReq(stateOpCancel, "a2", nil)); err == nil {
 		t.Error("已做完的项应拒绝")
+	}
+}
+
+// 取消一项正在进行中的活动，要把它占着的忙碌公告板一并撤掉。
+func TestCancelOngoingClearsAvailability(t *testing.T) {
+	now := time.Date(2026, 11, 15, 14, 0, 0, 0, time.Local)
+	p := stateTestPlugin(t, now)
+	seedPlan(t, p, now)
+	if _, err := p.storeFor("").UpdatePlan(func(pl *Plan) (bool, error) {
+		it := pl.item("a1")
+		it.Status = statusOngoing
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	availability.Clear(availabilitySource)
+	defer availability.Clear(availabilitySource)
+	availability.Set(availability.State{
+		Source: availabilitySource, Activity: "整理提案", Level: availability.Heavy,
+		Since: now, Until: now.Add(time.Hour),
+	})
+
+	if err := p.EditState(editReq(stateOpCancel, "a1", nil)); err != nil {
+		t.Fatalf("取消 = %v", err)
+	}
+	if _, ok := availability.Current(now); ok {
+		t.Error("取消后仍占着忙碌公告板")
 	}
 }
 

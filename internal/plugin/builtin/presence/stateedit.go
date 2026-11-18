@@ -30,6 +30,11 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	if store == nil {
 		return errors.New(i18n.T(req.Lang, "plugin.presence.state.err.not_ready", "现场状态尚未就绪。"))
 	}
+	snap, _, err := store.Load()
+	if err != nil {
+		i18n.Logf(p.snapshotLang(), "log.presence.state_edit_failed", "状态页修改现场失败：%v", err)
+		return errors.New(i18n.T(req.Lang, "plugin.presence.state.err.save_failed", "保存现场失败，请稍后重试。"))
+	}
 
 	changes := make(map[string]string, len(fieldDefs))
 	for _, d := range fieldDefs {
@@ -38,6 +43,14 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 			continue
 		}
 		v := strings.TrimSpace(raw)
+		// 表单会把六项一起带回来；逐项与现值比，没变的不要提交——Apply 会给
+		// 提交的每一项刷上新的更新时间，一次无关的修正不该让整块现场看起来刚变过。
+		if cur, ok := snap[d.key]; ok && cur.Text == v {
+			continue
+		}
+		if _, ok := snap[d.key]; !ok && v == "" {
+			continue
+		}
 		if n := len([]rune(v)); n > d.maxRunes {
 			return errors.New(i18n.Tf(req.Lang, "plugin.presence.state.err.too_long",
 				"内容太长（%d 字，上限 %d 字）。", n, d.maxRunes))

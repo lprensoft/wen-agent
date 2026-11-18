@@ -48,6 +48,40 @@ func TestEditRelationshipFromState(t *testing.T) {
 	}
 }
 
+func TestRecentTimestampNotRefreshedByUnrelatedEdit(t *testing.T) {
+	p := newTestPlugin(t)
+	old := time.Now().Add(-72 * time.Hour)
+	if _, _, err := p.storeFor("").Apply(Update{
+		Stage: rptr("朋友"), Recent: rptr("一起看了电影"),
+	}, old); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := p.storeFor("").Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 只改称呼，表单里带回来的「最近变动」原样不变：时刻不能刷新。
+	if err := p.EditState(relEditReq(map[string]string{
+		"stage": "朋友", "my_call": "小心", "recent": "一起看了电影",
+	})); err != nil {
+		t.Fatalf("改称呼 = %v", err)
+	}
+	after, _, _ := p.storeFor("").Load()
+	if !after.RecentAt.Equal(before.RecentAt) {
+		t.Errorf("最近变动的时刻被无关修改刷新了：%v → %v", before.RecentAt, after.RecentAt)
+	}
+
+	// 内容真的变了才刷新时刻。
+	if err := p.EditState(relEditReq(map[string]string{"recent": "在一起了"})); err != nil {
+		t.Fatalf("改最近变动 = %v", err)
+	}
+	after, _, _ = p.storeFor("").Load()
+	if !after.RecentAt.After(before.RecentAt) {
+		t.Errorf("改了内容时刻没有更新：%v", after.RecentAt)
+	}
+}
+
 func TestRelationshipEditRejectsBadInput(t *testing.T) {
 	p := newTestPlugin(t)
 	if err := p.EditState(relEditReq(map[string]string{"stage": strings.Repeat("字", 11)})); err == nil {

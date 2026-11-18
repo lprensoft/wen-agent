@@ -29,6 +29,11 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	if store == nil {
 		return errors.New(i18n.T(req.Lang, "plugin.relationship.state.err.not_ready", "关系状态尚未就绪。"))
 	}
+	snap, _, err := store.Load()
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.relationship.state_edit_failed", "状态页修改关系失败：%v", err)
+		return errors.New(i18n.T(req.Lang, "plugin.relationship.state.err.save_failed", "保存关系失败，请稍后重试。"))
+	}
 
 	u := Update{}
 	if raw, ok := req.Values["stage"]; ok {
@@ -57,7 +62,11 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 		if err != nil {
 			return err
 		}
-		u.Recent = &v
+		// 「最近变动」带上写入时刻，注入与顶部都按它算新旧。原样保存表单不能把
+		// 三个月前那次变动刷成今天：只有内容真的变了才提交这一项。
+		if v != snap.Recent {
+			u.Recent = &v
+		}
 	}
 	if raw, ok := req.Values["their_now"]; ok {
 		v, err := relText(req.Lang, raw, maxTheirNowRunes)
