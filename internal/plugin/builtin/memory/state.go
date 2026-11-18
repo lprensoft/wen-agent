@@ -84,7 +84,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 				Value:  e.Name,
 				Detail: detail,
 				Tone:   tone,
-				ID:     entryID(e),
+				ID:     entryRef(e),
 				Edits:  indexEdits(q.Lang, e),
 			})
 		}

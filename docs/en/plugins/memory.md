@@ -41,7 +41,7 @@ Session history is not reliable memory: over the context budget, the oldest turn
 | `decay_blur_days` | 30 | Days unmentioned before the body collapses into its summary |
 | `decay_forget_days` | 90 | Days unmentioned before it leaves the store; must be larger than the previous setting |
 
-- **Character state page**: the 30 most recent memories per visible domain with title, type and one-line description, plus the settled diary. Index entries can have their description and type changed or be deleted; a diary day can have its summary changed or be deleted (it will not be regenerated). Editing an index entry leaves the body alone and does not revive a faded memory.
+- **Character state page**: the 30 most recent memories per visible domain with title, type and one-line description, plus the settled diary. Index entries can have their description and type changed or be deleted; a diary day can have its summary changed or be deleted (it will not be regenerated). Editing an index entry leaves the body alone and does not revive a faded memory. A row's credential binds both the file name and the entry id, so a copied file that kept the same id still deletes independently of the original.
 
 ## History search (session_search plugin)
 

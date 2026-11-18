@@ -32,10 +32,11 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 		return p.stateEditFailed(req.Lang, err)
 	}
 	var cond Condition
+	var view View
 	found := false
 	for _, v := range snap.Active {
 		if v.Cond.ID == req.Row {
-			cond, found = v.Cond, true
+			cond, view, found = v.Cond, v, true
 			break
 		}
 	}
@@ -45,13 +46,42 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 
 	switch req.Op {
 	case stateOpEdit:
-		// 新界面会带回打开表单时的值，用户没动过的项一律不写。没有 Originals
-		// 的旧请求无法区分「用户主动调档」与「表单打开后病程自己跨了档」，
-		// 一律只改处理方式；状态页自己的表单总是带 Originals。
+		// 新界面会带回打开表单时的值，用户没动过的项一律不写。
 		sendSeverity := req.Touched("severity") && req.Originals != nil
 		sendCare := req.Touched("care")
 		if req.Originals == nil {
-			sendCare = strings.TrimSpace(req.Values["care"]) != ""
+			// 旧客户端不带 Originals，只能按提交了哪些字段判断意图。
+			rawSev := strings.TrimSpace(req.Values["severity"])
+			rawCare := strings.TrimSpace(req.Values["care"])
+			switch {
+			case rawSev == "" && rawCare == "":
+				sendSeverity, sendCare = false, false
+			case rawSev == "":
+				// 只提交处理方式：意图明确。严重度键可能带着空值一起提交，
+				// 同样不能让它进入严重度校验。
+				sendSeverity, sendCare = false, true
+			case rawCare == "":
+				// 只提交严重度：意图明确，直接执行；与当前档位一致则视为没改，
+				// 免得一次原样提交把病程进度重新拨回加重段。care 键可能存在但
+				// 值为空（旧客户端会把空值一起带上），不能让它进入处理方式校验。
+				sendCare = false
+				if sev, ok := severities.Canonical(rawSev); !ok || sev != viewSeverityWord(view) {
+					sendSeverity = true
+				} else {
+					sendSeverity = false
+				}
+			default:
+				// 整表提交：严重度与当前表单档位一致就是「没动过这一项」；
+				// 不一致时无法区分用户主动调档还是病程在表单打开后自己跨了档，
+				// 与其猜，不如让客户端刷新后再提交。
+				if sev, ok := severities.Canonical(rawSev); ok && sev == viewSeverityWord(view) {
+					sendSeverity = false
+				} else {
+					return errors.New(i18n.T(req.Lang, "plugin.health.state.err.stale",
+						"这一页已经过期，请刷新后再操作。"))
+				}
+				sendCare = true
+			}
 		}
 
 		u := Update{}

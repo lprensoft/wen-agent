@@ -1,6 +1,9 @@
 package memory
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +30,7 @@ func TestEditIndexKeepsBodyAndDecay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.EditState(editReq(stateOpEdit, stateSectionIndex, entryID(before),
+	if err := p.EditState(editReq(stateOpEdit, stateSectionIndex, entryRef(before),
 		map[string]string{"description": "只喝无糖的茶", "type": "事实"})); err != nil {
 		t.Fatalf("EditState = %v", err)
 	}
@@ -114,7 +117,7 @@ func TestUnchangedIndexFieldNotOverwritten(t *testing.T) {
 	cur, _ := store.Get("喜欢乌龙茶")
 
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryRef(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -137,7 +140,7 @@ func TestEntryIdentityIsExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, _ := store.List()
-	oldSlug := entryID(entries[0])
+	oldSlug := entryRef(entries[0])
 
 	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldSlug, nil)); err != nil {
 		t.Fatalf("删旧条目 = %v", err)
@@ -162,7 +165,7 @@ func TestEntryIdentitySurvivesSlugReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, _ := store.List()
-	oldID := entryID(entries[0])
+	oldID := entryRef(entries[0])
 	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldID, nil)); err != nil {
 		t.Fatalf("删旧条目 = %v", err)
 	}
@@ -178,6 +181,51 @@ func TestEntryIdentitySurvivesSlugReuse(t *testing.T) {
 	}
 }
 
+// 复制一条记忆文件再改副本标题：两份文件保留同一个 frontmatter ID，
+// 状态页的两行必须各删各的——点副本的删除不能命中原件。
+func TestEntryRefBindsFileNameAndID(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "Alpha", Type: "事实", Content: "A"}, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(store.Dir(), "Alpha.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟用户在编辑器里复制 Alpha.md 为 Beta.md，只改副本标题。
+	dup := strings.Replace(string(raw), "name: Alpha", "name: Beta", 1)
+	if dup == string(raw) {
+		t.Fatalf("副本标题没改到：\n%s", raw)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir(), "Beta.md"), []byte(dup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	secs := p.State(plugin.StateQuery{Lang: "zh"})
+	if len(secs) != 1 || len(secs[0].Rows) != 2 {
+		t.Fatalf("State = %+v，期望两条记录", secs)
+	}
+	refs := map[string]string{}
+	for _, r := range secs[0].Rows {
+		refs[r.Value] = r.ID
+	}
+	if refs["Alpha"] == "" || refs["Beta"] == "" || refs["Alpha"] == refs["Beta"] {
+		t.Fatalf("行凭据没有区分同名副本：%+v", refs)
+	}
+
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, refs["Beta"], nil)); err != nil {
+		t.Fatalf("删副本 = %v", err)
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name != "Alpha" {
+		t.Fatalf("删副本误伤了原件：%+v", entries)
+	}
+}
+
 // 两个请求分别只改摘要和分类：后一个请求不能拿旧快照把前一个的改动盖回去。
 func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 	p := stateTestPlugin(t)
@@ -189,7 +237,7 @@ func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 
 	// 第一个窗口：只改摘要。
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryRef(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "新摘要", "type": "偏好"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -197,7 +245,7 @@ func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
 	}
 	// 第二个窗口（旧快照）：只改分类。
 	if err := p.EditState(plugin.StateEditRequest{
-		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryID(cur), Op: stateOpEdit,
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: entryRef(cur), Op: stateOpEdit,
 		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
 		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
 	}); err != nil {
@@ -249,7 +297,7 @@ func TestDeleteIndexAndNotReadyTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryID(lake), nil)); err != nil {
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryRef(lake), nil)); err != nil {
 		t.Fatalf("删除 = %v", err)
 	}
 	if _, err := p.storeFor("").Get("周末的湖边"); err == nil {
@@ -258,10 +306,10 @@ func TestDeleteIndexAndNotReadyTargets(t *testing.T) {
 	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, "不存在", nil)); err == nil {
 		t.Error("删不存在的记忆应拒绝")
 	}
-	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryID(lake), nil)); err == nil {
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, entryRef(lake), nil)); err == nil {
 		t.Error("删第二次应拒绝")
 	}
-	req := editReq(stateOpEdit, stateSectionIndex, entryID(lake), map[string]string{"description": "x"})
+	req := editReq(stateOpEdit, stateSectionIndex, entryRef(lake), map[string]string{"description": "x"})
 	req.Domain = "nope"
 	if err := p.EditState(req); err == nil {
 		t.Error("磁盘上不存在的域应拒绝")

@@ -2252,6 +2252,7 @@
   "plugin.health.state.err.unknown_target": "There is nothing to edit here.",
   "plugin.health.state.err.unknown_op": "Unknown edit operation.",
   "plugin.health.state.err.no_such": "That condition is no longer active.",
+  "plugin.health.state.err.stale": "This page is out of date; refresh and try again.",
   "plugin.health.state.err.bad_severity": "Severity must be one of the given levels.",
   "plugin.health.state.err.bad_care": "Care must be one of the given options.",
   "plugin.health.state.err.save_failed": "Could not save the health record; try again later.",

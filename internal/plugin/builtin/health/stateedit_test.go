@@ -65,9 +65,11 @@ func TestCareOnlyEditKeepsCappedPeak(t *testing.T) {
 		t.Fatalf("封顶没有生效：peak = %d", cond.Peak)
 	}
 
-	if err := p.EditState(healthEditReq(stateOpEdit, cond.ID, map[string]string{
-		"severity": severityWord(cond.Peak), "care": careMeds,
-	})); err != nil {
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Row: cond.ID, Op: stateOpEdit,
+		Values:    map[string]string{"severity": viewSeverityWord(snap.Active[0]), "care": careMeds},
+		Originals: map[string]string{"severity": viewSeverityWord(snap.Active[0]), "care": careTough},
+	}); err != nil {
 		t.Fatalf("只改处理方式 = %v", err)
 	}
 	snap, err = store.Current(now)
@@ -82,9 +84,9 @@ func TestCareOnlyEditKeepsCappedPeak(t *testing.T) {
 	}
 }
 
-// 旧请求（没有 Originals）无法判断跨档是用户改的还是病程自己走的：只改处理方式，
-// 不能顺手把刚从「有点不舒服」升到「难受」的病程又按旧档位压回去。
-func TestLegacyCareOnlyDoesNotChangeSeverityAcrossBand(t *testing.T) {
+// 旧请求（没有 Originals）整表提交、且严重度与当前档位对不上时，无法判断跨档
+// 是用户改的还是病程自己走的：明确提示刷新，不能静默成功。
+func TestLegacyFullFormAcrossBandAsksRefresh(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	now := time.Now()
 	id := seedCondition(t, p, now) // 表单此刻会显示「有点不舒服」
@@ -102,15 +104,39 @@ func TestLegacyCareOnlyDoesNotChangeSeverityAcrossBand(t *testing.T) {
 
 	if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
 		"severity": sevMild.ZH(), "care": careMeds,
-	})); err != nil {
-		t.Fatalf("只改处理方式 = %v", err)
+	})); err == nil {
+		t.Fatal("跨档后的旧整表请求应提示刷新，而不是静默成功")
 	}
 	after, _ := store.Current(now)
 	if after.Active[0].Severity < 40 {
-		t.Errorf("旧表单把病程压回去了：%d", after.Active[0].Severity)
+		t.Errorf("被拒绝的请求不该改动病程：%d", after.Active[0].Severity)
 	}
-	if after.Active[0].Cond.Care != careMeds {
-		t.Errorf("处理方式没改到：%q", after.Active[0].Cond.Care)
+	if after.Active[0].Cond.Care != careTough {
+		t.Errorf("被拒绝的请求不该改处理方式：%q", after.Active[0].Cond.Care)
+	}
+}
+
+// 旧客户端只提交严重度（不带 Originals）时意图明确：直接按它调档，
+// 不能返回成功却不保存。
+func TestLegacySeverityOnlyIsApplied(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	now := time.Now()
+	id := seedCondition(t, p, now)
+
+	if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
+		"severity": sevSevere.ZH(),
+	})); err != nil {
+		t.Fatalf("只改严重度 = %v", err)
+	}
+	snap, err := p.storeFor("").Current(now)
+	if err != nil || len(snap.Active) != 1 {
+		t.Fatalf("Current = %+v / %v", snap, err)
+	}
+	if snap.Active[0].Cond.Peak <= 55 {
+		t.Errorf("严重度没有保存：peak = %d", snap.Active[0].Cond.Peak)
+	}
+	if snap.Active[0].Cond.Care != careTough {
+		t.Errorf("只改严重度不该动处理方式：%q", snap.Active[0].Cond.Care)
 	}
 }
 
@@ -211,6 +237,52 @@ func TestRecoverDropsPendingCue(t *testing.T) {
 	if got := cue.Take(now); len(got) != 0 {
 		t.Fatalf("痊愈后仍有发作提醒：%+v", got)
 	}
+}
+
+// 旧客户端把没填的字段以空串一起带上时，空值与省略等价，不能挡掉另一个有效字段。
+func TestLegacyEmptyFieldsBehaveLikeOmitted(t *testing.T) {
+	t.Run("空处理方式不挡严重度", func(t *testing.T) {
+		p := newTestPlugin(t, nil)
+		now := time.Now()
+		id := seedCondition(t, p, now)
+		if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
+			"severity": sevSevere.ZH(), "care": "",
+		})); err != nil {
+			t.Fatalf("空处理方式不该阻断严重度修改 = %v", err)
+		}
+		snap, err := p.storeFor("").Current(now)
+		if err != nil || len(snap.Active) != 1 {
+			t.Fatalf("Current = %+v / %v", snap, err)
+		}
+		if snap.Active[0].Cond.Peak <= 55 {
+			t.Errorf("严重度没有保存：peak = %d", snap.Active[0].Cond.Peak)
+		}
+		if snap.Active[0].Cond.Care != careTough {
+			t.Errorf("空处理方式不该改动现有处理方式：%q", snap.Active[0].Cond.Care)
+		}
+	})
+	t.Run("空严重度不挡处理方式", func(t *testing.T) {
+		p := newTestPlugin(t, nil)
+		now := time.Now()
+		id := seedCondition(t, p, now)
+		before, _ := p.storeFor("").Current(now)
+		peak := before.Active[0].Cond.Peak
+		if err := p.EditState(healthEditReq(stateOpEdit, id, map[string]string{
+			"severity": "", "care": careMeds,
+		})); err != nil {
+			t.Fatalf("空严重度不该阻断处理方式修改 = %v", err)
+		}
+		snap, err := p.storeFor("").Current(now)
+		if err != nil || len(snap.Active) != 1 {
+			t.Fatalf("Current = %+v / %v", snap, err)
+		}
+		if snap.Active[0].Cond.Care != careMeds {
+			t.Errorf("处理方式没改到：%q", snap.Active[0].Cond.Care)
+		}
+		if snap.Active[0].Cond.Peak != peak {
+			t.Errorf("空严重度不该改峰值：%d → %d", peak, snap.Active[0].Cond.Peak)
+		}
+	})
 }
 
 // 表单档位与病程注入用同一套 35/65 分档。

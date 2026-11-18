@@ -116,6 +116,13 @@ func modelOptionsOf(o Options) ModelOptions {
 	}
 }
 
+// unlockTurn 释放会话轮次锁，并在真正解锁之后通知插件。顺序不能反：OnTurnEnd
+// 在锁内执行，依赖「会话已空」立刻重试的后台工作要等这里。
+func (a *Agent) unlockTurn(ctx context.Context, l *sync.Mutex, sessionID string) {
+	l.Unlock()
+	a.plugins.NotifySessionIdle(ctx, sessionID)
+}
+
 // turnLock 返回该会话的轮次锁（惰性创建）。
 func (a *Agent) turnLock(sessionID string) *sync.Mutex {
 	a.lockMu.Lock()
@@ -226,7 +233,7 @@ const titleMaxRunes = 30
 func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(Event)) {
 	l := a.turnLock(sessionID)
 	l.Lock()
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	if _, err := a.run(ctx, sessionID, userInput, nil, nil, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
@@ -239,7 +246,7 @@ func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(
 func (a *Agent) RunWithImages(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, emit func(Event)) {
 	l := a.turnLock(sessionID)
 	l.Lock()
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	if _, err := a.run(ctx, sessionID, userInput, images, nil, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
@@ -255,7 +262,7 @@ func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, e
 	if !l.TryLock() {
 		return "", plugin.ErrSessionBusy
 	}
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	return a.run(ctx, sessionID, input, nil, nil, func(Event) {})
 }
 
@@ -266,7 +273,7 @@ func (a *Agent) RunTurnWithImages(ctx context.Context, sessionID, input string, 
 	if !l.TryLock() {
 		return "", plugin.ErrSessionBusy
 	}
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	return a.run(ctx, sessionID, input, images, nil, func(Event) {})
 }
 
@@ -277,7 +284,7 @@ func (a *Agent) RunTurnWithMedia(ctx context.Context, sessionID, input string, i
 	if !l.TryLock() {
 		return "", plugin.ErrSessionBusy
 	}
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	return a.run(ctx, sessionID, input, images, files, func(Event) {})
 }
 

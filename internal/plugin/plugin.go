@@ -80,6 +80,10 @@ type InitContext struct {
 	// 由 BackgroundWorker.RunBackground 或 TurnSettler.Settle 显式驱动。
 	// 为真时 Clock 必定非 nil。
 	ManualTime bool
+	// Reload 为真表示这是运行中保存配置触发的热重载：插件一直处于启用状态，
+	// 停用期间不会发生的状态变化（如会话人格切换）可以认为不存在，可保留运行期
+	// 缓存。为假表示首次启用或停用后重新启用，运行期缓存必须重新确认。
+	Reload bool
 	// Embed 把一批文本变成向量，供插件做语义检索。服务由用户在设置页显式启用，
 	// 默认关闭：未启用时返回 ErrEmbedUnavailable，插件应静默降级到不用向量的做法。
 	// 配置可以在运行中被改掉，所以它始终非 nil，是否可用要看返回值。

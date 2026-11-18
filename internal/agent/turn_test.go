@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -166,8 +167,12 @@ func TestEphemeralInput(t *testing.T) {
 	}
 }
 
-// observerPlugin 记录收到的轮次结束事件。
-type observerPlugin struct{ evs []plugin.TurnEndEvent }
+// observerPlugin 记录收到的轮次结束事件与解锁通知。
+type observerPlugin struct {
+	evs    []plugin.TurnEndEvent
+	idle   []string
+	onIdle func(sessionID string)
+}
 
 func (o *observerPlugin) Name() string                                  { return "observer_plugin" }
 func (o *observerPlugin) Description() string                           { return "测试轮次观察" }
@@ -176,6 +181,38 @@ func (o *observerPlugin) SystemPrompt() string                          { return
 func (o *observerPlugin) Tools() []plugin.Tool                          { return nil }
 func (o *observerPlugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	o.evs = append(o.evs, ev)
+}
+func (o *observerPlugin) OnSessionIdle(_ context.Context, sessionID string) {
+	o.idle = append(o.idle, sessionID)
+	if o.onIdle != nil {
+		o.onIdle(sessionID)
+	}
+}
+
+// 解锁通知必须在轮次锁真正释放之后到达：在回调里立刻发起后台轮次应当成功。
+func TestSessionIdleBroadcastAfterUnlock(t *testing.T) {
+	store, id := newTestSession(t)
+	ob := &observerPlugin{}
+	var retried atomic.Bool
+	var retryOK atomic.Bool
+	var ag *Agent
+	ob.onIdle = func(sessionID string) {
+		if sessionID != id || !retried.CompareAndSwap(false, true) {
+			return
+		}
+		_, err := ag.RunTurn(context.Background(), id, "空闲后重试")
+		retryOK.Store(err == nil)
+	}
+	mp := &mockProvider{turns: []mockTurn{{content: "一"}, {content: "二"}}}
+	ag = New(mp, newTestManager(t, ob), store, Options{Model: "m"})
+
+	ag.Run(context.Background(), id, "你好", func(Event) {})
+	if len(ob.idle) == 0 || ob.idle[0] != id {
+		t.Fatalf("应广播解锁通知：%+v", ob.idle)
+	}
+	if !retryOK.Load() {
+		t.Fatal("解锁通知里发起的后台轮次仍撞忙：通知早于 Unlock")
+	}
 }
 
 // 轮次成功结束后广播 TurnEndEvent，字段与本轮一致。

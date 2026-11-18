@@ -219,7 +219,7 @@ People catch a chill now and then, get headaches, eat something bad; a character
 | `max_conditions` | 2 | The most conditions tracked at once (1-3) |
 | `max_severity` | Miserable | The severity ceiling: a little under the weather / miserable / laid up. Anything the model reports above it is clamped and the model is told |
 
-- **Character state page**: conditions still running their course and how they are being handled; severity and care can be changed or the condition marked recovered there.
+- **Character state page**: conditions still running their course and how they are being handled; severity and care can be changed or the condition marked recovered there. A legacy client that submits severity alone is taken at its word; a full-form submission whose severity no longer matches the current band cannot be told apart from the course itself having crossed a band, so the page is asked to refresh.
 
 ## Presence (presence plugin)
 

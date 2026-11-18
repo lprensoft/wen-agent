@@ -9,6 +9,7 @@ import (
 	"wen/internal/i18n"
 
 	"wen/internal/availability"
+	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/plugin"
 	"wen/internal/prompt"
@@ -126,11 +127,27 @@ func (p *Plugin) nextBeatAt(now time.Time) (next time.Time, busySeen bool, busyU
 	next = p.lastBeat.Add(p.cur)
 	// 只让「这一轮读得到」的理由把下一拍提前：别的人格域的提醒留在公告板上，
 	// 不该把表人格的心跳反复叫醒却每次都拿不到东西。
-	if p.dynamic {
-		sc := p.cueScopeSnapshot()
+	// 先看公告板再问目标会话：没有待发理由时下一拍与可见域无关，不必为此扫描
+	// 全部会话文件（状态页刷新、循环每次重算都会走到这里）。
+	if p.dynamic && cue.Pending(now) {
+		id, sc := p.pullTarget()
 		if cue.PendingFor(now, func(c cue.Cue) bool { return sc.CanRead(c.Domain) }) {
 			if c := p.lastBeat.Add(p.minIv); c.Before(next) {
 				next = c
+			}
+			// 会话忙跳过的临期提醒按重试时刻来：它可能早于常规间隔，也可能晚于
+			// 「已经到期」的此刻——后者正是为了不在会话还锁着时打转。退避只属于
+			// 撞忙的那个会话：目标已经换人时，旧会话的退避不能拖住新目标。
+			//
+			// 原始退避截止时间保持不变，只在计算时与当前配置的最快间隔取较晚者：
+			// 最快间隔临时调大再调回后，重试能回到原来的短截止时间，而不是被
+			// 永久改写成调大期间的那个时刻。
+			if !p.beatRetryAt.IsZero() && p.beatRetrySession == id {
+				retry := p.beatRetryAt
+				if bound := p.lastBeat.Add(p.minIv); bound.After(retry) {
+					retry = bound
+				}
+				next = retry
 			}
 		}
 	}
@@ -181,6 +198,11 @@ func minTime(a, b time.Time) time.Time {
 // 只前推不回拨：事件时间戳缺失或落后于已记录的起点时保持原值，避免把倒计时拨回过去
 // 反而立刻触发一次心跳。调用方需持有 p.mu。
 func (p *Plugin) resetClockLocked(at time.Time) {
+	// 倒计时被重设（模型调间隔、真人开口）后，此前为某次撞忙安排的等待就失效了：
+	// 再按旧重试时刻走会盖掉刚定下的新节奏。代数每次都加：轮次结束通知可能晚到，
+	// 带的时刻早于本次尝试，时间戳不前进也仍是一次新的重设。
+	p.clockGen++
+	p.beatRetryAt, p.beatRetrySession = time.Time{}, ""
 	if at.IsZero() {
 		at = p.nowTime()
 	}
@@ -218,19 +240,27 @@ func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 		p.resumeDecayAfterPauseLocked(now)
 	}
 	p.lastBeat = now
+	p.beatRetryAt, p.beatRetrySession = time.Time{}, ""
+	attemptGen := p.clockGen
 	runTurn, beatPrompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
-	lang := p.lang
+	lang, dynamic := p.lang, p.dynamic
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
 	// 记下这次心跳发生的时刻——重启后就是靠它推算下一次的
-	persistState(dir, st)
+	p.commitState(dir, st)
 
 	sid, lastActive, err := p.pickSession()
 	if err != nil {
 		i18n.Logf(p.langOf(), "log.heartbeat.no_session", "heartbeat: 找不到可用会话，本次心跳跳过: %v", err)
 		return nil
 	}
+	// 在尝试拿会话锁之前记下解锁代数：持有者可能在 TryLock 判忙之后、结果回到
+	// 这里之前就结束，届时 OnSessionIdle 找不到还没登记的重试。代数变了就说明
+	// 解锁已经发生过，应立刻再试而不是等满退避。
+	p.mu.Lock()
+	idleBefore := p.idleGenLocked(sid)
+	p.mu.Unlock()
 	tctx, cancel := context.WithTimeout(ctx, beatTimeout)
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
@@ -250,6 +280,29 @@ func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 		}
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			i18n.Logf(p.langOf(), "log.heartbeat.session_busy", "heartbeat: 会话 %s 忙，本次心跳跳过", sid)
+			// 这个会话读得到的理由还在等时，不能把 lastBeat 留在现在：下一拍会被
+			// 推到最快间隔之后，临期提醒等不到那时。回滚起点并安排一次短重试；
+			// 会话锁真正释放后会清掉重试，让它立刻再试。
+			if dynamic && p.sessionCuePending(sid, now) {
+				p.mu.Lock()
+				// 只有这次尝试仍对应当前倒计时时才回滚并登记重试：期间倒计时可能
+				// 已被模型重设（或真人开口），旧尝试不能把自己的退避写回去。
+				// 代数比时间戳可靠：延迟到达的结束通知不会前移 lastBeat，但同样是
+				// 一次新的重设。
+				if p.clockGen == attemptGen && p.lastBeat.Equal(now) {
+					p.lastBeat = prevBeat
+					p.beatRetryAt = now.Add(busyRetryDelay)
+					p.beatRetrySession = sid
+					if p.idleGenLocked(sid) != idleBefore {
+						p.beatRetryAt = now // 解锁通知已经来过：立刻再试
+					}
+					// 开跑前已经按 now 落过盘；回滚后的起点才是真正的调度起点。
+					// 快照在锁内取、按序号提交，别的路径先取的旧快照不会反过来
+					// 覆盖这一份。
+					p.commitState(p.snapshotStateLocked())
+				}
+				p.mu.Unlock()
+			}
 		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
 			i18n.Logf(p.langOf(), "log.heartbeat.turn_failed", "heartbeat: 心跳轮次失败: %v", err)
 		}
@@ -385,7 +438,7 @@ func (p *Plugin) maybeDecay() {
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
-	persistState(dir, st)
+	p.commitState(dir, st)
 	i18n.Logf(p.langOf(), "log.heartbeat.decayed", "heartbeat: 无人聊天，心跳放缓至 %v", next)
 }
 
@@ -440,7 +493,7 @@ func (p *Plugin) maybeDecayAt(now time.Time) {
 
 	// 写盘放在锁外：持锁写会自锁，而为了绕开自锁另起 goroutine
 	// 就会让这次写脱离循环的生命周期（Stop 等不到它）
-	persistState(dir, st)
+	p.commitState(dir, st)
 	i18n.Logf(p.langOf(), "log.heartbeat.decayed", "heartbeat: 无人聊天，心跳放缓至 %v", next)
 }
 
@@ -452,7 +505,12 @@ func (p *Plugin) maybeDecayAt(now time.Time) {
 // 在真人开口的那一刻就过时了，机械恢复到基础间隔；仍然忙的话模型看得到对话，会
 // 再设一次——那正是它实测中最可靠触发的场景。比基础值快的设定保留：热聊中调快
 // 的节奏不该被一条新消息打回去。往快超过常态是带社交判断的决定，仍归模型。
-func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
+func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
+	// 真人轮次结束时的可见域就是下一拍要落的那一域——人格可能在上一拍之后切过。
+	// 放在 Origin 判断之前：远程 IM 的真人轮次同样会切换人格，同样要刷新。
+	if ev.Interactive {
+		p.observeCueScope(ev.SessionID, plugin.ScopeFrom(ctx), clock.Now(ctx))
+	}
 	if ev.Origin != "" || !ev.Interactive {
 		return
 	}
@@ -490,6 +548,6 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	}
 	p.mu.Unlock()
 	if persist {
-		persistState(dir, st)
+		p.commitState(dir, st)
 	}
 }

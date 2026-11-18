@@ -340,48 +340,48 @@ func (s *Store) Touch(name string, now time.Time) (bool, error) {
 	return true, nil
 }
 
-// GetByID 按条目身份精确查找。状态页凭据用它：标题与文件名都可能被复用，
-// 只有新建时生成的 ID 能区分「删掉旧条目后新建的那一条」。
-func (s *Store) GetByID(id string) (Entry, error) {
+// GetByRef 按状态页凭据精确查找。凭据同时绑定文件名与条目身份：条目身份可能
+// 因文件复制而重复（两份文件保留同一个 frontmatter ID），文件名才区分落盘条目。
+func (s *Store) GetByRef(ref string) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	if e, ok := findByID(entries, id); ok {
+	if e, ok := findByRef(entries, ref); ok {
 		return e, nil
 	}
 	return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 }
 
-// UpdateIndexFields 按条目身份精确匹配，只改传了的字段（nil 表示没改）。
+// UpdateIndexFields 按状态页凭据精确匹配，只改传了的字段（nil 表示没改）。
 //
 // 两个窗口分别改摘要和分类时，各自只提交自己动过的那一项；读、合并、写都在
 // 同一把锁内完成，不会用另一份过期快照把对方刚写的字段盖回去。
-func (s *Store) UpdateIndexFields(id string, description, typ *string, now time.Time) (Entry, error) {
+func (s *Store) UpdateIndexFields(ref string, description, typ *string, now time.Time) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	e, ok := findByID(entries, id)
+	e, ok := findByRef(entries, ref)
 	if !ok {
 		return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 	}
 	return s.updateIndexLocked(e, description, typ, now)
 }
 
-// DeleteByID 按条目身份精确匹配删除。
-func (s *Store) DeleteByID(id string) (Entry, error) {
+// DeleteByRef 按状态页凭据精确匹配删除。
+func (s *Store) DeleteByRef(ref string) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
 	if err != nil {
 		return Entry{}, err
 	}
-	e, ok := findByID(entries, id)
+	e, ok := findByRef(entries, ref)
 	if !ok {
 		return Entry{}, fmt.Errorf("%s", prompt.T(s.lang, "prompt.memory.err.not_found", "没有要找的记忆"))
 	}
@@ -409,9 +409,23 @@ func entryID(e Entry) string {
 	return "legacy:" + e.Slug + ":" + created.UTC().Format(time.RFC3339Nano)
 }
 
-func findByID(entries []Entry, id string) (Entry, bool) {
+// entryRef 是状态页行凭据：文件名与条目身份一起绑定。
+//
+// 只带 ID 不够：用户复制记忆文件、只改副本标题时，两份文件会保留同一个 ID。
+// NUL 不可能出现在文件名里，用作分隔符；解析按第一个 NUL 切开。
+func entryRef(e Entry) string {
+	return e.Slug + "\x00" + entryID(e)
+}
+
+// findByRef 要求文件名与条目身份都相符。复制出来的副本即使带着同一个 ID，
+// 也不会被另一行的凭据命中。
+func findByRef(entries []Entry, ref string) (Entry, bool) {
+	slug, id, ok := strings.Cut(ref, "\x00")
+	if !ok || id == "" {
+		return Entry{}, false
+	}
 	for _, e := range entries {
-		if entryID(e) == id {
+		if e.Slug == slug && entryID(e) == id {
 			return e, true
 		}
 	}
