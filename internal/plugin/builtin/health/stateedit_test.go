@@ -46,6 +46,40 @@ func TestEditConditionFromState(t *testing.T) {
 	}
 }
 
+// 峰值被「严重度上限」截在规范值之间时，只改处理方式不能把它改回按档位反推的值。
+func TestCareOnlyEditKeepsCappedPeak(t *testing.T) {
+	p := newTestPlugin(t, nil) // 默认封顶在「难受」档
+	now := time.Now()
+	store := p.storeFor("")
+	if _, err := store.Add("重感冒", sevSevere.ZH(), now, 3, careTough, now, p.snapshot().limits()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := store.Current(now)
+	if err != nil || len(snap.Active) != 1 {
+		t.Fatalf("Current = %+v / %v", snap, err)
+	}
+	cond := snap.Active[0].Cond
+	if cond.Peak >= 70 {
+		t.Fatalf("封顶没有生效：peak = %d", cond.Peak)
+	}
+
+	if err := p.EditState(healthEditReq(stateOpEdit, cond.ID, map[string]string{
+		"severity": severityWord(cond.Peak), "care": careMeds,
+	})); err != nil {
+		t.Fatalf("只改处理方式 = %v", err)
+	}
+	snap, err = store.Current(now)
+	if err != nil || len(snap.Active) != 1 {
+		t.Fatalf("Current = %+v / %v", snap, err)
+	}
+	if snap.Active[0].Cond.Peak != cond.Peak {
+		t.Errorf("峰值被顺手改掉了：%d → %d", cond.Peak, snap.Active[0].Cond.Peak)
+	}
+	if snap.Active[0].Cond.Care != careMeds {
+		t.Errorf("处理方式没有改到：%q", snap.Active[0].Cond.Care)
+	}
+}
+
 func TestRecoverConditionFromState(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	now := time.Now()

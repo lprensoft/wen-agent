@@ -52,7 +52,14 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 		if !ok {
 			return errors.New(i18n.T(req.Lang, "plugin.health.state.err.bad_care", "处理方式不在给定的几档里。"))
 		}
-		if _, _, err := store.Apply(cond.Name, Update{Severity: &sev, Care: &care}, now, s.limits()); err != nil {
+		u := Update{Care: &care}
+		// 峰值可能被「严重度上限」截在规范值之间（例如严重被截成 65）。表单里
+		// 显示的是按档位反推的词；只改处理方式时不要把这个词再发回去，否则一次
+		// 无关的修正会把 65 改回 55。
+		if sev != severityWord(cond.Peak) {
+			u.Severity = &sev
+		}
+		if _, _, err := store.Apply(cond.Name, u, now, s.limits()); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
 		return nil

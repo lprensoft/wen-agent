@@ -31,6 +31,14 @@ func TestSetMoodFromState(t *testing.T) {
 		t.Fatalf("落盘 = %+v", st)
 	}
 
+	// 设成 0 且没有起因等于回到「没有记录」。
+	if err := p.EditState(moodEditReq(stateOpSet, map[string]string{"value": "0", "reason": ""})); err != nil {
+		t.Fatalf("设成平静 = %v", err)
+	}
+	if _, ok, _ := p.storeFor("").Current(p.snapshot().decayPerHour, time.Now()); ok {
+		t.Error("零值且无起因后不该还有记录")
+	}
+
 	if err := p.EditState(moodEditReq(stateOpReset, nil)); err != nil {
 		t.Fatalf("重置 = %v", err)
 	}
