@@ -410,11 +410,12 @@ func (s *Server) pluginActionState(w http.ResponseWriter, r *http.Request) {
 // 插件返回的错误因此是看得到的语言。
 func (s *Server) editPluginState(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Domain  string            `json:"domain"`
-		Section string            `json:"section"`
-		Row     string            `json:"row"`
-		Op      string            `json:"op"`
-		Values  map[string]string `json:"values"`
+		Domain    string            `json:"domain"`
+		Section   string            `json:"section"`
+		Row       string            `json:"row"`
+		Op        string            `json:"op"`
+		Values    map[string]string `json:"values"`
+		Originals map[string]string `json:"originals"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, plugin.MaxStateEditBodyBytes))
 	if err := dec.Decode(&req); err != nil {
@@ -431,9 +432,18 @@ func (s *Server) editPluginState(w http.ResponseWriter, r *http.Request) {
 	)
 	bad := len(req.Domain) > maxDomain || len(req.Section) > maxSection ||
 		len(req.Row) > maxRow || len(req.Op) > maxOp ||
-		!plugin.ValidDomainTag(req.Domain) || len(req.Values) > plugin.MaxStateEditValues
+		!plugin.ValidDomainTag(req.Domain) || len(req.Values) > plugin.MaxStateEditValues ||
+		len(req.Originals) > plugin.MaxStateEditValues
 	if !bad {
 		for _, v := range req.Values {
+			if len(v) > maxValue {
+				bad = true
+				break
+			}
+		}
+	}
+	if !bad {
+		for _, v := range req.Originals {
 			if len(v) > maxValue {
 				bad = true
 				break
@@ -445,12 +455,13 @@ func (s *Server) editPluginState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.plugins.EditState(r.PathValue("name"), plugin.StateEditRequest{
-		Lang:    reqLang(r),
-		Domain:  req.Domain,
-		Section: req.Section,
-		Row:     req.Row,
-		Op:      req.Op,
-		Values:  req.Values,
+		Lang:      reqLang(r),
+		Domain:    req.Domain,
+		Section:   req.Section,
+		Row:       req.Row,
+		Op:        req.Op,
+		Values:    req.Values,
+		Originals: req.Originals,
 	}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

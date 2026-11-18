@@ -91,7 +91,7 @@ func healthEdits(lang string, v View) []plugin.StateEdit {
 			Fields: []plugin.StateField{
 				{
 					Key: "severity", Label: i18n.T(lang, "plugin.health.state.field.severity", "严重度"),
-					Type: plugin.StateFieldSelect, Value: severityWord(v.Cond.Peak), Options: severityOptions(lang),
+					Type: plugin.StateFieldSelect, Value: viewSeverityWord(v), Options: severityOptions(lang),
 				},
 				{
 					Key: "care", Label: i18n.T(lang, "plugin.health.state.field.care", "处理方式"),
@@ -116,6 +116,18 @@ func severityWord(peak int) string {
 		return sevModerate.ZH()
 	}
 	return sevMild.ZH()
+}
+
+// viewSeverityWord 是表单里该回显的档位：已发作的状况按**此刻**的严重度，
+// 还没发作的按预计峰值（此刻还没有严重度可言）。
+//
+// 降档只把进度拨到新档、不改历史峰值，所以已发作的状况不能再从 Peak 反推，
+// 否则用户刚调到「有点不舒服」，重新打开表单又看到「难受」。
+func viewSeverityWord(v View) string {
+	if v.Phase == phasePending {
+		return severityWord(v.Cond.Peak)
+	}
+	return severityWord(v.Severity)
 }
 
 func severityOptions(lang string) []plugin.StateOption {

@@ -89,21 +89,21 @@ func (p *Plugin) editPerson(req plugin.StateEditRequest, store *Store) error {
 	}
 
 	u := Update{Name: ps[i].Name}
-	if raw, ok := req.Values["relation"]; ok {
+	if raw, ok := req.Values["relation"]; ok && req.Touched("relation") {
 		v := collapseSpace(raw)
 		if err := checkText(req.Lang, v, maxRelationRunes, true); err != nil {
 			return err
 		}
 		u.Relation = &v
 	}
-	if raw, ok := req.Values["profile"]; ok {
+	if raw, ok := req.Values["profile"]; ok && req.Touched("profile") {
 		v := strings.TrimSpace(raw)
 		if err := checkText(req.Lang, v, maxProfileRunes, false); err != nil {
 			return err
 		}
 		u.Profile = &v
 	}
-	if raw, ok := req.Values["closeness"]; ok {
+	if raw, ok := req.Values["closeness"]; ok && req.Touched("closeness") {
 		v, err := closenessValue(req.Lang, raw)
 		if err != nil {
 			return err
@@ -112,12 +112,16 @@ func (p *Plugin) editPerson(req plugin.StateEditRequest, store *Store) error {
 			u.Closeness = &v
 		}
 	}
-	if raw, ok := req.Values["lately"]; ok {
+	if raw, ok := req.Values["lately"]; ok && req.Touched("lately") {
 		v := collapseSpace(raw)
 		if err := checkText(req.Lang, v, maxLatelyRunes, false); err != nil {
 			return err
 		}
-		u.Lately = &v
+		// 与现值相同就不提交：Upsert 会把同一句话再传一次当成「刚听说」，
+		// 把过期的近况重新刷成新的。
+		if v != ps[i].Lately {
+			u.Lately = &v
+		}
 	}
 	if _, err := store.Upsert(u, time.Now(), Limits{MaxPeople: p.snapshot().maxPeople}); err != nil {
 		return p.stateFailed(req.Lang, err)

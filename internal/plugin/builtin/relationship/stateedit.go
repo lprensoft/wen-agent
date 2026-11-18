@@ -36,28 +36,28 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	}
 
 	u := Update{}
-	if raw, ok := req.Values["stage"]; ok {
+	if raw, ok := req.Values["stage"]; ok && req.Touched("stage") {
 		v, err := relText(req.Lang, raw, maxStageRunes)
 		if err != nil {
 			return err
 		}
 		u.Stage = &v
 	}
-	if raw, ok := req.Values["my_call"]; ok {
+	if raw, ok := req.Values["my_call"]; ok && req.Touched("my_call") {
 		v, err := relText(req.Lang, raw, maxCallRunes)
 		if err != nil {
 			return err
 		}
 		u.MyCall = &v
 	}
-	if raw, ok := req.Values["their_call"]; ok {
+	if raw, ok := req.Values["their_call"]; ok && req.Touched("their_call") {
 		v, err := relText(req.Lang, raw, maxCallRunes)
 		if err != nil {
 			return err
 		}
 		u.TheirCall = &v
 	}
-	if raw, ok := req.Values["recent"]; ok {
+	if raw, ok := req.Values["recent"]; ok && req.Touched("recent") {
 		v, err := relText(req.Lang, raw, maxRecentRunes)
 		if err != nil {
 			return err
@@ -68,14 +68,14 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 			u.Recent = &v
 		}
 	}
-	if raw, ok := req.Values["their_now"]; ok {
+	if raw, ok := req.Values["their_now"]; ok && req.Touched("their_now") {
 		v, err := relText(req.Lang, raw, maxTheirNowRunes)
 		if err != nil {
 			return err
 		}
 		u.TheirNow = &v
 	}
-	if raw, ok := req.Values["bonds"]; ok {
+	if raw, ok := req.Values["bonds"]; ok && req.Touched("bonds") {
 		bonds, err := relBonds(req.Lang, raw)
 		if err != nil {
 			return err

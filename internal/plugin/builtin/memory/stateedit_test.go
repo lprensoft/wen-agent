@@ -2,6 +2,7 @@ package memory
 
 import (
 	"testing"
+	"time"
 
 	"wen/internal/plugin"
 )
@@ -45,6 +46,86 @@ func TestEditIndexKeepsBodyAndDecay(t *testing.T) {
 	}
 	if !after.LastUsed.Equal(before.LastUsed) {
 		t.Errorf("LastUsed 被改动了：%v → %v", before.LastUsed, after.LastUsed)
+	}
+}
+
+// 标题里带「分类/」前缀时，状态页的操作必须按落盘标识精确命中，不能被
+// findEntry 剥前缀后指向另一条同名尾巴的记忆。
+func TestIndexEditTargetsExactSlug(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "事实/搬家", Description: "旧摘要", Type: "事实"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Save(Entry{Name: "搬家", Description: "另一条", Type: "事实"}, false); err != nil {
+		t.Fatal(err)
+	}
+	secs := p.State(plugin.StateQuery{Lang: "zh"})
+	if len(secs) != 1 || len(secs[0].Rows) != 2 {
+		t.Fatalf("State = %+v", secs)
+	}
+	ids := map[string]string{}
+	for _, r := range secs[0].Rows {
+		ids[r.Value] = r.ID
+	}
+	if ids["事实/搬家"] == "" || ids["搬家"] == "" || ids["事实/搬家"] == ids["搬家"] {
+		t.Fatalf("行身份不对：%+v", ids)
+	}
+
+	if err := p.EditState(editReq(stateOpEdit, stateSectionIndex, ids["事实/搬家"],
+		map[string]string{"description": "新摘要", "type": "事实"})); err != nil {
+		t.Fatalf("改索引 = %v", err)
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Entry{}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	if byName["事实/搬家"].Description != "新摘要" {
+		t.Errorf("目标条目没改到：%+v", byName["事实/搬家"])
+	}
+	if byName["搬家"].Description != "另一条" {
+		t.Errorf("另一条被顺手改了：%+v", byName["搬家"])
+	}
+
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, ids["事实/搬家"], nil)); err != nil {
+		t.Fatalf("删除 = %v", err)
+	}
+	entries, _ = store.List()
+	if len(entries) != 1 || entries[0].Name != "搬家" {
+		t.Fatalf("删除命中了错条目：%+v", entries)
+	}
+}
+
+// 只改分类时，摘要这一项原样带回不能覆盖后台刚写的新摘要。
+func TestUnchangedIndexFieldNotOverwritten(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "喜欢乌龙茶", Description: "旧摘要", Type: "偏好"}, false); err != nil {
+		t.Fatal(err)
+	}
+	// 后台（模型那一侧）在此期间改了摘要。
+	if _, err := store.UpdateIndex("喜欢乌龙茶", "后台写的摘要", "偏好", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := store.Get("喜欢乌龙茶")
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
+		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
+	}); err != nil {
+		t.Fatalf("只改分类 = %v", err)
+	}
+	got, _ := store.Get("喜欢乌龙茶")
+	if got.Description != "后台写的摘要" {
+		t.Errorf("旧表单覆盖了后台写入的摘要：%q", got.Description)
+	}
+	if got.Type != "事实" {
+		t.Errorf("分类没改到：%q", got.Type)
 	}
 }
 

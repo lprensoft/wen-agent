@@ -61,7 +61,7 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 
 	switch req.Op {
 	case stateOpSet:
-		return p.setMood(req, store)
+		return p.setMood(req, store, s)
 	case stateOpReset:
 		if err := store.Clear(); err != nil {
 			i18n.Logf(p.langOf(), "log.mood.state_edit_failed", "状态页修改心情失败：%v", err)
@@ -72,17 +72,32 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.unknown_op", "不认识的修改操作。"))
 }
 
-func (p *Plugin) setMood(req plugin.StateEditRequest, store *Store) error {
-	value, err := strconv.Atoi(strings.TrimSpace(req.Values["value"]))
-	if err != nil || value < moodMin || value > moodMax {
-		return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.bad_value", "心情要是 -100 到 100 的整数。"))
+func (p *Plugin) setMood(req plugin.StateEditRequest, store *Store, s settings) error {
+	if !req.Touched("value") && !req.Touched("reason") {
+		return nil
 	}
-	reason := strings.TrimSpace(req.Values["reason"])
-	if n := len([]rune(reason)); n > maxReasonRunes {
-		return errors.New(i18n.Tf(req.Lang, "plugin.mood.state.err.too_long",
-			"起因太长（%d 字，上限 %d 字）。", n, maxReasonRunes))
+	now := time.Now()
+	cur, _, err := store.Current(s.decayPerHour, now)
+	if err != nil {
+		i18n.Logf(p.langOf(), "log.mood.state_edit_failed", "状态页修改心情失败：%v", err)
+		return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.save_failed", "保存心情失败，请稍后重试。"))
 	}
-	if _, err := store.Set(value, reason, time.Now()); err != nil {
+	value := cur.Value
+	if req.Touched("value") {
+		value, err = strconv.Atoi(strings.TrimSpace(req.Values["value"]))
+		if err != nil || value < moodMin || value > moodMax {
+			return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.bad_value", "心情要是 -100 到 100 的整数。"))
+		}
+	}
+	reason := cur.Reason
+	if req.Touched("reason") {
+		reason = strings.TrimSpace(req.Values["reason"])
+		if n := len([]rune(reason)); n > maxReasonRunes {
+			return errors.New(i18n.Tf(req.Lang, "plugin.mood.state.err.too_long",
+				"起因太长（%d 字，上限 %d 字）。", n, maxReasonRunes))
+		}
+	}
+	if _, err := store.Set(value, reason, now); err != nil {
 		i18n.Logf(p.langOf(), "log.mood.state_edit_failed", "状态页修改心情失败：%v", err)
 		return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.save_failed", "保存心情失败，请稍后重试。"))
 	}

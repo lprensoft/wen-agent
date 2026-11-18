@@ -104,7 +104,7 @@ func TestEditPluginState(t *testing.T) {
 	}
 	s := &Server{plugins: m}
 
-	body := `{"domain":"","section":"people","row":"林舟","op":"edit","values":{"relation":"同事"}}`
+	body := `{"domain":"","section":"people","row":"林舟","op":"edit","values":{"relation":"同事"},"originals":{"relation":"同学"}}`
 	req := httptest.NewRequest("POST", "/api/plugins/people/state/edit?lang=en", strings.NewReader(body))
 	req.SetPathValue("name", "people")
 	rec := httptest.NewRecorder()
@@ -117,6 +117,9 @@ func TestEditPluginState(t *testing.T) {
 	}
 	if p.last.Values["relation"] != "同事" {
 		t.Fatalf("值没有原样交回：%+v", p.last.Values)
+	}
+	if p.last.Originals["relation"] != "同学" {
+		t.Fatalf("原始值没有原样交回：%+v", p.last.Originals)
 	}
 
 	// 记忆标题不截断，行身份可能超过几百字节；只要在请求体上限内就该放行。

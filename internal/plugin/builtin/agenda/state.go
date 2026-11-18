@@ -2,6 +2,7 @@ package agenda
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,7 +122,7 @@ func (p *Plugin) daySection(lang string, pl Plan, day time.Time, dayStartHour in
 			Value:  it.Title,
 			Detail: detail,
 			Tone:   tone,
-			ID:     it.ID,
+			ID:     planToken(pl, it.ID),
 			Edits:  dayEdits(lang, it),
 		})
 	}
@@ -241,6 +242,38 @@ func dayEdits(lang string, it Item) []plugin.StateEdit {
 			Danger:  true,
 		},
 	}
+}
+
+// planVersion 是这份表的创建身份。没有 PlannedAt 的老文件按 0 算，
+// 修订号仍然把之后的变化区分开。
+func planVersion(pl Plan) int64 {
+	if pl.PlannedAt.IsZero() {
+		return 0
+	}
+	return pl.PlannedAt.UnixNano()
+}
+
+// planToken 是状态页上一项的操作凭据：表的创建时刻 + 修订号 + 项序号。
+// 只带序号不够：重排或次日排表都会让 a1 重新出现，旧页面上的取消会落到新项上。
+func planToken(pl Plan, itemID string) string {
+	return strconv.FormatInt(planVersion(pl), 10) + "|" +
+		strconv.FormatInt(pl.Rev, 10) + "|" + itemID
+}
+
+func splitPlanToken(token string) (version, rev int64, itemID string, ok bool) {
+	parts := strings.SplitN(token, "|", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return 0, 0, "", false
+	}
+	version, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, "", false
+	}
+	rev, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, "", false
+	}
+	return version, rev, parts[2], true
 }
 
 // agendaStatusLabel 的键写成字面量，覆盖检查靠静态扫 (键, 中文) 这一对。

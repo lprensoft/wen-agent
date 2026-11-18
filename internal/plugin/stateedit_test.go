@@ -34,6 +34,30 @@ func stateEditRequest() StateEditRequest {
 }
 
 // 只有启用且实现了 StateEditor 的插件能收到修正；其余情况都拒绝。
+
+func TestStateEditTouched(t *testing.T) {
+	req := StateEditRequest{
+		Values:    map[string]string{"a": "new", "b": "same", "c": "only"},
+		Originals: map[string]string{"a": "old", "b": "same"},
+	}
+	if !req.Touched("a") {
+		t.Error("改了值应算 touched")
+	}
+	if req.Touched("b") {
+		t.Error("原样带回不算 touched")
+	}
+	if !req.Touched("c") {
+		t.Error("没有原始值的字段应算 touched（旧客户端）")
+	}
+	if req.Touched("missing") {
+		t.Error("没提交的字段不算 touched")
+	}
+	legacy := StateEditRequest{Values: map[string]string{"a": "any"}}
+	if !legacy.Touched("a") {
+		t.Error("没有 Originals 时应按 touched 处理")
+	}
+}
+
 func TestEditStateRouting(t *testing.T) {
 	m := NewManager(InitContext{Lang: "en"}, "")
 	ed := &editPlugin{fakePlugin: fakePlugin{name: "ed"}}

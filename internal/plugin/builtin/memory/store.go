@@ -332,6 +332,75 @@ func (s *Store) Touch(name string, now time.Time) (bool, error) {
 	return true, nil
 }
 
+// GetBySlug 按落盘文件名精确查找。状态页的操作凭据用它，不走按标题的
+// findEntry——那条路径会剥掉「分类/标题」前缀，标题本身带斜杠时会指错条目。
+func (s *Store) GetBySlug(slug string) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	if e, ok := findBySlug(entries, slug); ok {
+		return e, nil
+	}
+	return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+}
+
+// UpdateIndexBySlug 与 UpdateIndex 相同，但按落盘标识精确匹配。
+func (s *Store) UpdateIndexBySlug(slug, description, typ string, now time.Time) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	e, ok := findBySlug(entries, slug)
+	if !ok {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+	}
+	return s.updateIndexLocked(e, description, typ, now)
+}
+
+// DeleteBySlug 与 Delete 相同，但按落盘标识精确匹配。
+func (s *Store) DeleteBySlug(slug string) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	e, ok := findBySlug(entries, slug)
+	if !ok {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
+	}
+	p, err := s.path(e.Slug)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err := os.Remove(p); err != nil {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.delete", "删除记忆失败: %w"), err)
+	}
+	s.dirty = true
+	return e, nil
+}
+
+func findBySlug(entries []Entry, slug string) (Entry, bool) {
+	// 页面上的身份就是文件名的原样写法；先精确匹配，再容忍大小写
+	// （Windows 的文件名不区分大小写，手改过的库可能写成别的样式）。
+	for _, e := range entries {
+		if e.Slug == slug {
+			return e, true
+		}
+	}
+	for _, e := range entries {
+		if strings.EqualFold(e.Slug, slug) {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
 // UpdateIndex 改一条记忆的摘要与分类，不动正文、正文状态与「最后一次用到」。
 //
 // 不复用 SaveAt：那条路径会把 Blurred 清掉、把 LastUsed 刷成现在，一次索引修正
@@ -348,6 +417,11 @@ func (s *Store) UpdateIndex(name, description, typ string, now time.Time) (Entry
 	if !ok {
 		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
+	return s.updateIndexLocked(e, description, typ, now)
+}
+
+// updateIndexLocked 是 UpdateIndex / UpdateIndexBySlug 共用的写回。调用方需持有写锁。
+func (s *Store) updateIndexLocked(e Entry, description, typ string, now time.Time) (Entry, error) {
 	e.Description = truncateRunes(strings.TrimSpace(collapseSpace(description)), descMaxRunes)
 	if typ == "" {
 		typ = e.Type

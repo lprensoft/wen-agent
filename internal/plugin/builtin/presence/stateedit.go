@@ -39,16 +39,13 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	changes := make(map[string]string, len(fieldDefs))
 	for _, d := range fieldDefs {
 		raw, ok := req.Values[d.key]
-		if !ok {
+		if !ok || !req.Touched(d.key) {
 			continue
 		}
 		v := strings.TrimSpace(raw)
-		// 表单会把六项一起带回来；逐项与现值比，没变的不要提交——Apply 会给
-		// 提交的每一项刷上新的更新时间，一次无关的修正不该让整块现场看起来刚变过。
+		// 表单会把六项一起带回来；没改的字段不提交——后台在这期间写入的新值
+		// 不该被旧表单覆盖，Apply 也不该为此刷新这一项的更新时间。
 		if cur, ok := snap[d.key]; ok && cur.Text == v {
-			continue
-		}
-		if _, ok := snap[d.key]; !ok && v == "" {
 			continue
 		}
 		if n := len([]rune(v)); n > d.maxRunes {

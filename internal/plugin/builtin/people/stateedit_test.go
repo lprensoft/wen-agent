@@ -2,6 +2,7 @@ package people
 
 import (
 	"testing"
+	"time"
 
 	"wen/internal/plugin"
 )
@@ -31,6 +32,37 @@ func TestEditPersonUpdatesFields(t *testing.T) {
 	}
 	if ps[0].Relation != "同事" || ps[0].Closeness != "亲近" || ps[0].Lately != "在闹离职" {
 		t.Fatalf("改动没有落盘：%+v", ps[0])
+	}
+}
+
+// 只改关系/设定时，过期近况不能因为表单原样带回而被当作「刚听说」。
+func TestUnrelatedEditKeepsLatelyTime(t *testing.T) {
+	p := newTestPlugin(t)
+	old := stateNow().Add(-40 * 24 * time.Hour)
+	if _, err := p.storeFor("").Upsert(Update{
+		Name: "林舟", Relation: strPtr("大学同学"), Lately: strPtr("在闹离职"),
+	}, old, Limits{MaxPeople: 5}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := p.storeFor("").List()
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSection, Row: "林舟", Op: stateOpEdit,
+		Values: map[string]string{
+			"relation": "同事", "profile": "", "closeness": "熟", "lately": "在闹离职",
+		},
+		Originals: map[string]string{
+			"relation": "大学同学", "profile": "", "closeness": "熟", "lately": "在闹离职",
+		},
+	}); err != nil {
+		t.Fatalf("只改关系 = %v", err)
+	}
+	after, _ := p.storeFor("").List()
+	if after[0].Relation != "同事" {
+		t.Fatalf("关系没改到：%+v", after[0])
+	}
+	if !after[0].LatelyAt.Equal(before[0].LatelyAt) {
+		t.Errorf("没动的近况被刷新了：%v → %v", before[0].LatelyAt, after[0].LatelyAt)
 	}
 }
 

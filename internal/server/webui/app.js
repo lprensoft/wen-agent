@@ -1946,7 +1946,7 @@ async function runDirectStateEdit(payload) {
   if (stateEditSaving) return;
   stateEditSaving = true;
   try {
-    await submitStateEdit(payload, {});
+    await submitStateEdit(payload, {}, {});
   } catch (e) {
     showStatePageError(e.message);
   } finally {
@@ -2013,17 +2013,20 @@ function renderStateField(f) {
   if (f.max_len) input.maxLength = f.max_len;
   if (f.required) input.required = true;
   input.dataset.fieldKey = f.key;
+  // 打开表单时的值：提交时带回去，服务端据此只写用户真正改过的字段。
+  input.dataset.originalValue = f.value || "";
   wrap.append(input);
   return wrap;
 }
 
-async function submitStateEdit(payload, values) {
+async function submitStateEdit(payload, values, originals) {
   const body = {
     domain: payload.section.domain || "",
     section: payload.section.key || "",
     row: payload.row ? payload.row.id || "" : "",
     op: payload.edit.op || "",
     values: values || {},
+    originals: originals || {},
   };
   const res = await fetch(withLang(`/api/plugins/${encodeURIComponent(payload.pluginName)}/state/edit`), {
     method: "POST",
@@ -2045,13 +2048,15 @@ if (stateEditForm) {
     e.preventDefault();
     if (!stateEditPending || stateEditSaving) return;
     const values = {};
+    const originals = {};
     for (const el of stateEditForm.querySelectorAll("[data-field-key]")) {
       values[el.dataset.fieldKey] = el.value;
+      originals[el.dataset.fieldKey] = el.dataset.originalValue ?? "";
     }
     stateEditSaving = true;
     if (stateEditSaveBtn) stateEditSaveBtn.disabled = true;
     try {
-      await submitStateEdit(stateEditPending, values);
+      await submitStateEdit(stateEditPending, values, originals);
     } catch (err) {
       showStateEditError(t("settings.state.editFailed", { msg: err.message }));
     } finally {

@@ -3,6 +3,7 @@ package health
 import (
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"wen/internal/i18n"
@@ -44,20 +45,37 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 
 	switch req.Op {
 	case stateOpEdit:
-		sev, ok := severities.Canonical(req.Values["severity"])
-		if !ok {
-			return errors.New(i18n.T(req.Lang, "plugin.health.state.err.bad_severity", "严重度不在给定的几档里。"))
+		// 新界面会带回打开表单时的值，用户没动过的项一律不写。旧客户端（没有
+		// Originals）退回按峰值档位比较：只改处理方式时不要把它发回去。
+		sendSeverity := req.Touched("severity")
+		if req.Originals == nil {
+			sendSeverity = strings.TrimSpace(req.Values["severity"]) != "" &&
+				req.Values["severity"] != severityWord(cond.Peak)
 		}
-		care, ok := careKinds.Canonical(req.Values["care"])
-		if !ok {
-			return errors.New(i18n.T(req.Lang, "plugin.health.state.err.bad_care", "处理方式不在给定的几档里。"))
+		sendCare := req.Touched("care")
+		if req.Originals == nil {
+			sendCare = strings.TrimSpace(req.Values["care"]) != ""
 		}
-		u := Update{Care: &care}
-		// 峰值可能被「严重度上限」截在规范值之间（例如严重被截成 65）。表单里
-		// 显示的是按档位反推的词；只改处理方式时不要把这个词再发回去，否则一次
-		// 无关的修正会把 65 改回 55。
-		if sev != severityWord(cond.Peak) {
+
+		u := Update{}
+		if sendSeverity {
+			sev, ok := severities.Canonical(req.Values["severity"])
+			if !ok {
+				return errors.New(i18n.T(req.Lang, "plugin.health.state.err.bad_severity", "严重度不在给定的几档里。"))
+			}
 			u.Severity = &sev
+		}
+		if sendCare {
+			care, ok := careKinds.Canonical(req.Values["care"])
+			if !ok {
+				return errors.New(i18n.T(req.Lang, "plugin.health.state.err.bad_care", "处理方式不在给定的几档里。"))
+			}
+			if care != cond.Care {
+				u.Care = &care
+			}
+		}
+		if u.Severity == nil && u.Care == nil {
+			return nil
 		}
 		if _, _, err := store.Apply(cond.Name, u, now, s.limits()); err != nil {
 			return p.stateEditFailed(req.Lang, err)
@@ -67,6 +85,8 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 		if _, _, err := store.Apply(cond.Name, Update{Recovered: true}, now, s.limits()); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
+		// 已经入队、心跳还没领取的「到点发作了」随记录一起作废。
+		dropCue(req.Domain, cond.ID)
 		return nil
 	}
 	return errors.New(i18n.T(req.Lang, "plugin.health.state.err.unknown_op", "不认识的修改操作。"))

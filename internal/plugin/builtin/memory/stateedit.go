@@ -38,29 +38,36 @@ func (p *Plugin) editIndex(req plugin.StateEditRequest) error {
 	}
 	switch req.Op {
 	case stateOpEdit:
-		if _, err := store.Get(req.Row); err != nil {
+		cur, err := store.GetBySlug(req.Row)
+		if err != nil {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
 		}
-		desc := collapseSpace(req.Values["description"])
-		if n := len([]rune(desc)); n > descMaxRunes {
-			return errors.New(i18n.Tf(req.Lang, "plugin.memory.state.err.too_long",
-				"内容太长（%d 字，上限 %d 字）。", n, descMaxRunes))
-		}
-		typ := strings.TrimSpace(req.Values["type"])
-		if typ != "" {
-			if _, ok := memTypes.Canonical(typ); !ok {
-				return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.bad_type", "分类不在给定的几档里。"))
+		desc := cur.Description
+		if req.Touched("description") {
+			desc = collapseSpace(req.Values["description"])
+			if n := len([]rune(desc)); n > descMaxRunes {
+				return errors.New(i18n.Tf(req.Lang, "plugin.memory.state.err.too_long",
+					"内容太长（%d 字，上限 %d 字）。", n, descMaxRunes))
 			}
 		}
-		if _, err := store.UpdateIndex(req.Row, desc, typ, time.Now()); err != nil {
+		typ := cur.Type
+		if req.Touched("type") {
+			typ = strings.TrimSpace(req.Values["type"])
+			if typ != "" {
+				if _, ok := memTypes.Canonical(typ); !ok {
+					return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.bad_type", "分类不在给定的几档里。"))
+				}
+			}
+		}
+		if _, err := store.UpdateIndexBySlug(req.Row, desc, typ, time.Now()); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
 		return nil
 	case stateOpDelete:
-		if _, err := store.Get(req.Row); err != nil {
+		if _, err := store.GetBySlug(req.Row); err != nil {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
 		}
-		if _, err := store.Delete(req.Row); err != nil {
+		if _, err := store.DeleteBySlug(req.Row); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
 		return nil

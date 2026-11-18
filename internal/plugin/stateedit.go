@@ -30,6 +30,26 @@ type StateEditRequest struct {
 	Row     string
 	Op      string
 	Values  map[string]string
+	// Originals 是界面打开表单时各字段的值，用来判断用户到底改了哪一项。
+	//
+	// 表单会把所有控件一起提交；后台在这期间可能已经改了某个字段，把没动过的
+	// 旧值原样写回去就是一次静默覆盖。旧客户端不带 Originals，此时按「给了就算
+	// 改过」处理，行为与从前一致。
+	Originals map[string]string
+}
+
+// Touched 报告用户是否改过某个字段。字段没提交算没改；提交了但没有原始值
+// （旧客户端、操作型表单）算改过。
+func (r StateEditRequest) Touched(key string) bool {
+	v, ok := r.Values[key]
+	if !ok {
+		return false
+	}
+	o, ok := r.Originals[key]
+	if !ok {
+		return true
+	}
+	return v != o
 }
 
 // StateEdit 是状态页上可触发的一次修改。

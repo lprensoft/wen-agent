@@ -16,6 +16,7 @@ import (
 var (
 	errNoSuchItem   = errors.New("agenda item not found")
 	errItemTerminal = errors.New("agenda item is terminal")
+	errStalePlan    = errors.New("agenda plan changed since the page was loaded")
 )
 
 // EditState 处理状态页上今天表里某一项的修正：改标题/时间/地点，或取消。
@@ -45,44 +46,63 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	if pl.Date != today {
 		return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.no_such", "这一项已经不在了。"))
 	}
+	version, rev, itemID, ok := splitPlanToken(req.Row)
+	if !ok {
+		return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.stale", "这一页已经过期，请刷新后再操作。"))
+	}
 
 	switch req.Op {
 	case stateOpEdit:
-		return p.editItem(req, store, s, day, now)
+		return p.editItem(req, store, s, day, now, version, rev, itemID)
 	case stateOpCancel:
-		return p.cancelItem(req, store, s, now)
+		return p.cancelItem(req, store, s, now, version, rev, itemID)
 	}
 	return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.unknown_op", "不认识的修改操作。"))
 }
 
-func (p *Plugin) editItem(req plugin.StateEditRequest, store *Store, s settings, day, now time.Time) error {
-	title := squash(req.Values["title"])
-	if title == "" {
-		return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.title_required", "标题不能为空。"))
+func (p *Plugin) editItem(req plugin.StateEditRequest, store *Store, s settings, day, now time.Time, version, rev int64, itemID string) error {
+	title, start, end, place := "", "", "", ""
+	if req.Touched("title") {
+		title = squash(req.Values["title"])
+		if title == "" {
+			return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.title_required", "标题不能为空。"))
+		}
+		if err := checkStateRunes(req.Lang, title, maxTitleRunes); err != nil {
+			return err
+		}
 	}
-	if err := checkStateRunes(req.Lang, title, maxTitleRunes); err != nil {
-		return err
+	if req.Touched("start") {
+		v, err := normHHMM(req.Lang, strings.TrimSpace(req.Values["start"]))
+		if err != nil {
+			return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.bad_time", "时间要写成 HH:MM。"))
+		}
+		start = v
 	}
-	start, err := normHHMM(req.Lang, strings.TrimSpace(req.Values["start"]))
-	if err != nil {
-		return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.bad_time", "时间要写成 HH:MM。"))
+	if req.Touched("end") {
+		v, err := normHHMM(req.Lang, strings.TrimSpace(req.Values["end"]))
+		if err != nil {
+			return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.bad_time", "时间要写成 HH:MM。"))
+		}
+		end = v
 	}
-	end, err := normHHMM(req.Lang, strings.TrimSpace(req.Values["end"]))
-	if err != nil {
-		return errors.New(i18n.T(req.Lang, "plugin.agenda.state.err.bad_time", "时间要写成 HH:MM。"))
-	}
-	place := squash(req.Values["place"])
-	if err := checkStateRunes(req.Lang, place, maxPlaceRunes); err != nil {
-		return err
+	if req.Touched("place") {
+		place = squash(req.Values["place"])
+		if err := checkStateRunes(req.Lang, place, maxPlaceRunes); err != nil {
+			return err
+		}
 	}
 
 	var (
-		result     Item
-		wasOngoing bool
-		changed    bool
+		result      Item
+		wasOngoing  bool
+		changed     bool
+		timeChanged bool
 	)
-	_, err = store.UpdatePlan(func(pl *Plan) (bool, error) {
-		it := pl.item(req.Row)
+	_, err := store.UpdatePlan(func(pl *Plan) (bool, error) {
+		if planVersion(*pl) != version || pl.Rev != rev {
+			return false, errStalePlan
+		}
+		it := pl.item(itemID)
 		if it == nil {
 			return false, errNoSuchItem
 		}
@@ -90,21 +110,28 @@ func (p *Plugin) editItem(req plugin.StateEditRequest, store *Store, s settings,
 			return false, errItemTerminal
 		}
 		wasOngoing = it.Status == statusOngoing
-		if title != it.Title {
+		if req.Touched("title") && title != it.Title {
 			it.Title = title
 			changed = true
 		}
-		if start != it.Start || end != it.End {
-			it.Start, it.End = start, end
+		newStart, newEnd := it.Start, it.End
+		if req.Touched("start") {
+			newStart = start
+		}
+		if req.Touched("end") {
+			newEnd = end
+		}
+		if newStart != it.Start || newEnd != it.End {
+			it.Start, it.End = newStart, newEnd
 			// 时间变了，到点的判断从头来：已派发的记录只对旧时间成立。
 			if it.Status == statusPlanned {
 				it.StartFired, it.SoonFired = time.Time{}, time.Time{}
 			}
 			it.EndFired = time.Time{}
 			it.BusyCleared = false
-			changed = true
+			changed, timeChanged = true, true
 		}
-		if place != it.Place {
+		if req.Touched("place") && place != it.Place {
 			it.Place = place
 			changed = true
 		}
@@ -115,19 +142,26 @@ func (p *Plugin) editItem(req plugin.StateEditRequest, store *Store, s settings,
 		return p.stateEditDecision(req.Lang, err)
 	}
 	if changed {
+		if timeChanged {
+			// 旧时间的「快到了」可能已经投出去了，改期必须先撤回，等调度按新时间再投。
+			cue.Drop(availabilitySource, "soon|"+result.ID)
+		}
 		p.afterItemChanged(result, wasOngoing, day, s.dayStartHour, now)
 	}
 	return nil
 }
 
-func (p *Plugin) cancelItem(req plugin.StateEditRequest, store *Store, s settings, now time.Time) error {
+func (p *Plugin) cancelItem(req plugin.StateEditRequest, store *Store, s settings, now time.Time, version, rev int64, itemID string) error {
 	reason := i18n.T(s.lang, "plugin.agenda.state.cancel_reason", "在设置页取消")
 	var (
 		result     Item
 		wasOngoing bool
 	)
 	_, err := store.UpdatePlan(func(pl *Plan) (bool, error) {
-		it := pl.item(req.Row)
+		if planVersion(*pl) != version || pl.Rev != rev {
+			return false, errStalePlan
+		}
+		it := pl.item(itemID)
 		if it == nil {
 			return false, errNoSuchItem
 		}
@@ -166,6 +200,8 @@ func (p *Plugin) afterItemChanged(it Item, wasOngoing bool, day time.Time, daySt
 
 func (p *Plugin) stateEditDecision(lang string, err error) error {
 	switch {
+	case errors.Is(err, errStalePlan):
+		return errors.New(i18n.T(lang, "plugin.agenda.state.err.stale", "这一页已经过期，请刷新后再操作。"))
 	case errors.Is(err, errNoSuchItem):
 		return errors.New(i18n.T(lang, "plugin.agenda.state.err.no_such", "这一项已经不在了。"))
 	case errors.Is(err, errItemTerminal):

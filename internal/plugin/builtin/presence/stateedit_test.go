@@ -65,6 +65,35 @@ func TestUnchangedFieldsKeepUpdatedTime(t *testing.T) {
 	}
 }
 
+// 打开表单后后台改了地点：用户只改穿着，旧地点不能随表单写回去。
+func TestUnchangedFieldDoesNotOverwriteLaterWrite(t *testing.T) {
+	p := newTestPlugin(t)
+	if _, _, err := p.storeFor("").Apply(map[string]string{
+		"location": "书房", "attire": "灰色毛衣",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// 后台（模型那一侧）在此期间把地点改成了车站。
+	if _, _, err := p.storeFor("").Apply(map[string]string{"location": "车站"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSection, Op: stateOpEdit,
+		Values:    map[string]string{"location": "书房", "attire": "外套"},
+		Originals: map[string]string{"location": "书房", "attire": "灰色毛衣"},
+	}); err != nil {
+		t.Fatalf("修改 = %v", err)
+	}
+	snap, _, _ := p.storeFor("").Load()
+	if snap["location"].Text != "车站" {
+		t.Errorf("旧表单覆盖了后台写入的地点：%q", snap["location"].Text)
+	}
+	if snap["attire"].Text != "外套" {
+		t.Errorf("用户改的穿着没写进去：%q", snap["attire"].Text)
+	}
+}
+
 func TestPresenceEditRejectsBadInput(t *testing.T) {
 	p := newTestPlugin(t)
 	if err := p.EditState(editReq(map[string]string{"focus": strings.Repeat("字", 81)})); err == nil {

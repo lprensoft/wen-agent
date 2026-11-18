@@ -2143,6 +2143,7 @@
   "plugin.agenda.state.err.too_long": "%d characters is too long (limit %d).",
   "plugin.agenda.state.err.bad_time": "Time must be written as HH:MM.",
   "plugin.agenda.state.err.save_failed": "Could not save the plan; try again later.",
+  "plugin.agenda.state.err.stale": "This page is out of date; refresh and try again.",
   "plugin.memory.state.index.title": "Memory index",
   "plugin.memory.state.index.empty": "Nothing remembered yet.",
   "plugin.memory.state.index.count": "Stored: %d",

@@ -47,20 +47,6 @@ func (p *Plugin) editDetail(req plugin.StateEditRequest) error {
 		now = p.now()
 	}
 
-	var text, basis, why string
-	if req.Op == stateOpEdit {
-		var err error
-		if text, err = editText(req.Lang, req.Values["text"], maxTextRunes); err != nil {
-			return err
-		}
-		if basis, err = editText(req.Lang, req.Values["basis"], maxBasisRunes); err != nil {
-			return err
-		}
-		if why, err = editText(req.Lang, req.Values["why"], maxWhyRunes); err != nil {
-			return err
-		}
-	}
-
 	_, err := store.Update(func(st *State) (bool, []LogEntry, error) {
 		i := st.detailIndex(req.Row)
 		if i < 0 {
@@ -72,8 +58,25 @@ func (p *Plugin) editDetail(req plugin.StateEditRequest) error {
 			st.pushHistory(Change{At: now, Layer: layerDetail, Op: opLetGo, Before: &before})
 			return true, []LogEntry{{At: now, Layer: layerDetail, Op: opLetGo, Text: before.Text}}, nil
 		}
+		// 只写用户真正改过的字段：表单会把三项一起带回来，后台或反思在期间改动
+		// 了别的字段时，旧值不该把它盖回去。
 		after := before
-		after.Text, after.Basis, after.Why = text, basis, why
+		var err error
+		if req.Touched("text") {
+			if after.Text, err = editText(req.Lang, req.Values["text"], maxTextRunes); err != nil {
+				return false, nil, err
+			}
+		}
+		if req.Touched("basis") {
+			if after.Basis, err = editText(req.Lang, req.Values["basis"], maxBasisRunes); err != nil {
+				return false, nil, err
+			}
+		}
+		if req.Touched("why") {
+			if after.Why, err = editText(req.Lang, req.Values["why"], maxWhyRunes); err != nil {
+				return false, nil, err
+			}
+		}
 		if after.Text == before.Text && after.Basis == before.Basis && after.Why == before.Why {
 			return false, nil, nil
 		}

@@ -61,6 +61,9 @@ func (p *Plugin) addScene(req plugin.StateEditRequest, store *Store) error {
 }
 
 func (p *Plugin) editScene(req plugin.StateEditRequest, store *Store) error {
+	if !req.Touched("detail") {
+		return nil
+	}
 	scenes, err := store.List()
 	if err != nil {
 		return p.stateEditFailed(req.Lang, err)

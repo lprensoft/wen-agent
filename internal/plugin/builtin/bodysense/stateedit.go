@@ -29,7 +29,7 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 
 	switch req.Op {
 	case stateOpSet:
-		return p.setBody(req, store)
+		return p.setBody(req, store, s)
 	case stateOpReset:
 		if err := store.Clear(); err != nil {
 			return p.stateEditFailed(req.Lang, err)
@@ -39,19 +39,32 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	return errors.New(i18n.T(req.Lang, "plugin.body_sense.state.err.unknown_op", "不认识的修改操作。"))
 }
 
-func (p *Plugin) setBody(req plugin.StateEditRequest, store *StateStore) error {
-	arousal, err := bodyValue(req.Lang, req.Values["arousal"])
-	if err != nil {
-		return err
+func (p *Plugin) setBody(req plugin.StateEditRequest, store *StateStore, s settings) error {
+	if !req.Touched("arousal") && !req.Touched("fatigue") && !req.Touched("reason") {
+		return nil
 	}
-	fatigue, err := bodyValue(req.Lang, req.Values["fatigue"])
+	cur, _, err := store.Current(s.arousalDecay, s.fatigueDecay, p.now())
 	if err != nil {
-		return err
+		return p.stateEditFailed(req.Lang, err)
 	}
-	reason := strings.TrimSpace(req.Values["reason"])
-	if n := len([]rune(reason)); n > maxStateReasonRunes {
-		return errors.New(i18n.Tf(req.Lang, "plugin.body_sense.state.err.too_long",
-			"起因太长（%d 字，上限 %d 字）。", n, maxStateReasonRunes))
+	arousal, fatigue := cur.Arousal, cur.Fatigue
+	if req.Touched("arousal") {
+		if arousal, err = bodyValue(req.Lang, req.Values["arousal"]); err != nil {
+			return err
+		}
+	}
+	if req.Touched("fatigue") {
+		if fatigue, err = bodyValue(req.Lang, req.Values["fatigue"]); err != nil {
+			return err
+		}
+	}
+	reason := cur.Reason
+	if req.Touched("reason") {
+		reason = strings.TrimSpace(req.Values["reason"])
+		if n := len([]rune(reason)); n > maxStateReasonRunes {
+			return errors.New(i18n.Tf(req.Lang, "plugin.body_sense.state.err.too_long",
+				"起因太长（%d 字，上限 %d 字）。", n, maxStateReasonRunes))
+		}
 	}
 	if _, err := store.Set(arousal, fatigue, reason, p.now()); err != nil {
 		return p.stateEditFailed(req.Lang, err)
