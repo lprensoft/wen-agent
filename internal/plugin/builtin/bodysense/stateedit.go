@@ -40,33 +40,34 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 }
 
 func (p *Plugin) setBody(req plugin.StateEditRequest, store *StateStore, s settings) error {
-	if !req.Touched("arousal") && !req.Touched("fatigue") && !req.Touched("reason") {
-		return nil
-	}
-	cur, _, err := store.Current(s.arousalDecay, s.fatigueDecay, p.now())
-	if err != nil {
-		return p.stateEditFailed(req.Lang, err)
-	}
-	arousal, fatigue := cur.Arousal, cur.Fatigue
+	var arousalPtr, fatiguePtr *int
+	var reasonPtr *string
 	if req.Touched("arousal") {
-		if arousal, err = bodyValue(req.Lang, req.Values["arousal"]); err != nil {
+		v, err := bodyValue(req.Lang, req.Values["arousal"])
+		if err != nil {
 			return err
 		}
+		arousalPtr = &v
 	}
 	if req.Touched("fatigue") {
-		if fatigue, err = bodyValue(req.Lang, req.Values["fatigue"]); err != nil {
+		v, err := bodyValue(req.Lang, req.Values["fatigue"])
+		if err != nil {
 			return err
 		}
+		fatiguePtr = &v
 	}
-	reason := cur.Reason
 	if req.Touched("reason") {
-		reason = strings.TrimSpace(req.Values["reason"])
-		if n := len([]rune(reason)); n > maxStateReasonRunes {
+		v := strings.TrimSpace(req.Values["reason"])
+		if n := len([]rune(v)); n > maxStateReasonRunes {
 			return errors.New(i18n.Tf(req.Lang, "plugin.body_sense.state.err.too_long",
 				"起因太长（%d 字，上限 %d 字）。", n, maxStateReasonRunes))
 		}
+		reasonPtr = &v
 	}
-	if _, err := store.Set(arousal, fatigue, reason, p.now()); err != nil {
+	if arousalPtr == nil && fatiguePtr == nil && reasonPtr == nil {
+		return nil
+	}
+	if _, err := store.SetFields(arousalPtr, fatiguePtr, reasonPtr, s.arousalDecay, s.fatigueDecay, p.now()); err != nil {
 		return p.stateEditFailed(req.Lang, err)
 	}
 	return nil

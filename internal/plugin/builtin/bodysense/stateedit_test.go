@@ -36,6 +36,37 @@ func TestSetBodyFromState(t *testing.T) {
 	}
 }
 
+// 两个窗口分别改唤起与疲劳：各自只提交自己动过的那项，合并后两项都在。
+func TestBodyFieldsMergeAcrossRequests(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	now := p.now()
+	if _, err := p.stateStoreFor("").Set(30, 20, "跑完步", now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Op: stateOpSet,
+		Values:    map[string]string{"arousal": "50", "fatigue": "20", "reason": "跑完步"},
+		Originals: map[string]string{"arousal": "30", "fatigue": "20", "reason": "跑完步"},
+	}); err != nil {
+		t.Fatalf("改唤起 = %v", err)
+	}
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Op: stateOpSet,
+		Values:    map[string]string{"arousal": "30", "fatigue": "5", "reason": "跑完步"},
+		Originals: map[string]string{"arousal": "30", "fatigue": "20", "reason": "跑完步"},
+	}); err != nil {
+		t.Fatalf("改疲劳 = %v", err)
+	}
+	st, ok, err := p.stateStoreFor("").Current(30, 10, now)
+	if err != nil || !ok {
+		t.Fatalf("Current = %+v / %v", st, err)
+	}
+	if st.Arousal != 50 || st.Fatigue != 5 {
+		t.Fatalf("两项没有合并保留：%+v", st)
+	}
+}
+
 func TestResetBodyFromState(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	now := p.now()

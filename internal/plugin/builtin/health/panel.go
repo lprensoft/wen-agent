@@ -127,7 +127,19 @@ func viewSeverityWord(v View) string {
 	if v.Phase == phasePending {
 		return severityWord(v.Cond.Peak)
 	}
-	return severityWord(v.Severity)
+	// 与病程注入用的 band 同一套分档（35 / 65），别让表单与角色上下文对同一
+	// 个数值说成两个档。
+	return activeSeverityWord(v.Severity)
+}
+
+func activeSeverityWord(v int) string {
+	switch {
+	case v <= 35:
+		return sevMild.ZH()
+	case v <= 65:
+		return sevModerate.ZH()
+	}
+	return sevSevere.ZH()
 }
 
 func severityOptions(lang string) []plugin.StateOption {

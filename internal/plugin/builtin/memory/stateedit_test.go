@@ -129,6 +129,93 @@ func TestUnchangedIndexFieldNotOverwritten(t *testing.T) {
 	}
 }
 
+// 旧页面拿的是原样文件标识：大小写不同的新条目不能被它删到。
+func TestSlugMatchIsExact(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "Trip", Type: "事实"}, false); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := store.List()
+	oldSlug := entries[0].Slug
+
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldSlug, nil)); err != nil {
+		t.Fatalf("删旧条目 = %v", err)
+	}
+	if _, err := store.Save(Entry{Name: "trip", Type: "事实"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EditState(editReq(stateOpDelete, stateSectionIndex, oldSlug, nil)); err == nil {
+		t.Error("旧页面凭据不该删到大小写不同的新条目")
+	}
+	entries, _ = store.List()
+	if len(entries) != 1 || entries[0].Name != "trip" {
+		t.Fatalf("新条目被误删：%+v", entries)
+	}
+}
+
+// 两个请求分别只改摘要和分类：后一个请求不能拿旧快照把前一个的改动盖回去。
+func TestIndexFieldsMergeAcrossRequests(t *testing.T) {
+	p := stateTestPlugin(t)
+	store := p.storeFor("")
+	if _, err := store.Save(Entry{Name: "喜欢乌龙茶", Description: "旧摘要", Type: "偏好"}, false); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := store.Get("喜欢乌龙茶")
+
+	// 第一个窗口：只改摘要。
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Values:    map[string]string{"description": "新摘要", "type": "偏好"},
+		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
+	}); err != nil {
+		t.Fatalf("改摘要 = %v", err)
+	}
+	// 第二个窗口（旧快照）：只改分类。
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSectionIndex, Row: cur.Slug, Op: stateOpEdit,
+		Values:    map[string]string{"description": "旧摘要", "type": "事实"},
+		Originals: map[string]string{"description": "旧摘要", "type": "偏好"},
+	}); err != nil {
+		t.Fatalf("改分类 = %v", err)
+	}
+	got, _ := store.Get("喜欢乌龙茶")
+	if got.Description != "新摘要" || got.Type != "事实" {
+		t.Fatalf("两项没有合并保留：%+v", got)
+	}
+}
+
+// 日记原样保存不能覆盖另一窗口刚写的新摘要；目标日期不存在仍要报出来。
+func TestDiaryUnchangedSummaryNotOverwritten(t *testing.T) {
+	p := stateTestPlugin(t)
+	dir := plugin.DomainDir(p.libBase, "")
+	p.appendTimeline(dir, timelineEntry{Date: "2026-11-17", Summary: "旧摘要"})
+	if err := p.updateTimeline(dir, "2026-11-17", "新摘要"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSectionDiary, Row: "2026-11-17", Op: stateOpEdit,
+		Values:    map[string]string{"summary": "旧摘要"},
+		Originals: map[string]string{"summary": "旧摘要"},
+	}); err != nil {
+		t.Fatalf("原样保存 = %v", err)
+	}
+	if got := loadTimeline(dir).Entries; len(got) != 1 || got[0].Summary != "新摘要" {
+		t.Fatalf("旧表单覆盖了新摘要：%+v", got)
+	}
+
+	// 未修改但目标日期已被删掉：仍然提示刷新，而不是静默成功。
+	p.deleteTimeline(dir, "2026-11-17")
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Domain: "", Section: stateSectionDiary, Row: "2026-11-17", Op: stateOpEdit,
+		Values:    map[string]string{"summary": "旧摘要"},
+		Originals: map[string]string{"summary": "旧摘要"},
+	}); err == nil {
+		t.Error("目标日期不存在时应报错")
+	}
+}
+
 func TestDeleteIndexAndNotReadyTargets(t *testing.T) {
 	p := stateTestPlugin(t)
 	if _, err := p.storeFor("").Save(Entry{Name: "周末的湖边", Type: "经历"}, false); err != nil {

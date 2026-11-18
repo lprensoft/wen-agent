@@ -73,31 +73,27 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 }
 
 func (p *Plugin) setMood(req plugin.StateEditRequest, store *Store, s settings) error {
-	if !req.Touched("value") && !req.Touched("reason") {
-		return nil
-	}
-	now := time.Now()
-	cur, _, err := store.Current(s.decayPerHour, now)
-	if err != nil {
-		i18n.Logf(p.langOf(), "log.mood.state_edit_failed", "状态页修改心情失败：%v", err)
-		return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.save_failed", "保存心情失败，请稍后重试。"))
-	}
-	value := cur.Value
+	var valuePtr *int
+	var reasonPtr *string
 	if req.Touched("value") {
-		value, err = strconv.Atoi(strings.TrimSpace(req.Values["value"]))
-		if err != nil || value < moodMin || value > moodMax {
+		v, err := strconv.Atoi(strings.TrimSpace(req.Values["value"]))
+		if err != nil || v < moodMin || v > moodMax {
 			return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.bad_value", "心情要是 -100 到 100 的整数。"))
 		}
+		valuePtr = &v
 	}
-	reason := cur.Reason
 	if req.Touched("reason") {
-		reason = strings.TrimSpace(req.Values["reason"])
-		if n := len([]rune(reason)); n > maxReasonRunes {
+		v := strings.TrimSpace(req.Values["reason"])
+		if n := len([]rune(v)); n > maxReasonRunes {
 			return errors.New(i18n.Tf(req.Lang, "plugin.mood.state.err.too_long",
 				"起因太长（%d 字，上限 %d 字）。", n, maxReasonRunes))
 		}
+		reasonPtr = &v
 	}
-	if _, err := store.Set(value, reason, now); err != nil {
+	if valuePtr == nil && reasonPtr == nil {
+		return nil
+	}
+	if _, err := store.SetFields(valuePtr, reasonPtr, s.decayPerHour, time.Now()); err != nil {
 		i18n.Logf(p.langOf(), "log.mood.state_edit_failed", "状态页修改心情失败：%v", err)
 		return errors.New(i18n.T(req.Lang, "plugin.mood.state.err.save_failed", "保存心情失败，请稍后重试。"))
 	}

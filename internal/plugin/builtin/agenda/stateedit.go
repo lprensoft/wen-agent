@@ -144,9 +144,9 @@ func (p *Plugin) editItem(req plugin.StateEditRequest, store *Store, s settings,
 	if changed {
 		if timeChanged {
 			// 旧时间的「快到了」可能已经投出去了，改期必须先撤回，等调度按新时间再投。
-			cue.Drop(availabilitySource, "soon|"+result.ID)
+			cue.Drop(availabilitySource, soonKey(req.Domain, result.ID))
 		}
-		p.afterItemChanged(result, wasOngoing, day, s.dayStartHour, now)
+		p.afterItemChanged(result, wasOngoing, day, s.dayStartHour, now, req.Domain)
 	}
 	return nil
 }
@@ -176,24 +176,24 @@ func (p *Plugin) cancelItem(req plugin.StateEditRequest, store *Store, s setting
 	if err != nil {
 		return p.stateEditDecision(req.Lang, err)
 	}
-	p.afterItemChanged(result, wasOngoing, time.Time{}, 0, now)
+	p.afterItemChanged(result, wasOngoing, time.Time{}, 0, now, req.Domain)
 	return nil
 }
 
 // afterItemChanged 是与模型侧 update_day_plan 相同的那几件收尾事：进行中的活动
 // 刷新忙碌公告板，结束了的撤掉，「快到了」的开口理由撤掉，唤醒调度重算下一次到期。
 // day 为零值时只清不设（取消的项已经不是进行中了）。
-func (p *Plugin) afterItemChanged(it Item, wasOngoing bool, day time.Time, dayStartHour int, now time.Time) {
+func (p *Plugin) afterItemChanged(it Item, wasOngoing bool, day time.Time, dayStartHour int, now time.Time, tag string) {
 	switch {
 	case it.Status == statusOngoing && !day.IsZero():
 		clearAvailability()
 		setAvailability(&it, day, dayStartHour, now)
-		cue.Drop(availabilitySource, "soon|"+it.ID)
+		cue.Drop(availabilitySource, soonKey(tag, it.ID))
 	case it.terminal():
 		if wasOngoing {
 			clearAvailability()
 		}
-		cue.Drop(availabilitySource, "soon|"+it.ID)
+		cue.Drop(availabilitySource, soonKey(tag, it.ID))
 	}
 	p.wakeup()
 }

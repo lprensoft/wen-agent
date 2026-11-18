@@ -347,8 +347,11 @@ func (s *Store) GetBySlug(slug string) (Entry, error) {
 	return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), slug)
 }
 
-// UpdateIndexBySlug 与 UpdateIndex 相同，但按落盘标识精确匹配。
-func (s *Store) UpdateIndexBySlug(slug, description, typ string, now time.Time) (Entry, error) {
+// UpdateIndexFields 按落盘标识精确匹配，只改传了的字段（nil 表示没改）。
+//
+// 两个窗口分别改摘要和分类时，各自只提交自己动过的那一项；读、合并、写都在
+// 同一把锁内完成，不会用另一份过期快照把对方刚写的字段盖回去。
+func (s *Store) UpdateIndexFields(slug string, description, typ *string, now time.Time) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := s.listLocked()
@@ -386,15 +389,10 @@ func (s *Store) DeleteBySlug(slug string) (Entry, error) {
 }
 
 func findBySlug(entries []Entry, slug string) (Entry, bool) {
-	// 页面上的身份就是文件名的原样写法；先精确匹配，再容忍大小写
-	// （Windows 的文件名不区分大小写，手改过的库可能写成别的样式）。
+	// 只认完全相等的文件标识：这是服务端下发的原样身份，容忍大小写会让
+	// 旧页面上的「Trip」在它被删除、又新建了「trip」之后删到新那条。
 	for _, e := range entries {
 		if e.Slug == slug {
-			return e, true
-		}
-	}
-	for _, e := range entries {
-		if strings.EqualFold(e.Slug, slug) {
 			return e, true
 		}
 	}
@@ -417,21 +415,23 @@ func (s *Store) UpdateIndex(name, description, typ string, now time.Time) (Entry
 	if !ok {
 		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
 	}
-	return s.updateIndexLocked(e, description, typ, now)
+	return s.updateIndexLocked(e, &description, &typ, now)
 }
 
-// updateIndexLocked 是 UpdateIndex / UpdateIndexBySlug 共用的写回。调用方需持有写锁。
-func (s *Store) updateIndexLocked(e Entry, description, typ string, now time.Time) (Entry, error) {
-	e.Description = truncateRunes(strings.TrimSpace(collapseSpace(description)), descMaxRunes)
-	if typ == "" {
-		typ = e.Type
+// updateIndexLocked 是两条索引写回路径共用的实现。调用方需持有写锁。
+// description / typ 为 nil 表示这次不改该项。
+func (s *Store) updateIndexLocked(e Entry, description, typ *string, now time.Time) (Entry, error) {
+	if description != nil {
+		e.Description = truncateRunes(strings.TrimSpace(collapseSpace(*description)), descMaxRunes)
 	}
-	zh, ok := memTypes.Canonical(typ)
-	if !ok {
-		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.unknown_type",
-			"未知的记忆分类 %q（可选：%s）"), typ, strings.Join(memTypes.Values(s.lang), " / "))
+	if typ != nil && *typ != "" {
+		zh, ok := memTypes.Canonical(*typ)
+		if !ok {
+			return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.unknown_type",
+				"未知的记忆分类 %q（可选：%s）"), *typ, strings.Join(memTypes.Values(s.lang), " / "))
+		}
+		e.Type = zh
 	}
-	e.Type = zh
 	e.Updated = now
 	if err := s.writeLocked(e); err != nil {
 		return Entry{}, err

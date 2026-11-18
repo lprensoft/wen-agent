@@ -221,7 +221,7 @@ func (p *Plugin) tickAt(ctx context.Context, now time.Time) error {
 					start.After(now) && start.Sub(now) <= s.remindBefore {
 					it.SoonFired = now
 					changed = true
-					cue.Post(cue.Cue{Source: availabilitySource, Key: "soon|" + it.ID,
+					cue.Post(cue.Cue{Source: availabilitySource, Key: soonKey(tag, it.ID),
 						Text: prompt.Tf(s.lang, "prompt.agenda.cue.soon", "再过 %s是和对方的约定：%s（%s）。",
 							humanMinutes(s.lang, start.Sub(now)), it.Title, it.Start),
 						Expire: start})
@@ -440,3 +440,9 @@ func (p *Plugin) postBackCue(d due) {
 	}
 	cue.Post(cue.Cue{Source: availabilitySource, Key: "back|" + d.item.ID, Text: text + "。", Expire: p.now().Add(backCueTTL)})
 }
+
+// soonKey 是「快到了」开口理由的键：带可见域与活动 ID。
+//
+// 两个域的日程各自都从 a1 编号，只带 ID 的键会让撤回一个域的提醒时
+// 连另一个域那条一起撤掉。
+func soonKey(tag, id string) string { return "soon|" + tag + "|" + id }

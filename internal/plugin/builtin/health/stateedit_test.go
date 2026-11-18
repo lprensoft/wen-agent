@@ -42,8 +42,9 @@ func TestEditConditionFromState(t *testing.T) {
 	if snap.Active[0].Cond.Care != careMeds {
 		t.Errorf("处理方式 = %q", snap.Active[0].Cond.Care)
 	}
-	if snap.Active[0].Cond.Peak != 30 {
-		t.Errorf("严重度峰值 = %d", snap.Active[0].Cond.Peak)
+	// 旧客户端原样回传它看到的当前档位：只改处理方式不该顺手改变病程。
+	if snap.Active[0].Cond.Peak != 55 {
+		t.Errorf("只改处理方式却改了峰值：%d", snap.Active[0].Cond.Peak)
 	}
 }
 
@@ -177,6 +178,25 @@ func TestRecoverDropsPendingCue(t *testing.T) {
 	}
 	if got := cue.Take(now); len(got) != 0 {
 		t.Fatalf("痊愈后仍有发作提醒：%+v", got)
+	}
+}
+
+// 表单档位与病程注入用同一套 35/65 分档。
+func TestViewSeverityUsesDiseaseBands(t *testing.T) {
+	cases := []struct {
+		v    int
+		want string
+	}{
+		{38, sevModerate.ZH()},
+		{68, sevSevere.ZH()},
+		{30, sevMild.ZH()},
+		{60, sevModerate.ZH()},
+	}
+	for _, c := range cases {
+		got := viewSeverityWord(View{Phase: phaseRising, Severity: c.v})
+		if got != c.want {
+			t.Errorf("severity %d = %q，期望 %q", c.v, got, c.want)
+		}
 	}
 }
 

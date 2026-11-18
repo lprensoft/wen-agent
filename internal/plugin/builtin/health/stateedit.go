@@ -31,11 +31,14 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	if err != nil {
 		return p.stateEditFailed(req.Lang, err)
 	}
-	var cond Condition
+	var (
+		view View
+		cond Condition
+	)
 	found := false
 	for _, v := range snap.Active {
 		if v.Cond.ID == req.Row {
-			cond, found = v.Cond, true
+			view, cond, found = v, v.Cond, true
 			break
 		}
 	}
@@ -47,10 +50,13 @@ func (p *Plugin) EditState(req plugin.StateEditRequest) error {
 	case stateOpEdit:
 		// 新界面会带回打开表单时的值，用户没动过的项一律不写。旧客户端（没有
 		// Originals）退回按峰值档位比较：只改处理方式时不要把它发回去。
+		curWord := viewSeverityWord(view)
 		sendSeverity := req.Touched("severity")
 		if req.Originals == nil {
-			sendSeverity = strings.TrimSpace(req.Values["severity"]) != "" &&
-				req.Values["severity"] != severityWord(cond.Peak)
+			// 旧客户端原样回传它看到的档位：与此刻回显的档位（或历史峰值档位）
+			// 相同就当作没改，只改处理方式不会顺手改变病程。
+			raw := strings.TrimSpace(req.Values["severity"])
+			sendSeverity = raw != "" && raw != curWord && raw != severityWord(cond.Peak)
 		}
 		sendCare := req.Touched("care")
 		if req.Originals == nil {

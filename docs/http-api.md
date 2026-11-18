@@ -18,7 +18,7 @@
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
 | POST | `/api/plugins/{name}/actions/{key}` | 触发插件声明的操作（如微信扫码绑定），立即返回，流程在后台跑。请求体可选：`{"config": {...}, "token": "..."}`，`config` 是配置弹窗里尚未保存的值，`token` 原样带回列表里该操作的 `token`（按钮指的是哪一个，如批准的是哪一条提议） |
 | GET | `/api/plugins/{name}/actions/{key}` | 轮询该操作的进展：状态、说明文字与一张可选 PNG（只经内存下发，不落盘） |
-| POST | `/api/plugins/{name}/state/edit` | 状态页上的一次修正：`{"domain","section","row","op","values"}`。各字段都是客户端提交的，插件只认磁盘上真有的可见域、只按自己的数据核对行，并经自己的存储接口落盘；错误按请求语言原样返回。请求体上限 64KB |
+| POST | `/api/plugins/{name}/state/edit` | 状态页上的一次修正：`{"domain","section","row","op","values","originals"}`。`originals` 是表单打开时各字段的值，服务端据此只写用户真正改过的字段（旧客户端不带时按全部提交处理）。各字段都是客户端提交的，插件只认磁盘上真有的可见域、只按自己的数据核对行，并经自己的存储接口落盘；错误按请求语言原样返回。请求体上限 64KB |
 | GET | `/api/status` | 模型配置与插件状态行；带 `session_id` 查询参数时附上该会话的用量 |
 | GET | `/api/state` | 启用插件的状态快照（记忆索引、日记、今日安排、现场等），按功能分组；带 `lang` 查询参数；`pinned=1` 只返回置顶块。行与块可带 `edits`（可修改项）与 `id`（行身份），`pinned` 响应里会裁掉。内容含记忆、日程、关系、心情、健康、现场与心里话这类私人文本，响应带 `Cache-Control: no-store`，不进入模型上下文 |
 | GET | `/api/events` | 常驻 SSE 流，推送两类事件：`notice`（后台任务在会话里留下的、模型看不到的一行说明）与 `turn`（一轮结束，只带会话 id、时间与一小段预览，界面据此标未读、在页面不可见时弹桌面通知） |

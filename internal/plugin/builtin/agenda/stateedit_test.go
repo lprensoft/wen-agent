@@ -107,7 +107,7 @@ func TestRescheduleDropsOldSoonCue(t *testing.T) {
 	cue.Reset()
 	defer cue.Reset()
 	cue.Post(cue.Cue{
-		Source: availabilitySource, Key: "soon|a1", Text: "快到了",
+		Source: availabilitySource, Key: soonKey("", "a1"), Text: "快到了",
 		Expire: now.Add(time.Hour),
 	})
 
@@ -118,6 +118,34 @@ func TestRescheduleDropsOldSoonCue(t *testing.T) {
 	}
 	if got := cue.Take(now); len(got) != 0 {
 		t.Fatalf("改期后仍有旧提醒：%+v", got)
+	}
+}
+
+// 两个域都有 a1：改共享域的活动只能撤共享域自己的提醒，不能带走里人格的。
+func TestRescheduleDropsOnlySameDomainCue(t *testing.T) {
+	now := time.Date(2026, 11, 15, 14, 0, 0, 0, time.Local)
+	p := stateTestPlugin(t, now)
+	seedPlan(t, p, now)
+	day := p.snapshot().today(now)
+	if err := p.storeFor("inner").SavePlan(Plan{
+		Date: day.Format(dateLayout), PlannedAt: now,
+		Items: []Item{{ID: "a1", Title: "里人格的活动", Start: "09:30", End: "10:30", Status: statusPlanned}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cue.Reset()
+	defer cue.Reset()
+	cue.Post(cue.Cue{Source: availabilitySource, Key: soonKey("", "a1"), Text: "共享", Expire: now.Add(time.Hour)})
+	cue.Post(cue.Cue{Source: availabilitySource, Key: soonKey("inner", "a1"), Text: "里", Expire: now.Add(time.Hour)})
+
+	if err := p.EditState(editReq(stateOpEdit, itemToken(t, p, "a1"), map[string]string{
+		"title": "整理提案", "start": "14:00", "end": "15:00", "place": "书房",
+	})); err != nil {
+		t.Fatalf("改期 = %v", err)
+	}
+	got := cue.Take(now)
+	if len(got) != 1 || got[0].Key != soonKey("inner", "a1") {
+		t.Fatalf("只剩本域提醒的预期不成立：%+v", got)
 	}
 }
 

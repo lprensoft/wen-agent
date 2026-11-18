@@ -100,18 +100,33 @@ func (s *StateStore) Apply(dArousal, dFatigue, maxDelta, arousalPerHour, fatigue
 // Set 把唤起与疲劳直接设成给定值：这是人从状态页修正用的绝对设值，不是模型的增量。
 // 两项都设成 0 等于把这一域的记录清掉，文件不留下一条「什么都没有」的空记录。
 func (s *StateStore) Set(arousal, fatigue int, reason string, now time.Time) (BodyState, error) {
-	out := BodyState{
-		Arousal: clampInt(arousal, stateMin, stateMax),
-		Fatigue: clampInt(fatigue, stateMin, stateMax),
-		Reason:  clipStateReason(reason),
-		Updated: now,
-	}
-	if out.Arousal == 0 && out.Fatigue == 0 {
-		out.Reason = ""
-	}
+	return s.SetFields(&arousal, &fatigue, &reason, 0, 0, now)
+}
+
+// SetFields 只改传了的项（nil 表示没改），在锁内先按回落速率折算到此刻再合并。
+//
+// 状态页表单会同时提交所有控件；两个窗口分别改唤起和疲劳时，各自只提交自己
+// 动过的那一项，读、合并、写在同一把锁内完成，不会用旧快照把对方刚写的那项盖掉。
+func (s *StateStore) SetFields(arousal, fatigue *int, reason *string, arousalPerHour, fatiguePerHour int, now time.Time) (BodyState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	st, _, err := s.load()
+	if err != nil {
+		return BodyState{}, err
+	}
+	out := decayState(st, arousalPerHour, fatiguePerHour, now)
+	if arousal != nil {
+		out.Arousal = clampInt(*arousal, stateMin, stateMax)
+	}
+	if fatigue != nil {
+		out.Fatigue = clampInt(*fatigue, stateMin, stateMax)
+	}
+	if reason != nil {
+		out.Reason = clipStateReason(*reason)
+	}
+	out.Updated = now
 	if out.Arousal == 0 && out.Fatigue == 0 {
+		out.Reason = ""
 		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
 			return BodyState{}, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_clear_failed", "重置身体状态失败: %w"), err)
 		}

@@ -47,6 +47,37 @@ func TestSetMoodFromState(t *testing.T) {
 	}
 }
 
+// 两个窗口分别改数值与起因：各自只提交自己动过的那项，合并后两项都在。
+func TestMoodFieldsMergeAcrossRequests(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	now := time.Now()
+	if _, err := p.storeFor("").Set(30, "还行", now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Op: stateOpSet,
+		Values:    map[string]string{"value": "60", "reason": "还行"},
+		Originals: map[string]string{"value": "30", "reason": "还行"},
+	}); err != nil {
+		t.Fatalf("改数值 = %v", err)
+	}
+	if err := p.EditState(plugin.StateEditRequest{
+		Lang: "zh", Section: stateSection, Op: stateOpSet,
+		Values:    map[string]string{"value": "30", "reason": "被你夸了"},
+		Originals: map[string]string{"value": "30", "reason": "还行"},
+	}); err != nil {
+		t.Fatalf("改起因 = %v", err)
+	}
+	st, _, err := p.storeFor("").Current(p.snapshot().decayPerHour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Value != 60 || st.Reason != "被你夸了" {
+		t.Fatalf("两项没有合并保留：%+v", st)
+	}
+}
+
 func TestMoodEditRejectsBadInput(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	if err := p.EditState(moodEditReq(stateOpSet, map[string]string{"value": "101"})); err == nil {

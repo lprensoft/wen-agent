@@ -38,28 +38,31 @@ func (p *Plugin) editIndex(req plugin.StateEditRequest) error {
 	}
 	switch req.Op {
 	case stateOpEdit:
-		cur, err := store.GetBySlug(req.Row)
-		if err != nil {
+		if _, err := store.GetBySlug(req.Row); err != nil {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
 		}
-		desc := cur.Description
+		var descPtr, typPtr *string
 		if req.Touched("description") {
-			desc = collapseSpace(req.Values["description"])
+			desc := collapseSpace(req.Values["description"])
 			if n := len([]rune(desc)); n > descMaxRunes {
 				return errors.New(i18n.Tf(req.Lang, "plugin.memory.state.err.too_long",
 					"内容太长（%d 字，上限 %d 字）。", n, descMaxRunes))
 			}
+			descPtr = &desc
 		}
-		typ := cur.Type
 		if req.Touched("type") {
-			typ = strings.TrimSpace(req.Values["type"])
+			typ := strings.TrimSpace(req.Values["type"])
 			if typ != "" {
 				if _, ok := memTypes.Canonical(typ); !ok {
 					return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.bad_type", "分类不在给定的几档里。"))
 				}
+				typPtr = &typ
 			}
 		}
-		if _, err := store.UpdateIndexBySlug(req.Row, desc, typ, time.Now()); err != nil {
+		if descPtr == nil && typPtr == nil {
+			return nil
+		}
+		if _, err := store.UpdateIndexFields(req.Row, descPtr, typPtr, time.Now()); err != nil {
 			return p.stateEditFailed(req.Lang, err)
 		}
 		return nil
@@ -82,6 +85,12 @@ func (p *Plugin) editDiary(req plugin.StateEditRequest, base string) error {
 	dir := plugin.DomainDir(base, req.Domain)
 	switch req.Op {
 	case stateOpEdit:
+		if !req.Touched("summary") {
+			if !p.hasTimelineDay(dir, req.Row) {
+				return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such_day", "这一天的日记已经不在了。"))
+			}
+			return nil
+		}
 		summary := strings.TrimSpace(collapseSpace(req.Values["summary"]))
 		if summary == "" {
 			return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.summary_required", "摘要不能为空。"))
@@ -119,3 +128,15 @@ func (p *Plugin) stateEditFailed(lang string, err error) error {
 }
 
 var _ plugin.StateEditor = (*Plugin)(nil)
+
+// hasTimelineDay 只回答「这一天还在不在」，给原样保存的日记表单做存在性校验。
+func (p *Plugin) hasTimelineDay(dir, date string) bool {
+	p.timelineMu.Lock()
+	defer p.timelineMu.Unlock()
+	for _, e := range loadTimeline(dir).Entries {
+		if e.Date == date {
+			return true
+		}
+	}
+	return false
+}
