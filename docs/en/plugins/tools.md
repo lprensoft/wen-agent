@@ -27,7 +27,7 @@ When an HTTP proxy is configured, the hop to the proxy itself is not checked: lo
 
 ## Searching the web (web_search plugin)
 
-When enabled it provides `search_web`, which hands the query to Tavily and returns a few page snippets. Leaving `api_key` empty sends a keyless request with a tighter quota; filling it in buys quota, not availability. Search terms go to a third party, which is why the plugin is off by default. The hourly cap counts only successful requests; calls above it are refused outright so an enthusiastic conversation cannot burn through the quota.
+When enabled it provides `search_web`, which hands the query to Tavily and returns a few page snippets. Leaving `api_key` empty sends a keyless request with a tighter quota; filling it in buys quota, not availability. Search terms go to a third party, which is why the plugin is off by default. The hourly cap counts only successful requests: once the last hour is full, new web searches are refused; but the quota is recorded only after a request succeeds, so concurrent requests already in flight can still push the total slightly above the configured limit.
 
 ## Sending media (media plugin)
 
