@@ -22,6 +22,9 @@ import (
 //
 // 静态文字用 i18n.T(q.Lang, "plugin.<name>.state.<key>...", 中文) 取，
 // Value / Detail 是运行时事实，原样返回、不翻译——与 ActionDef.Detail 同理。
+//
+// 需要让主人直接修正条目的插件另实现 StateEditor（见 stateedit.go）：它在行/块上挂
+// Edits，写入口与这里分开，本接口的只读契约不变。
 type StateReporter interface {
 	State(q StateQuery) []StateSection
 }
