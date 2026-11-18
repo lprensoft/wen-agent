@@ -494,6 +494,19 @@ func safely(lang, name, what string, fn func()) {
 	fn()
 }
 
+// safelyErr 与 safely 相同，但把 panic 转成一条面向界面的错误。
+// 用于需要知道「这次回调成没成」的地方（如状态修正）：吞掉 panic 再返回成功会让
+// 界面以为改动已经落地。
+func safelyErr(lang, name, what string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			i18n.Logf(lang, "log.plugin.callback_panic", "插件 %q 的 %s 回调 panic: %v", name, what, r)
+			err = fmt.Errorf(i18n.T(lang, "server.err.plugin_panic", "插件 %q 的 %s 回调失败: %v"), name, what, r)
+		}
+	}()
+	return fn()
+}
+
 // lang 是这个 Manager 的进程语言，供各处日志取用。
 func (m *Manager) lang() string { return m.ictx.Lang }
 

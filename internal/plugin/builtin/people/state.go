@@ -11,6 +11,14 @@ import (
 // 「一个人都没有」与「多到读不完」都不至于把页面撑长。
 const stateMaxRows = 30
 
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection  = "people"
+	stateOpEdit   = "edit"
+	stateOpDelete = "delete"
+	stateOpAdd    = "add"
+)
+
 // State 把各可见域的人物交给设置页的「角色状态」。
 //
 // 状态页是主人看的，所以枚举磁盘上存在的全部域，每块挂一个 Domain 标签，
@@ -54,6 +62,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 				Meta:   stateClosenessLabel(q.Lang, person.Closeness),
 				Value:  person.Name,
 				Detail: personDetail(q.Lang, person),
+				ID:     person.Name,
+				Edits:  stateRowEdits(q.Lang, person),
 			})
 		}
 		out = append(out, plugin.StateSection{
@@ -64,6 +74,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Domain:    tag,
 			UpdatedAt: latest,
 			More:      len(ps) - len(rows),
+			Edits:     stateAddEdits(q.Lang),
 		})
 	}
 	if len(out) == 0 {
@@ -74,7 +85,86 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Key:   "people",
 			Title: i18n.T(q.Lang, "plugin.people.state.title", "人物"),
 			Empty: i18n.T(q.Lang, "plugin.people.state.empty", "还没有认识的人。"),
+			Edits: stateAddEdits(q.Lang),
 		}}
+	}
+	return out
+}
+
+// stateRowEdits 是一行人物上的操作：修改各字段，或从名册里移除。
+func stateRowEdits(lang string, person Person) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:     stateOpEdit,
+			Label:  i18n.T(lang, "plugin.people.state.edit", "修改"),
+			Fields: stateEditFields(lang, person),
+		},
+		{
+			Op:      stateOpDelete,
+			Label:   i18n.T(lang, "plugin.people.state.delete", "移除"),
+			Confirm: i18n.T(lang, "plugin.people.state.delete_confirm", "从人物库移除这个人？之后演绎里不会再提到他/她。"),
+			Danger:  true,
+		},
+	}
+}
+
+// stateEditFields 是修改表单。名字是落盘身份，本轮只读，不在表单里出现。
+func stateEditFields(lang string, person Person) []plugin.StateField {
+	return []plugin.StateField{
+		{
+			Key: "relation", Label: i18n.T(lang, "plugin.people.state.field.relation", "关系"),
+			Type: plugin.StateFieldText, Value: person.Relation, MaxLen: maxRelationRunes, Required: true,
+		},
+		{
+			Key: "closeness", Label: i18n.T(lang, "plugin.people.state.field.closeness", "亲近度"),
+			Type: plugin.StateFieldSelect, Value: person.Closeness, Options: stateClosenessOptions(lang),
+		},
+		{
+			Key: "profile", Label: i18n.T(lang, "plugin.people.state.field.profile", "设定"),
+			Type: plugin.StateFieldTextarea, Value: person.Profile, MaxLen: maxProfileRunes,
+		},
+		{
+			Key: "lately", Label: i18n.T(lang, "plugin.people.state.field.lately", "近况"),
+			Type: plugin.StateFieldText, Value: person.Lately, MaxLen: maxLatelyRunes,
+		},
+	}
+}
+
+// stateAddFields 是登记新人物。关系必填，亲近度缺省为「认识」。
+func stateAddFields(lang string) []plugin.StateField {
+	return []plugin.StateField{
+		{
+			Key: "name", Label: i18n.T(lang, "plugin.people.state.field.name", "名字"),
+			Type: plugin.StateFieldText, MaxLen: maxNameRunes, Required: true,
+		},
+		{
+			Key: "relation", Label: i18n.T(lang, "plugin.people.state.field.relation", "关系"),
+			Type: plugin.StateFieldText, MaxLen: maxRelationRunes, Required: true,
+		},
+		{
+			Key: "closeness", Label: i18n.T(lang, "plugin.people.state.field.closeness", "亲近度"),
+			Type: plugin.StateFieldSelect, Value: defaultCloseness, Options: stateClosenessOptions(lang),
+		},
+		{
+			Key: "profile", Label: i18n.T(lang, "plugin.people.state.field.profile", "设定"),
+			Type: plugin.StateFieldTextarea, MaxLen: maxProfileRunes,
+		},
+	}
+}
+
+func stateAddEdits(lang string) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:     stateOpAdd,
+		Label:  i18n.T(lang, "plugin.people.state.add", "登记新人物"),
+		Fields: stateAddFields(lang),
+	}}
+}
+
+func stateClosenessOptions(lang string) []plugin.StateOption {
+	values := closenessLevels.ZHValues()
+	out := make([]plugin.StateOption, 0, len(values))
+	for _, v := range values {
+		out = append(out, plugin.StateOption{Value: v, Label: stateClosenessLabel(lang, v)})
 	}
 	return out
 }
