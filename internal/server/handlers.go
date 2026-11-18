@@ -424,9 +424,10 @@ func (s *Server) editPluginState(w http.ResponseWriter, r *http.Request) {
 	const (
 		maxDomain  = 64
 		maxSection = 64
-		maxRow     = 256
-		maxOp      = 64
-		maxValue   = 8 << 10
+		// maxRow 要容得下最长的行身份：记忆标题不截断，只截文件名，长标题可能到几百字节。
+		maxRow   = 4096
+		maxOp    = 64
+		maxValue = 8 << 10
 	)
 	bad := len(req.Domain) > maxDomain || len(req.Section) > maxSection ||
 		len(req.Row) > maxRow || len(req.Op) > maxOp ||

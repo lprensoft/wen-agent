@@ -50,6 +50,15 @@ func TestTakeRejectsBadTarget(t *testing.T) {
 	if err := p.EditState(editReq(stateOpTake, itemID("冰箱", "鸡蛋"), map[string]string{"qty": "-1"})); err == nil {
 		t.Error("负数应拒绝")
 	}
+	if err := p.EditState(editReq(stateOpTake, itemID("冰箱", "鸡蛋"), map[string]string{})); err == nil {
+		t.Error("空数量应拒绝——0 是全部取出，不能拿空值顶替")
+	}
+	if err := p.EditState(editReq(stateOpTake, itemID("冰箱", "鸡蛋"), map[string]string{"qty": "10"})); err == nil {
+		t.Error("取出超过现有数量应拒绝")
+	}
+	if cs, _ := p.storeFor("").List(); cs[0].Items[0].Qty != 6 {
+		t.Errorf("被拒绝的取出不该改动数量：%+v", cs[0].Items[0])
+	}
 	req := editReq(stateOpTake, itemID("冰箱", "鸡蛋"), map[string]string{"qty": "1"})
 	req.Domain = "nope"
 	if err := p.EditState(req); err == nil {
@@ -73,5 +82,44 @@ func TestAddItem(t *testing.T) {
 	}
 	if err := p.EditState(editReq(stateOpAdd, "", map[string]string{"container": "衣柜", "name": " "})); err == nil {
 		t.Error("空物品名应拒绝")
+	}
+}
+
+// 放入时容器与单容器条数上限先在这里报清楚，别落到「保存失败」上。
+func TestAddItemHonoursLimits(t *testing.T) {
+	p := New()
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
+		"max_containers": 1, "max_items": 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EditState(editReq(stateOpAdd, "", map[string]string{"container": "冰箱", "name": "鸡蛋"})); err != nil {
+		t.Fatalf("第一次放入 = %v", err)
+	}
+	if err := p.EditState(editReq(stateOpAdd, "", map[string]string{"container": "衣柜", "name": "外套"})); err == nil {
+		t.Error("容器达上限应拒绝")
+	}
+	if err := p.EditState(editReq(stateOpAdd, "", map[string]string{"container": "冰箱", "name": "牛奶"})); err == nil {
+		t.Error("单容器物品达上限应拒绝")
+	}
+}
+
+// 名称里出现冒号、控制字符时，复合身份仍要能原位切回来。
+func TestItemIDRoundTrip(t *testing.T) {
+	for _, c := range [][2]string{
+		{"冰箱", "鸡蛋"},
+		{"冰箱\x1f甲", "鸡蛋:1"},
+		{"a:b", "2:3"},
+		{"", ""},
+	} {
+		container, item, ok := splitItemID(itemID(c[0], c[1]))
+		if !ok || container != c[0] || item != c[1] {
+			t.Errorf("itemID(%q, %q) 往返 = %q / %q / %v", c[0], c[1], container, item, ok)
+		}
+	}
+	for _, bad := range []string{"", "x", "9:冰箱"} {
+		if _, _, ok := splitItemID(bad); ok {
+			t.Errorf("%q 不该被解析成有效身份", bad)
+		}
 	}
 }

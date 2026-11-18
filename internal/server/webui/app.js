@@ -1593,6 +1593,7 @@ const stateRefreshBtn = $("#btn-state-refresh");
 const chatStateEl = $("#chat-state");
 const chatStateTextEl = $("#chat-state-text");
 let stateLoading = false;
+let stateReloadQueued = false;
 let pinnedStateLoading = false;
 // lastStateEditKey 让刚改过的那一块在刷新后保持展开：整页重建会把 <details> 折回去。
 let lastStateEditKey = "";
@@ -1611,7 +1612,13 @@ function relativeTime(iso) {
 }
 
 async function loadState() {
-  if (!stateEl || stateLoading) return;
+  if (!stateEl) return;
+  if (stateLoading) {
+    // 保存后紧接刷新时可能撞上一次正在进行的读取；记下来，等这次读完再补一次，
+    // 否则界面会停在这之前那一份快照上。
+    stateReloadQueued = true;
+    return;
+  }
   stateLoading = true;
   stateEl.textContent = t("common.loading");
   stateMetaEl.textContent = "";
@@ -1623,6 +1630,10 @@ async function loadState() {
     stateEl.textContent = t("settings.state.loadFailed", { msg: e.message });
   } finally {
     stateLoading = false;
+    if (stateReloadQueued) {
+      stateReloadQueued = false;
+      loadState();
+    }
   }
 }
 
@@ -1909,12 +1920,16 @@ const stateEditModal = $("#state-edit-modal");
 const stateEditTitle = $("#state-edit-title");
 const stateEditForm = $("#state-edit-form");
 const stateEditError = $("#state-edit-error");
+const stateEditSaveBtn = $("#btn-state-edit-save");
 let stateEditPending = null;
+// 一次只放行一个修正：连点保存等于把同一次改动发两遍，第二次通常只会报「已经不在了」。
+let stateEditSaving = false;
 
 function startStateEdit(payload) {
+  if (stateEditSaving) return;
   if (!payload.edit.fields || !payload.edit.fields.length) {
     if (payload.edit.confirm && !window.confirm(payload.edit.confirm)) return;
-    submitStateEdit(payload, {}).catch((e) => showStatePageError(e.message));
+    runDirectStateEdit(payload);
     return;
   }
   stateEditPending = payload;
@@ -1925,6 +1940,18 @@ function startStateEdit(payload) {
   stateEditModal.classList.remove("hidden");
   const first = stateEditForm.querySelector("input,textarea,select");
   if (first) first.focus();
+}
+
+async function runDirectStateEdit(payload) {
+  if (stateEditSaving) return;
+  stateEditSaving = true;
+  try {
+    await submitStateEdit(payload, {});
+  } catch (e) {
+    showStatePageError(e.message);
+  } finally {
+    stateEditSaving = false;
+  }
 }
 
 function closeStateEdit() {
@@ -2016,15 +2043,20 @@ async function submitStateEdit(payload, values) {
 if (stateEditForm) {
   stateEditForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    if (!stateEditPending) return;
+    if (!stateEditPending || stateEditSaving) return;
     const values = {};
     for (const el of stateEditForm.querySelectorAll("[data-field-key]")) {
       values[el.dataset.fieldKey] = el.value;
     }
+    stateEditSaving = true;
+    if (stateEditSaveBtn) stateEditSaveBtn.disabled = true;
     try {
       await submitStateEdit(stateEditPending, values);
     } catch (err) {
       showStateEditError(t("settings.state.editFailed", { msg: err.message }));
+    } finally {
+      stateEditSaving = false;
+      if (stateEditSaveBtn) stateEditSaveBtn.disabled = false;
     }
   });
 }

@@ -70,7 +70,7 @@ func (p *Plugin) editIndex(req plugin.StateEditRequest) error {
 
 func (p *Plugin) editDiary(req plugin.StateEditRequest, base string) error {
 	if _, err := time.ParseInLocation(time.DateOnly, req.Row, time.Local); err != nil {
-		return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such", "这条记忆已经不在了。"))
+		return errors.New(i18n.T(req.Lang, "plugin.memory.state.err.no_such_day", "这一天的日记已经不在了。"))
 	}
 	dir := plugin.DomainDir(base, req.Domain)
 	switch req.Op {

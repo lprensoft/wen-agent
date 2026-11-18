@@ -2,6 +2,7 @@ package belongings
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,12 +112,24 @@ const (
 	stateOpAdd   = "add"
 )
 
-// itemID 把「哪个容器的哪一件」拼成一个不透明身份。用单元分隔符而不是斜杠：
-// 容器名与物品名都可能带普通标点，分隔符不该和它们撞上。
-func itemID(container, item string) string { return container + "\x1f" + item }
+// itemID 把「哪个容器的哪一件」拼成一个不透明身份。
+//
+// 用「容器字节长 + 冒号 + 容器 + 物品」而不是固定分隔符：名称由模型与用户填写，
+// 任何固定字符都可能出现在里面，靠它切会指错条目。
+func itemID(container, item string) string {
+	return strconv.Itoa(len(container)) + ":" + container + item
+}
 
 func splitItemID(id string) (container, item string, ok bool) {
-	return strings.Cut(id, "\x1f")
+	i := strings.IndexByte(id, ':')
+	if i < 0 {
+		return "", "", false
+	}
+	n, err := strconv.Atoi(id[:i])
+	if err != nil || n < 0 || len(id) < i+1+n {
+		return "", "", false
+	}
+	return id[i+1 : i+1+n], id[i+1+n:], true
 }
 
 func itemEdits(lang string, it Item) []plugin.StateEdit {
@@ -125,7 +138,7 @@ func itemEdits(lang string, it Item) []plugin.StateEdit {
 		Label: i18n.T(lang, "plugin.belongings.state.take", "取出"),
 		Fields: []plugin.StateField{{
 			Key: "qty", Label: i18n.T(lang, "plugin.belongings.state.take_qty", "取出数量（0 = 全部）"),
-			Type: plugin.StateFieldNumber, Value: "0",
+			Type: plugin.StateFieldNumber, Value: "1", Required: true,
 			Min: plugin.IntPtr(0), Max: plugin.IntPtr(maxQty),
 		}},
 	}}

@@ -42,6 +42,10 @@ func (p *Plugin) takeItem(req plugin.StateEditRequest, store *Store, s settings)
 	if !ok {
 		return errors.New(i18n.T(req.Lang, "plugin.belongings.state.err.no_such", "这件东西已经不在了。"))
 	}
+	if strings.TrimSpace(req.Values["qty"]) == "" {
+		// 空值不能当成 0：0 是「全部取出」，一次没填清楚就清空一件东西太危险。
+		return errors.New(i18n.T(req.Lang, "plugin.belongings.state.err.qty_required", "取出数量不能为空（0 表示全部）。"))
+	}
 	qty, err := parseQty(req.Lang, req.Values["qty"])
 	if err != nil {
 		return err
@@ -58,8 +62,14 @@ func (p *Plugin) takeItem(req plugin.StateEditRequest, store *Store, s settings)
 	if ii < 0 {
 		return errors.New(i18n.T(req.Lang, "plugin.belongings.state.err.no_such", "这件东西已经不在了。"))
 	}
+	it := cs[ci].Items[ii]
+	// 可计的物品取超了不静默清空：那是看错了一行，不是想扔掉这一件。
+	if qty > 0 && it.Qty > 0 && qty > it.Qty {
+		return errors.New(i18n.Tf(req.Lang, "plugin.belongings.state.err.qty_exceeds",
+			"只有 %d 件，取不出 %d 件。", it.Qty, qty))
+	}
 	if _, err := store.Apply(cs[ci].Name, nil,
-		[]Change{{Name: cs[ci].Items[ii].Name, Qty: qty}}, time.Now(),
+		[]Change{{Name: it.Name, Qty: qty}}, time.Now(),
 		Limits{MaxContainers: s.maxContainers, MaxItemsPerContainer: s.maxItems}); err != nil {
 		return p.stateEditFailed(req.Lang, err)
 	}
@@ -89,6 +99,22 @@ func (p *Plugin) addItemFromState(req plugin.StateEditRequest, store *Store, s s
 	qty, err := parseQty(req.Lang, req.Values["qty"])
 	if err != nil {
 		return err
+	}
+	cs, err := store.List()
+	if err != nil {
+		return p.stateEditFailed(req.Lang, err)
+	}
+	// 上限先在这里判，报错才说得清是哪一条；Store 里那一条是写给模型的。
+	if ci := containerIndex(cs, container); ci < 0 {
+		if s.maxContainers > 0 && len(cs) >= s.maxContainers {
+			return errors.New(i18n.Tf(req.Lang, "plugin.belongings.state.err.container_limit",
+				"容器已达上限（%d 个）。", s.maxContainers))
+		}
+	} else if itemIndex(cs[ci].Items, name) < 0 {
+		if s.maxItems > 0 && len(cs[ci].Items) >= s.maxItems {
+			return errors.New(i18n.Tf(req.Lang, "plugin.belongings.state.err.item_limit",
+				"这个容器的物品已达上限（%d 项）。", s.maxItems))
+		}
 	}
 	if _, err := store.Apply(container,
 		[]Change{{Name: name, Qty: qty, Note: note}}, nil, time.Now(),

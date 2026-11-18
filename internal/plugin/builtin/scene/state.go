@@ -1,14 +1,19 @@
 package scene
 
 import (
+	"sort"
 	"time"
 
 	"wen/internal/i18n"
 	"wen/internal/plugin"
 )
 
-// stateMaxRows 是状态页上最多列几处场景。注入侧有自己的条数上限，这里只兜页面长度。
-const stateMaxRows = 30
+// stateMaxRows 是状态页上最多列几处场景。
+//
+// 取 15 不是随手定的：编辑描述要连同现值一起下发，而一条场景最多 500 字，三十条
+// 的长描述加上行本身会顶穿每插件 48KB 的兜底，整块被丢掉比只列一部分更糟。
+// 更早的场景仍在库里、仍随每轮注入，只是不在这一页上改。
+const stateMaxRows = 15
 
 // State 把各可见域的场景记忆交给设置页的「角色状态」。
 //
@@ -39,6 +44,9 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		if len(scenes) == 0 {
 			continue
 		}
+		// 最近更新过的排在前面：只列一部分时，要先能改到最近变化的那几处。
+		scenes = append([]Scene(nil), scenes...)
+		sort.SliceStable(scenes, func(i, j int) bool { return scenes[i].Updated.After(scenes[j].Updated) })
 
 		rows := make([]plugin.StateRow, 0, min(len(scenes), stateMaxRows))
 		var latest time.Time

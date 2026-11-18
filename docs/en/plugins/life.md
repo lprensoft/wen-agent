@@ -10,7 +10,7 @@ A character needs a continuous situation to be in; personality alone is not enou
 - **Look before writing**: the criteria require checking `[场景记忆]` for the same place first. If it is already there and consistent, nothing is recorded; if there is something to add or something has changed, `replace` updates the existing entry instead of creating a second one. Otherwise one room accumulates several mutually contradictory descriptions.
 - **Tools**: `save_scene`, `list_scenes`, `delete_scene`. The store lives in `<config dir>/plugins/scene/scenes/`, and with visibility isolation on, a tagged store sits in a sibling `scenes-<tag>/`.
 - **Injection has a ceiling**: scene memories are resent every turn, so past the byte limit descriptions are dropped and only names remain, and only past that are entries truncated — the same degradation strategy as the memory index, preserving "this place exists" first.
-- **Character state page**: scenes recorded per visible domain; description edits, deletions and new entries can be made there (a duplicate name is refused).
+- **Character state page**: the 15 most recently updated scenes per visible domain (an edit carries the description with it, and listing all of them would blow the page's size ceiling); description edits, deletions and new entries can be made there (a duplicate name is refused).
 
 | Setting | Default | Description |
 |---|---|---|

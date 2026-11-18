@@ -118,6 +118,20 @@ func TestEditPluginState(t *testing.T) {
 	if p.last.Values["relation"] != "同事" {
 		t.Fatalf("值没有原样交回：%+v", p.last.Values)
 	}
+
+	// 记忆标题不截断，行身份可能超过几百字节；只要在请求体上限内就该放行。
+	longRow := strings.Repeat("记", 100) // 300 字节
+	body = `{"domain":"","section":"index","row":"` + longRow + `","op":"delete"}`
+	req = httptest.NewRequest("POST", "/api/plugins/people/state/edit", strings.NewReader(body))
+	req.SetPathValue("name", "people")
+	rec = httptest.NewRecorder()
+	s.editPluginState(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("长行身份 status = %d body = %s", rec.Code, rec.Body)
+	}
+	if p.last.Row != longRow {
+		t.Fatalf("长行身份被截断：%d 字节", len(p.last.Row))
+	}
 }
 
 // 非法域名、坏 JSON 与超量值都在 HTTP 层拒绝，不进插件。
