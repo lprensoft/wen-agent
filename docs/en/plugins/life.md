@@ -99,7 +99,7 @@ A character should have a day of its own outside your conversations, but the mod
 | `max_commitments_inject` | 8 | The number of commitments injected per turn |
 | `max_inject_bytes` | 2048 | The combined byte limit on both injected blocks |
 
-- **Character state page**: a read-only view of today's plan with each item's time and status, plus upcoming commitments; cancelled items are omitted.
+- **Character state page**: today's plan with each item's time and status, plus upcoming commitments; cancelled items are omitted. Unfinished items can have their title, time and place edited, or be cancelled there.
 
 ## Relationship (relationship plugin)
 
@@ -111,7 +111,7 @@ Half of a stable personality is a stable attitude toward one particular person. 
 - **Only "between us" is recorded**: who you are, what you like, what you have been through are still facts for roleplay's "about me" and for memory, and "lately" keeps only one current line, used for judging tone. Off-limits subjects hold only the few that have hardened into things never to be touched again — there are only five slots, and an unwillingness stated once belongs in long-term memory's `边界` category. This records what is not touched now; that records why the line was drawn then. Stored once per visibility scope with no merging: the relationship belongs to the persona, so the outer persona being an old friend and the inner one being a lover both hold at once.
 - **Reset in one click**: the gear on the settings page has "reset the relationship state", covering the separate copies each persona keeps. It cannot be undone.
 
-- **Character state page**: read-only view of stage, names, latest change, bonds, how they are doing, and dates.
+- **Character state page**: stage, names, latest change, understandings, how they are doing, and dates; the stage, names, latest change, how they are doing and the understandings (one per line) can be edited there.
 
 ## Unspoken thoughts (unspoken plugin)
 
@@ -139,7 +139,7 @@ Nobody knows every book inside out. A person knows the ones they have read. The 
 - **New passages only when nobody is around**: in turns with a real person present, `read_book` refuses outright. A long passage dropped into the middle of a chat would mean you watching her read. In heartbeat turns `[Reading]` adds a line saying nobody is around and she could read a passage if she likes. The heartbeat does not beat while she is asleep or very busy, so those are exactly her idle moments. Whether to read, and what, is her call.
 - **Having read it is not the same as knowing it**: `note_book` keeps one line of impression (up to 60 characters, the latest 5 per book, each with how far she had read). `[Reading]` is injected every turn with the shelf, the books in progress and their latest impressions, and the finished books. The criteria tell her to treat the parts she has not reached as unknown. The model already remembers the classics, so this line holds it back as far as it can but cannot stop it entirely.
 - **Progress belongs to the persona**: stored once per visibility scope, so the inner persona does not know what the outer one has read. The shelf itself is shared.
-- **Character state page**: books read per persona with progress and the latest impression; the shelf listing itself still comes from "Look at the bookshelf".
+- **Character state page**: books read per persona with progress and the latest impression; a book's progress and impressions can be reset there, while the shelf listing itself still comes from "Look at the bookshelf".
 
 | Setting | Default | Description |
 |---|---|---|
@@ -170,7 +170,7 @@ The same touch should not draw the same reaction the first time and the twentiet
 - **Immediate bodily state**: arousal and fatigue, each 0-100, filling the layer missing between the contact counts (long-term familiarity) and the mood — "what state the body is in right now". The model reports the delta as the acting requires (`adjust_body_state`, at most once per turn, both values reportable together), and each drifts back toward 0 at its own rate; the drifting itself is the afterglow and the recovery, so no separate state is needed for it. It is stored outside the session, so it carries across sessions naturally. Stored once per visibility scope, and read by taking the maximum of each field across the readable scopes — deliberately unlike the mood's "completely independent per scope": a mood belongs to a persona, but the body is one body.
 - **Sleepiness**: it sits in `[Current Body State]` next to arousal and fatigue, but the model does not report it. It is **worked out from how long the character has been awake and the time of day**, and the model cannot change it. Time awake is measured by how close the session context is to auto-compaction. The longer the context, the worse the model really does hold on to details, so this tiredness is not an act. After a compaction the context is short again and the sleepiness fades, which is why a night's sleep maps onto a compaction (the heartbeat plugin can do that compaction while the character sleeps). The time-of-day half is a circadian rhythm, heaviest late at night with a small dip after lunch. What gets injected is a level ("a little drowsy", "sleepy", "very sleepy", "barely able to stay awake") with a cause ("awake for a long time", "late at night"), never a number. The sleepier the character, the more often the line ends with "A wave of sleepiness rolls over you right now". That marks the moment to let it show, and it has a cooldown, so the character is not yawning every turn. Whether to show it and whether to go to sleep is the character's call, and the guidance says to look after the other person first when they need it. Sleepiness is not fatigue: fatigue is a tired body, sleepiness is wanting to sleep.
 - **Tools**: `record_touch` (records a touch and echoes back the cumulative count and the stage; the criteria require "record first, get the echo, then write the reaction"), `list_body_state` and `adjust_body_state`.
-- **Character state page**: current arousal, fatigue, cause and per-part touch counts, split by persona; read-only for now.
+- **Character state page**: current arousal, fatigue, cause and per-part touch counts, split by persona; arousal, fatigue and cause can be set directly there, or the record reset for that domain.
 - **Reset in one click**: the gear on the settings page has "clear the contact records" and "reset the bodily state", both covering the separate copies each persona keeps. Neither can be undone.
 
 | Setting | Default | Description |
@@ -200,7 +200,7 @@ The character's state should be changed by interaction and should also settle on
 | `decay_per_hour` | 5 | Points drifting back toward calm per hour; 0 means no decay |
 | `max_delta_per_call` | 30 | The cap on the absolute value of one adjustment. Lower it to make feelings change gradually, so one sentence cannot go from happy to devastated |
 
-- **Character state page and chat strip**: read-only mood and its cause; the strip at the top of the chat shows the mood summary.
+- **Character state page and chat strip**: mood and its cause; set them to a value there or reset. The strip at the top of the chat shows the mood summary.
 
 ## Health (health plugin)
 
@@ -219,7 +219,7 @@ People catch a chill now and then, get headaches, eat something bad; a character
 | `max_conditions` | 2 | The most conditions tracked at once (1-3) |
 | `max_severity` | Miserable | The severity ceiling: a little under the weather / miserable / laid up. Anything the model reports above it is clamped and the model is told |
 
-- **Character state page**: read-only view of conditions still running their course and how they are being handled.
+- **Character state page**: conditions still running their course and how they are being handled; severity and care can be changed or the condition marked recovered there.
 
 ## Presence (presence plugin)
 
@@ -230,7 +230,7 @@ The scene and the posture used to be carried forward only by the model looking b
 - **Only observable facts about the present are recorded**, never feelings or inner life — those belong to `mood`. Stored once per visibility scope.
 - **Clear in one click**: the gear on the settings page has "clear the presence", covering the separate copies each persona keeps. It cannot be undone.
 
-- **Character state page**: a read-only view of location, attire, posture, current activity, and when it last changed.
+- **Character state page**: location, attire, posture, current activity, and when it last changed; all six fields can be edited there (clearing one removes it).
 
 ## Style watch (style_watch plugin)
 

@@ -94,7 +94,11 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			if n := len(e.pr.Notes); n > 0 {
 				detail = e.pr.Notes[n-1].Text
 			}
-			rows = append(rows, plugin.StateRow{Meta: meta, Value: title, Detail: detail})
+			rows = append(rows, plugin.StateRow{
+				Meta: meta, Value: title, Detail: detail,
+				ID:    e.file,
+				Edits: shelfEdits(q.Lang),
+			})
 		}
 		out = append(out, plugin.StateSection{
 			Key:       "shelf",
@@ -122,4 +126,20 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		}}
 	}
 	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection = "shelf"
+	stateOpReset = "reset"
+)
+
+// shelfEdits 是一本书上的操作：把进度与印象清零，回到没读过的状态。
+func shelfEdits(lang string) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:      stateOpReset,
+		Label:   i18n.T(lang, "plugin.bookshelf.state.reset", "重置进度"),
+		Confirm: i18n.T(lang, "plugin.bookshelf.state.reset_confirm", "把这本书的进度与印象清零？之后会从开头读。"),
+		Danger:  true,
+	}}
 }

@@ -121,6 +121,8 @@ func (p *Plugin) daySection(lang string, pl Plan, day time.Time, dayStartHour in
 			Value:  it.Title,
 			Detail: detail,
 			Tone:   tone,
+			ID:     it.ID,
+			Edits:  dayEdits(lang, it),
 		})
 	}
 
@@ -194,6 +196,51 @@ func (p *Plugin) commitSection(lang string, all []Commitment, today, domain stri
 		Domain:  domain,
 		More:    len(cs) - len(rows),
 	}, true
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection  = "day"
+	stateOpEdit   = "edit"
+	stateOpCancel = "cancel"
+)
+
+// dayEdits 是今天表里一项上的操作：改标题/时间/地点，或取消这一项。
+// 已做完、跳过、延期、取消的项不再给按钮——它们已经了结，只有经历还能补。
+func dayEdits(lang string, it Item) []plugin.StateEdit {
+	if it.terminal() {
+		return nil
+	}
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpEdit,
+			Label: i18n.T(lang, "plugin.agenda.state.edit", "修改"),
+			Fields: []plugin.StateField{
+				{
+					Key: "title", Label: i18n.T(lang, "plugin.agenda.state.field.title", "标题"),
+					Type: plugin.StateFieldText, Value: it.Title, MaxLen: maxTitleRunes, Required: true,
+				},
+				{
+					Key: "start", Label: i18n.T(lang, "plugin.agenda.state.field.start", "开始（HH:MM）"),
+					Type: plugin.StateFieldText, Value: it.Start, MaxLen: 5, Required: true,
+				},
+				{
+					Key: "end", Label: i18n.T(lang, "plugin.agenda.state.field.end", "结束（HH:MM）"),
+					Type: plugin.StateFieldText, Value: it.End, MaxLen: 5, Required: true,
+				},
+				{
+					Key: "place", Label: i18n.T(lang, "plugin.agenda.state.field.place", "地点"),
+					Type: plugin.StateFieldText, Value: it.Place, MaxLen: maxPlaceRunes,
+				},
+			},
+		},
+		{
+			Op:      stateOpCancel,
+			Label:   i18n.T(lang, "plugin.agenda.state.cancel", "取消"),
+			Confirm: i18n.T(lang, "plugin.agenda.state.cancel_confirm", "取消这一项？之后不再出现在今天的安排里。"),
+			Danger:  true,
+		},
+	}
 }
 
 // agendaStatusLabel 的键写成字面量，覆盖检查靠静态扫 (键, 中文) 这一对。

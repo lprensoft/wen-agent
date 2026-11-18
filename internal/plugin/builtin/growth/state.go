@@ -49,6 +49,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 				Value:  st.Pending.Text,
 				Detail: entryDetail(st.Pending),
 				Tone:   plugin.StateToneWarn,
+				ID:     entryIdent(*st.Pending),
+				Edits:  pendingEdits(q.Lang),
 			})
 		}
 		coreLabel := i18n.T(q.Lang, "plugin.growth.state.core", "核心")
@@ -73,6 +75,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 				Meta:   e.ID,
 				Value:  e.Text,
 				Detail: entryDetail(&e),
+				ID:     e.ID,
+				Edits:  detailEdits(q.Lang, e),
 			})
 		}
 
@@ -137,4 +141,64 @@ func clipText(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection   = "growth"
+	stateOpEdit    = "edit"
+	stateOpLetGo   = "let_go"
+	stateOpApprove = "approve"
+	stateOpReject  = "reject"
+)
+
+// pendingEdits 是待批准那一条上的操作。批准与驳回都由凭据指回这一条，
+// 沿用设置页操作按钮同一条规则：按下时批的就是当时显示的那条。
+func pendingEdits(lang string) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpApprove,
+			Label: i18n.T(lang, "plugin.growth.state.approve", "批准"),
+		},
+		{
+			Op:      stateOpReject,
+			Label:   i18n.T(lang, "plugin.growth.state.reject", "驳回"),
+			Confirm: i18n.T(lang, "plugin.growth.state.reject_confirm", "驳回这条改变？之后不能再批准它。"),
+			Danger:  true,
+		},
+	}
+}
+
+// detailEdits 是一条小变化上的操作：改文字与依据，或放下。
+func detailEdits(lang string, e Entry) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:     stateOpEdit,
+			Label:  i18n.T(lang, "plugin.growth.state.edit", "修改"),
+			Fields: detailFields(lang, e),
+		},
+		{
+			Op:      stateOpLetGo,
+			Label:   i18n.T(lang, "plugin.growth.state.let_go", "放下"),
+			Confirm: i18n.T(lang, "plugin.growth.state.let_go_confirm", "放下这条小变化？之后演绎里不再以它为准。"),
+			Danger:  true,
+		},
+	}
+}
+
+func detailFields(lang string, e Entry) []plugin.StateField {
+	return []plugin.StateField{
+		{
+			Key: "text", Label: i18n.T(lang, "plugin.growth.state.field.text", "小变化"),
+			Type: plugin.StateFieldText, Value: e.Text, MaxLen: maxTextRunes, Required: true,
+		},
+		{
+			Key: "basis", Label: i18n.T(lang, "plugin.growth.state.field.basis", "依据"),
+			Type: plugin.StateFieldTextarea, Value: e.Basis, MaxLen: maxBasisRunes, Required: true,
+		},
+		{
+			Key: "why", Label: i18n.T(lang, "plugin.growth.state.field.why", "为什么这还是自己"),
+			Type: plugin.StateFieldTextarea, Value: e.Why, MaxLen: maxWhyRunes, Required: true,
+		},
+	}
 }

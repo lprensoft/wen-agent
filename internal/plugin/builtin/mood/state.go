@@ -101,6 +101,24 @@ func (s *Store) Clear() error {
 	return nil
 }
 
+// Set 把心情直接设成给定值：这是人从状态页修正用的绝对设值，不是模型的增量。
+// 设成 0 且没有起因时清掉记录——「平静」本来就是没有记录时的默认。
+func (s *Store) Set(value int, reason string, now time.Time) (State, error) {
+	out := State{Value: clamp(value, moodMin, moodMax), Reason: clipReason(reason), Updated: now}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out.Value == 0 && out.Reason == "" {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return State{}, fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.reset_failed", "重置心情失败: %w"), err)
+		}
+		return State{}, nil
+	}
+	if err := s.save(out); err != nil {
+		return State{}, err
+	}
+	return out, nil
+}
+
 func (s *Store) load() (State, bool, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {

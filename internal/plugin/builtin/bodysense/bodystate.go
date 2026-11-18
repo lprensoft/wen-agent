@@ -97,6 +97,32 @@ func (s *StateStore) Apply(dArousal, dFatigue, maxDelta, arousalPerHour, fatigue
 	return out, appliedA, appliedF, nil
 }
 
+// Set 把唤起与疲劳直接设成给定值：这是人从状态页修正用的绝对设值，不是模型的增量。
+// 两项都设成 0 等于把这一域的记录清掉，文件不留下一条「什么都没有」的空记录。
+func (s *StateStore) Set(arousal, fatigue int, reason string, now time.Time) (BodyState, error) {
+	out := BodyState{
+		Arousal: clampInt(arousal, stateMin, stateMax),
+		Fatigue: clampInt(fatigue, stateMin, stateMax),
+		Reason:  clipStateReason(reason),
+		Updated: now,
+	}
+	if out.Arousal == 0 && out.Fatigue == 0 {
+		out.Reason = ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out.Arousal == 0 && out.Fatigue == 0 {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return BodyState{}, fmt.Errorf(prompt.T(s.lang, "prompt.body_sense.store.state_clear_failed", "重置身体状态失败: %w"), err)
+		}
+		return BodyState{}, nil
+	}
+	if err := s.save(out); err != nil {
+		return BodyState{}, err
+	}
+	return out, nil
+}
+
 // Clear 抹掉本库的状态记录。文件不存在时不算错误。
 func (s *StateStore) Clear() error {
 	s.mu.Lock()
