@@ -9,6 +9,38 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v1.4.0] - 2026-11-18
+
+### 新增
+
+- 角色状态页从只读变为可修正：补齐人物、持有物、场景、身体状态、书架、成长与每日日记；记忆、日记、今日安排、健康、心情、现场与关系等行可直接修改、删除、添加或重置。修正会核对行身份与真正改动的字段，多个窗口同时改同一项不会互相覆盖；各人格的状态仍按可见域隔离
+- 设置页新增嵌入服务：可为记忆开启语义召回（默认关闭），词面匹配与语义相似度互补，同义说法也能被想起来；支持 OpenAI 兼容服务与本机 Ollama，服务不可用时自动退回纯词面匹配
+- 新增 `web_search` 插件（默认关闭）：填入 Tavily API Key 后，角色可以主动上网搜索；结果条数、每小时调用上限与超时可配
+- 新增 `reaction` 插件：模型可以在对方的消息上加赞、笑、惊讶等表情，与文字回复并存或单独使用；支持 Telegram、Discord、Slack 与飞书
+- 媒体出站扩展到后台轮次：心跳、定时任务也能把工作目录里的图片或文件推给会话绑定的用户，图片同时留在会话与网页界面
+
+---
+
+### Added
+
+- The Character state page can now be edited, not just read: people, belongings, scenes, body state, bookshelf, growth and the daily diary are covered, and rows for memories, diary days, today's schedule, health, mood, presence and relationship can be changed, deleted, added or reset. Edits verify row identity and the fields actually changed, so two open windows cannot overwrite each other, and personas remain isolated by visible domain
+- New embedding service in settings: semantic recall for memories (off by default) complements word matching so paraphrases can be recalled; supports OpenAI-compatible services and local Ollama, falling back to word matching when unavailable
+- New `web_search` plugin (off by default): with a Tavily API key the character can actively search the web; result count, hourly cap and timeout are configurable
+- New `reaction` plugin: the model can react to a message with a like, laugh, surprise and other emoji, alongside or instead of text; supported on Telegram, Discord, Slack and Feishu
+- Media output now works in background turns: heartbeat and scheduled turns can send images or files from the working directory to the user bound to the session, with images also kept in the conversation and web UI
+
+### 修复
+
+- 主动开口的提醒更可靠：提醒只交给读得到它的那一人格，不会出现在另一人格的心跳里；会话忙时会在真正空闲后重试，保存配置或重新启用后也不会提前触发或丢失
+- 状态页修正更安全：复制或重建记忆后不会删错条目，过期页面与后台并发修改不会把新值覆盖回旧值
+- `fetch_url` 只连公网：本机、内网与云厂商元数据地址都会被拒绝，重定向也绕不过
+
+### Fixed
+
+- More reliable proactive reminders: a reminder is delivered only to the persona that can read it and never appears in the other persona's heartbeat; a busy session is retried once it is actually free, and saving settings or re-enabling the plugin no longer fires early or loses the reminder
+- Safer edits from the Character state page: copying or recreating a memory no longer deletes the wrong entry, and stale pages or concurrent background writes cannot overwrite newer values
+- `fetch_url` now only reaches the public internet: loopback, private networks and cloud metadata addresses are rejected, including through redirects
+
 ## [v1.3.0] - 2026-11-15
 
 ### 新增
