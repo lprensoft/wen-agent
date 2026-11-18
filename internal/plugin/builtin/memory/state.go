@@ -84,6 +84,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 				Value:  e.Name,
 				Detail: detail,
 				Tone:   tone,
+				ID:     e.Name,
+				Edits:  indexEdits(q.Lang, e),
 			})
 		}
 		out = append(out, plugin.StateSection{
@@ -141,6 +143,8 @@ func (p *Plugin) diarySections(lang, base string) []plugin.StateSection {
 				Meta:   e.Date,
 				Value:  e.Summary,
 				Detail: strings.Join(e.Facts, " · "),
+				ID:     e.Date,
+				Edits:  diaryEdits(lang, e),
 			})
 		}
 		out = append(out, plugin.StateSection{
@@ -151,6 +155,70 @@ func (p *Plugin) diarySections(lang, base string) []plugin.StateSection {
 			Domain:  tag,
 			More:    total - len(rows),
 		})
+	}
+	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSectionIndex = "index"
+	stateSectionDiary = "diary"
+	stateOpEdit       = "edit"
+	stateOpDelete     = "delete"
+)
+
+// indexEdits 是一行记忆索引上的操作：改摘要/分类，或删除。
+// 标题是落盘身份，本轮不改名；正文只在 recall 时读，也不在这里改。
+func indexEdits(lang string, e Entry) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpEdit,
+			Label: i18n.T(lang, "plugin.memory.state.edit", "修改"),
+			Fields: []plugin.StateField{
+				{
+					Key: "description", Label: i18n.T(lang, "plugin.memory.state.field.description", "摘要"),
+					Type: plugin.StateFieldText, Value: e.Description, MaxLen: descMaxRunes,
+				},
+				{
+					Key: "type", Label: i18n.T(lang, "plugin.memory.state.field.type", "分类"),
+					Type: plugin.StateFieldSelect, Value: e.Type, Options: memoryTypeOptions(lang),
+				},
+			},
+		},
+		{
+			Op:      stateOpDelete,
+			Label:   i18n.T(lang, "plugin.memory.state.delete", "删除"),
+			Confirm: i18n.T(lang, "plugin.memory.state.delete_confirm", "删除这条记忆？删掉后角色就不再记得它。"),
+			Danger:  true,
+		},
+	}
+}
+
+// diaryEdits 是一行日记上的操作：改摘要，或删掉那一天。
+func diaryEdits(lang string, e timelineEntry) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpEdit,
+			Label: i18n.T(lang, "plugin.memory.state.edit", "修改"),
+			Fields: []plugin.StateField{{
+				Key: "summary", Label: i18n.T(lang, "plugin.memory.state.field.summary", "摘要"),
+				Type: plugin.StateFieldText, Value: e.Summary, MaxLen: maxSummaryRunes, Required: true,
+			}},
+		},
+		{
+			Op:      stateOpDelete,
+			Label:   i18n.T(lang, "plugin.memory.state.delete", "删除"),
+			Confirm: i18n.T(lang, "plugin.memory.state.diary_delete_confirm", "删除这一天的日记？删掉后不会重新生成。"),
+			Danger:  true,
+		},
+	}
+}
+
+func memoryTypeOptions(lang string) []plugin.StateOption {
+	values := memTypes.ZHValues()
+	out := make([]plugin.StateOption, 0, len(values))
+	for _, v := range values {
+		out = append(out, plugin.StateOption{Value: v, Label: memoryTypeLabel(lang, v)})
 	}
 	return out
 }

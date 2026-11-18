@@ -2,6 +2,7 @@ package belongings
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"wen/internal/i18n"
@@ -72,6 +73,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 					Meta:   c.Name,
 					Value:  value,
 					Detail: itemDetail(q.Lang, it),
+					ID:     itemID(c.Name, it.Name),
+					Edits:  itemEdits(q.Lang, it),
 				})
 			}
 		}
@@ -84,6 +87,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Domain:    tag,
 			UpdatedAt: latest,
 			More:      rowCount(cs) - len(rows),
+			Edits:     addEdits(q.Lang),
 		})
 	}
 	if len(out) == 0 {
@@ -94,9 +98,63 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Key:   "belongings",
 			Title: i18n.T(q.Lang, "plugin.belongings.state.title", "持有物"),
 			Empty: i18n.T(q.Lang, "plugin.belongings.state.empty", "还没有记录持有物。"),
+			Edits: addEdits(q.Lang),
 		}}
 	}
 	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection = "belongings"
+	stateOpTake  = "take"
+	stateOpAdd   = "add"
+)
+
+// itemID 把「哪个容器的哪一件」拼成一个不透明身份。用单元分隔符而不是斜杠：
+// 容器名与物品名都可能带普通标点，分隔符不该和它们撞上。
+func itemID(container, item string) string { return container + "\x1f" + item }
+
+func splitItemID(id string) (container, item string, ok bool) {
+	return strings.Cut(id, "\x1f")
+}
+
+func itemEdits(lang string, it Item) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:    stateOpTake,
+		Label: i18n.T(lang, "plugin.belongings.state.take", "取出"),
+		Fields: []plugin.StateField{{
+			Key: "qty", Label: i18n.T(lang, "plugin.belongings.state.take_qty", "取出数量（0 = 全部）"),
+			Type: plugin.StateFieldNumber, Value: "0",
+			Min: plugin.IntPtr(0), Max: plugin.IntPtr(maxQty),
+		}},
+	}}
+}
+
+func addEdits(lang string) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:    stateOpAdd,
+		Label: i18n.T(lang, "plugin.belongings.state.add", "放入"),
+		Fields: []plugin.StateField{
+			{
+				Key: "container", Label: i18n.T(lang, "plugin.belongings.state.field.container", "容器"),
+				Type: plugin.StateFieldText, MaxLen: maxContainerNameRunes, Required: true,
+			},
+			{
+				Key: "name", Label: i18n.T(lang, "plugin.belongings.state.field.item", "物品"),
+				Type: plugin.StateFieldText, MaxLen: maxItemNameRunes, Required: true,
+			},
+			{
+				Key: "qty", Label: i18n.T(lang, "plugin.belongings.state.field.qty", "数量（0 = 不计数）"),
+				Type: plugin.StateFieldNumber, Value: "0",
+				Min: plugin.IntPtr(0), Max: plugin.IntPtr(maxQty),
+			},
+			{
+				Key: "note", Label: i18n.T(lang, "plugin.belongings.state.field.note", "备注"),
+				Type: plugin.StateFieldText, MaxLen: maxNoteRunes,
+			},
+		},
+	}}
 }
 
 // itemDetail 拼一行备注与入库日期。日期用中性的 ISO 写法，不另造相对时间的说法。

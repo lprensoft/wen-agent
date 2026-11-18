@@ -52,6 +52,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			rows = append(rows, plugin.StateRow{
 				Value:  sc.Name,
 				Detail: clipText(sc.Detail, 200),
+				ID:     sc.Name,
+				Edits:  sceneEdits(q.Lang, sc),
 			})
 		}
 		out = append(out, plugin.StateSection{
@@ -62,6 +64,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Domain:    tag,
 			UpdatedAt: latest,
 			More:      len(scenes) - len(rows),
+			Edits:     sceneAddEdits(q.Lang),
 		})
 	}
 	if len(out) == 0 {
@@ -72,9 +75,54 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Key:   "scenes",
 			Title: i18n.T(q.Lang, "plugin.scene.state.title", "场景"),
 			Empty: i18n.T(q.Lang, "plugin.scene.state.empty", "还没有记录场景。"),
+			Edits: sceneAddEdits(q.Lang),
 		}}
 	}
 	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection  = "scenes"
+	stateOpEdit   = "edit"
+	stateOpDelete = "delete"
+	stateOpAdd    = "add"
+)
+
+func sceneEdits(lang string, sc Scene) []plugin.StateEdit {
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpEdit,
+			Label: i18n.T(lang, "plugin.scene.state.edit", "修改"),
+			Fields: []plugin.StateField{{
+				Key: "detail", Label: i18n.T(lang, "plugin.scene.state.field.detail", "描述"),
+				Type: plugin.StateFieldTextarea, Value: sc.Detail, MaxLen: maxDetailRunes, Required: true,
+			}},
+		},
+		{
+			Op:      stateOpDelete,
+			Label:   i18n.T(lang, "plugin.scene.state.delete", "删除"),
+			Confirm: i18n.T(lang, "plugin.scene.state.delete_confirm", "删除这处场景？之后演绎到那个地方时不再以它为准。"),
+			Danger:  true,
+		},
+	}
+}
+
+func sceneAddEdits(lang string) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:    stateOpAdd,
+		Label: i18n.T(lang, "plugin.scene.state.add", "记录新场景"),
+		Fields: []plugin.StateField{
+			{
+				Key: "name", Label: i18n.T(lang, "plugin.scene.state.field.name", "名称"),
+				Type: plugin.StateFieldText, MaxLen: maxNameRunes, Required: true,
+			},
+			{
+				Key: "detail", Label: i18n.T(lang, "plugin.scene.state.field.detail", "描述"),
+				Type: plugin.StateFieldTextarea, MaxLen: maxDetailRunes, Required: true,
+			},
+		},
+	}}
 }
 
 func clipText(s string, n int) string {

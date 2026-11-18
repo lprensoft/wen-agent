@@ -332,6 +332,39 @@ func (s *Store) Touch(name string, now time.Time) (bool, error) {
 	return true, nil
 }
 
+// UpdateIndex 改一条记忆的摘要与分类，不动正文、正文状态与「最后一次用到」。
+//
+// 不复用 SaveAt：那条路径会把 Blurred 清掉、把 LastUsed 刷成现在，一次索引修正
+// 就等于把一条已经淡忘的记忆复活。标题是落盘身份，本轮不改名。
+func (s *Store) UpdateIndex(name, description, typ string, now time.Time) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	e, ok := findEntry(entries, name)
+	if !ok {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.not_found", "没有名为 %q 的记忆"), name)
+	}
+	e.Description = truncateRunes(strings.TrimSpace(collapseSpace(description)), descMaxRunes)
+	if typ == "" {
+		typ = e.Type
+	}
+	zh, ok := memTypes.Canonical(typ)
+	if !ok {
+		return Entry{}, fmt.Errorf(prompt.T(s.lang, "prompt.memory.err.unknown_type",
+			"未知的记忆分类 %q（可选：%s）"), typ, strings.Join(memTypes.Values(s.lang), " / "))
+	}
+	e.Type = zh
+	e.Updated = now
+	if err := s.writeLocked(e); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
+}
+
 // Blur 把正文塌缩成摘要，只留要点，并标记为已淡忘。
 //
 // 刻意不调模型：摘要是保存时就写好的一句话概括，直接拿来用是确定的、零成本的，
