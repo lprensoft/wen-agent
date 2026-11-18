@@ -2,6 +2,7 @@ package memory
 
 import (
 	"sort"
+	"strings"
 
 	"wen/internal/i18n"
 	"wen/internal/plugin"
@@ -11,25 +12,28 @@ import (
 // 核心还有一层硬上限；这里取三十，够看清最近记住的事，又不会把页面撑长。
 const stateIndexLimit = 30
 
-// State 把记忆索引交给设置页的「角色状态」。
+// stateDiaryLimit 是状态页上最多列几天的日记。时间线本身留九十条，页面只要最近
+// 一段；更早的靠会话检索。
+const stateDiaryLimit = 30
+
+// State 把记忆索引与日记交给设置页的「角色状态」。
 //
 // 按可见域分库，一块对应一条故事线；状态页是主人看的，所以枚举全部域，
 // 每块挂 Domain 标签，由界面折叠其它人格。正文不发——索引是标题与一句钩子，
-// 想看全文仍走 recall_memory 或编辑器。
+// 想看全文仍走 recall_memory 或编辑器。日记读的是已收束的时间线，不是当日缓冲：
+// 当天还没结束，那一行还没写下来。
 func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	if q.PinnedOnly {
 		return nil
 	}
-	p.mu.RLock()
-	base := p.libBase
-	p.mu.RUnlock()
-	if base == "" {
+	s := p.snapshot()
+	if s.libBase == "" {
 		return nil
 	}
 
 	var out []plugin.StateSection
 	failed := false
-	for _, tag := range plugin.ReadDomains(base, plugin.Scope{}) {
+	for _, tag := range plugin.ReadDomains(s.libBase, plugin.Scope{}) {
 		store := p.storeFor(tag)
 		if store == nil {
 			continue
@@ -92,6 +96,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			More:      total - len(rows),
 		})
 	}
+
+	out = append(out, p.diarySections(q.Lang, s.libBase)...)
 	if len(out) == 0 {
 		if failed {
 			// 读失败与「确实没有记忆」是两件事。前者不该显示成空状态，
@@ -103,6 +109,48 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Title: i18n.T(q.Lang, "plugin.memory.state.index.title", "记忆索引"),
 			Empty: i18n.T(q.Lang, "plugin.memory.state.index.empty", "还没有记住任何事。"),
 		}}
+	}
+	return out
+}
+
+// diarySections 把各域的已收束时间线读成状态块。
+//
+// 只读 timeline.json，不读当日缓冲：当天的日记还没收束，那一行还不存在。
+// 时间线在 appendTimeline 里按日期升序保存；这里复制一份按新到旧排给页面看。
+// 没有记录的域不出块——日记为空时整块隐藏，不给每个用户多摆一块空版面。
+func (p *Plugin) diarySections(lang, base string) []plugin.StateSection {
+	var out []plugin.StateSection
+	for _, tag := range plugin.ReadDomains(base, plugin.Scope{}) {
+		dir := plugin.DomainDir(base, tag)
+		p.timelineMu.Lock()
+		f := loadTimeline(dir)
+		p.timelineMu.Unlock()
+		if len(f.Entries) == 0 {
+			continue
+		}
+		entries := append([]timelineEntry(nil), f.Entries...)
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Date > entries[j].Date })
+
+		total := len(entries)
+		rows := make([]plugin.StateRow, 0, min(total, stateDiaryLimit))
+		for _, e := range entries {
+			if len(rows) >= stateDiaryLimit {
+				break
+			}
+			rows = append(rows, plugin.StateRow{
+				Meta:   e.Date,
+				Value:  e.Summary,
+				Detail: strings.Join(e.Facts, " · "),
+			})
+		}
+		out = append(out, plugin.StateSection{
+			Key:     "diary",
+			Title:   i18n.T(lang, "plugin.memory.state.diary.title", "日记"),
+			Summary: i18n.Tf(lang, "plugin.memory.state.diary.summary", "最近 %d 天", total),
+			Rows:    rows,
+			Domain:  tag,
+			More:    total - len(rows),
+		})
 	}
 	return out
 }
