@@ -147,6 +147,9 @@ type Plan struct {
 	PlannedAt time.Time `json:"planned_at"`
 	Note      string    `json:"note,omitempty"`
 	Items     []Item    `json:"items"`
+	// Rev 是这份表的修订号：每次成功改动加一。状态页的操作凭据带着它，
+	// 旧页面上的按钮因此不会落到重排后占用了同一序号的那一项上。
+	Rev int64 `json:"rev,omitempty"`
 	// Attempts 与 Date 无关：它记的是「今天」的规划尝试次数，而 Date 可能还是昨天。
 	Attempts Attempts `json:"plan_attempts"`
 }
@@ -288,6 +291,7 @@ func (s *Store) UpdatePlan(mutate func(pl *Plan) (bool, error)) (Plan, error) {
 	if !changed {
 		return pl, nil
 	}
+	pl.Rev++
 	return pl, s.savePlan(pl)
 }
 

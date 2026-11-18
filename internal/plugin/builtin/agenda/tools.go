@@ -535,12 +535,12 @@ func (t *updatePlanTool) Execute(ctx context.Context, args json.RawMessage) (str
 	case result.Status == statusOngoing:
 		clearAvailability()
 		setAvailability(&result, day, s.dayStartHour, now)
-		cue.Drop(availabilitySource, "soon|"+result.ID)
+		cue.Drop(availabilitySource, soonKey(loc.tag, result.ID))
 	case result.terminal():
 		if wasOngoing {
 			clearAvailability()
 		}
-		cue.Drop(availabilitySource, "soon|"+result.ID)
+		cue.Drop(availabilitySource, soonKey(loc.tag, result.ID))
 	}
 	if deferred != nil {
 		_, err := st.UpdateCommitments(func(list *[]Commitment, next func() string) (bool, error) {
@@ -818,9 +818,10 @@ func (t *cancelCommitmentTool) Execute(ctx context.Context, args json.RawMessage
 
 	// 约定在可读域里找（写入域优先），写回它所在的域
 	var (
-		st      *Store
-		removed Commitment
-		found   bool
+		st       *Store
+		foundTag string
+		removed  Commitment
+		found    bool
 	)
 	for _, tag := range p.readDomains(ctx) {
 		cand := p.storeFor(tag)
@@ -845,7 +846,7 @@ func (t *cancelCommitmentTool) Execute(ctx context.Context, args json.RawMessage
 			return "", err
 		}
 		if found {
-			st = cand
+			st, foundTag = cand, tag
 			break
 		}
 	}
@@ -869,7 +870,7 @@ func (t *cancelCommitmentTool) Execute(ctx context.Context, args json.RawMessage
 		return false, nil
 	})
 	if itemID != "" {
-		cue.Drop(availabilitySource, "soon|"+itemID)
+		cue.Drop(availabilitySource, soonKey(foundTag, itemID))
 		if wasOngoing {
 			clearAvailability()
 		}

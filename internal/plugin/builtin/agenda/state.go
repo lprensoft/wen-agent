@@ -2,6 +2,7 @@ package agenda
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,6 +122,8 @@ func (p *Plugin) daySection(lang string, pl Plan, day time.Time, dayStartHour in
 			Value:  it.Title,
 			Detail: detail,
 			Tone:   tone,
+			ID:     planToken(pl, it.ID),
+			Edits:  dayEdits(lang, it),
 		})
 	}
 
@@ -194,6 +197,83 @@ func (p *Plugin) commitSection(lang string, all []Commitment, today, domain stri
 		Domain:  domain,
 		More:    len(cs) - len(rows),
 	}, true
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection  = "day"
+	stateOpEdit   = "edit"
+	stateOpCancel = "cancel"
+)
+
+// dayEdits 是今天表里一项上的操作：改标题/时间/地点，或取消这一项。
+// 已做完、跳过、延期、取消的项不再给按钮——它们已经了结，只有经历还能补。
+func dayEdits(lang string, it Item) []plugin.StateEdit {
+	if it.terminal() {
+		return nil
+	}
+	return []plugin.StateEdit{
+		{
+			Op:    stateOpEdit,
+			Label: i18n.T(lang, "plugin.agenda.state.edit", "修改"),
+			Fields: []plugin.StateField{
+				{
+					Key: "title", Label: i18n.T(lang, "plugin.agenda.state.field.title", "标题"),
+					Type: plugin.StateFieldText, Value: it.Title, MaxLen: maxTitleRunes, Required: true,
+				},
+				{
+					Key: "start", Label: i18n.T(lang, "plugin.agenda.state.field.start", "开始（HH:MM）"),
+					Type: plugin.StateFieldText, Value: it.Start, MaxLen: 5, Required: true,
+				},
+				{
+					Key: "end", Label: i18n.T(lang, "plugin.agenda.state.field.end", "结束（HH:MM）"),
+					Type: plugin.StateFieldText, Value: it.End, MaxLen: 5, Required: true,
+				},
+				{
+					Key: "place", Label: i18n.T(lang, "plugin.agenda.state.field.place", "地点"),
+					Type: plugin.StateFieldText, Value: it.Place, MaxLen: maxPlaceRunes,
+				},
+			},
+		},
+		{
+			Op:      stateOpCancel,
+			Label:   i18n.T(lang, "plugin.agenda.state.cancel", "取消"),
+			Confirm: i18n.T(lang, "plugin.agenda.state.cancel_confirm", "取消这一项？之后不再出现在今天的安排里。"),
+			Danger:  true,
+		},
+	}
+}
+
+// planVersion 是这份表的创建身份。没有 PlannedAt 的老文件按 0 算，
+// 修订号仍然把之后的变化区分开。
+func planVersion(pl Plan) int64 {
+	if pl.PlannedAt.IsZero() {
+		return 0
+	}
+	return pl.PlannedAt.UnixNano()
+}
+
+// planToken 是状态页上一项的操作凭据：表的创建时刻 + 修订号 + 项序号。
+// 只带序号不够：重排或次日排表都会让 a1 重新出现，旧页面上的取消会落到新项上。
+func planToken(pl Plan, itemID string) string {
+	return strconv.FormatInt(planVersion(pl), 10) + "|" +
+		strconv.FormatInt(pl.Rev, 10) + "|" + itemID
+}
+
+func splitPlanToken(token string) (version, rev int64, itemID string, ok bool) {
+	parts := strings.SplitN(token, "|", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return 0, 0, "", false
+	}
+	version, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, "", false
+	}
+	rev, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, "", false
+	}
+	return version, rev, parts[2], true
 }
 
 // agendaStatusLabel 的键写成字面量，覆盖检查靠静态扫 (键, 中文) 这一对。

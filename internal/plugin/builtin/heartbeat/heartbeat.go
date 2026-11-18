@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -73,6 +74,11 @@ const decayEvery = 15 * time.Minute
 // 检查当成「还没到」而跳过。虚拟时间没有抖动，但两条路径用同一套判据。
 const decaySlack = time.Second
 
+// busyRetryDelay 是心跳撞上会话忙、且还有理由待说时的重试间隔。不能立刻重试
+// （会话还锁着，会打转），也不能等常规间隔（临期提醒会过期）。真人轮次收尾时
+// 会清掉它，让会话一空出来就重试。
+const busyRetryDelay = 30 * time.Second
+
 // Plugin 是心跳插件。有状态：Init 会被反复调用（SetConfig），所有字段由 mu 保护，
 // 重入时先停掉上一轮循环再起新的。
 type Plugin struct {
@@ -105,14 +111,40 @@ type Plugin struct {
 	notice     plugin.NoticeFunc
 
 	// 运行状态
-	cur         time.Duration // 当前心跳间隔（持久化到 state.json）
-	adjusted    bool          // cur 是动态判定调整出来的，而非基础间隔的副本
-	lastActive  time.Time     // 最近一次真人交互轮次的时间
-	lastBeat    time.Time
-	lastDecay   time.Time // 上一次空闲衰减检查的计划时刻（按 decayEvery 推进，不跟随实际处理时刻）
-	curContext  string    // 当前情境（模型经工具切换，持久化）
-	pausedUntil time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
-	pausedAt    time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
+	cur        time.Duration // 当前心跳间隔（持久化到 state.json）
+	adjusted   bool          // cur 是动态判定调整出来的，而非基础间隔的副本
+	lastActive time.Time     // 最近一次真人交互轮次的时间
+	lastBeat   time.Time
+	lastDecay  time.Time // 上一次空闲衰减检查的计划时刻（按 decayEvery 推进，不跟随实际处理时刻）
+	// clockGen 每收到一次倒计时重设就加一，即使新时刻没有前移（延迟到达的轮次
+	// 结束通知会带早于本次尝试的时间戳）。撞忙结果回来时凭它认出「这次尝试的
+	// 起点已经不是当前倒计时」，不去回滚别人刚定下的节奏。
+	clockGen uint64
+	// stateSeq 给每次状态快照编号（p.mu 内递增）；提交由 stateWriteMu 串行，
+	// 只有编号更新的快照能落盘，避免先取快照、后写盘的旧状态覆盖新状态。
+	stateSeq     uint64
+	stateWriteMu sync.Mutex
+	stateWritten uint64
+	// beatRetryAt 是会话忙跳过、且目标会话还有可读理由待说时的下一次重试时刻；
+	// beatRetrySession 是那次撞忙的会话，OnSessionIdle 凭它认出「锁真的放开了」。
+	// 只在内存里：重启后公告板本就空了，没有要重试的理由。
+	beatRetryAt      time.Time
+	beatRetrySession string
+	// sessionIdleGen 记录每个会话锁释放过几次。撞忙的结果回到 beatAt 时，若这一
+	// 次尝试期间已经收到解锁通知，说明会话可能已经空了，不该再等满退避。
+	sessionIdleGen map[string]uint64
+	curContext     string    // 当前情境（模型经工具切换，持久化）
+	pausedUntil    time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
+	pausedAt       time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
+	// 本轮心跳从公告板取走的开口理由：TurnPrompt 在可见域裁决之后按可读域领取，
+	// 轮次失败时由 settleCues 放回。单独一把锁，TurnPrompt 不在 p.mu 内。
+	cueMu     sync.Mutex
+	takenCues []cue.Cue
+	// 可见域按会话保存，不存成全局一份：并发会话按**结束**顺序回调，而活跃度按
+	// **开始**时间排序，全局一份会被先开始、后结束的会话覆盖掉真正的目标会话。
+	// 调度时用 LastActive 选中的会话去查，查不到按不限制处理。
+	cueScopes   map[string]plugin.Scope
+	cueFallback plugin.Scope // 没有会话身份可依附时的兜底（升级前的行为：不限制）
 	// 这段暂停里角色自己也在睡（见 sleep.go）。asleep 与 sleepCompacted 持久化，
 	// compactRetryAt 只在内存里——重启丢掉的只是一次重试的等待。
 	asleep         bool
@@ -162,7 +194,12 @@ func (p *Plugin) SystemPrompt() string { return "" }
 // 但普通对话轮次里模型此前根本看不到当前间隔——看不见现状，判据就永远不会触发，
 // 实测它只在「去睡了」「等一小时」这类对话里有明确文本信号的时刻才调节奏。
 // 固定节奏时不注入：调整会被工具拒绝，亮出来只会诱导模型去调。
-func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, error) {
+	// 真人轮次的可见域在裁决后就记下，不等轮次收尾：用户在生成中途点停止时
+	// Agent 直接返回、不会再走 OnTurnEnd，而人格状态在轮次开始时就已经切过。
+	if plugin.IsInteractive(ctx) {
+		p.observeCueScope(ev.SessionID, plugin.ScopeFrom(ctx), clock.Now(ctx))
+	}
 	p.mu.Lock()
 	lang, cur, dynamic := p.lang, p.cur, p.dynamic
 	var paused string
@@ -170,15 +207,180 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		paused = p.pauseStateLocked(plugin.IsInteractive(ctx), until)
 	}
 	p.mu.Unlock()
-	if !dynamic || cur <= 0 {
-		return "", nil
+	text := ""
+	switch {
+	case !dynamic || cur <= 0:
+	case paused != "":
+		text = paused
+	default:
+		text = prompt.Tf(lang, "prompt.heartbeat.state",
+			"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
+			humanDur(lang, cur))
 	}
-	if paused != "" {
-		return paused, nil
+	if plugin.TurnOriginFrom(ctx) == p.Name() {
+		if cues := p.takeCues(ctx, ev.SessionID); len(cues) > 0 {
+			text = withCues(lang, text, cues)
+		}
 	}
-	return prompt.Tf(lang, "prompt.heartbeat.state",
-		"[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
-		humanDur(lang, cur)), nil
+	return text, nil
+}
+
+// takeCues 按本轮已裁决的可见域领取开口理由，其余留在公告板上。
+//
+// 这里而不是 beat() 里领取，是因为只有走到这一步才知道目标轮次落在哪个人格上：
+// 表人格的心跳不该读到里人格的私密约定，里人格的提醒也不该被这一轮消费掉。
+func (p *Plugin) takeCues(ctx context.Context, sessionID string) []cue.Cue {
+	sc := plugin.ScopeFrom(ctx)
+	cues := cue.TakeFor(clock.Now(ctx), func(c cue.Cue) bool { return sc.CanRead(c.Domain) })
+	p.cueMu.Lock()
+	p.rememberScopeLocked(sessionID, sc)
+	if len(cues) > 0 {
+		p.takenCues = append(p.takenCues, cues...)
+	}
+	p.cueMu.Unlock()
+	return cues
+}
+
+// pullScopeSnapshot 取下一拍该落的会话的可见域，供调度器判断理由值不值得提前。
+//
+// 目标会话按会话库的 LastActive 选，与真正心跳落点是同一个规则；每个会话的可见域
+// 各存一份，并发会话谁先结束都不会把对方那份盖掉。目标会话还没跑过任何轮次时按
+// 不限制处理——那一拍的分歧留给 TurnPrompt 按当轮裁决过滤。
+func (p *Plugin) pullTarget() (string, plugin.Scope) {
+	id := ""
+	if p.sessions != nil {
+		if got, _, err := p.sessions.LastActive(); err == nil {
+			id = got
+		}
+	}
+	return id, p.scopeForSession(id)
+}
+
+// scopeForSession 返回一个会话最近一次裁决出的可见域。没有记录时按不限制
+// 处理；空会话 id 回落到没有身份可依附时的兜底。
+func (p *Plugin) scopeForSession(sessionID string) plugin.Scope {
+	p.cueMu.Lock()
+	defer p.cueMu.Unlock()
+	if sessionID != "" {
+		if sc, ok := p.cueScopes[sessionID]; ok {
+			return sc
+		}
+		return plugin.Scope{}
+	}
+	return p.cueFallback
+}
+
+// sessionCuePending 判断某个会话此刻是否能读到待说的理由。撞忙时用它决定要不要
+// 回滚心跳起点：只有这个会话真读得到的理由才值得为它重试。
+func (p *Plugin) sessionCuePending(sessionID string, now time.Time) bool {
+	sc := p.scopeForSession(sessionID)
+	return cue.PendingFor(now, func(c cue.Cue) bool { return sc.CanRead(c.Domain) })
+}
+
+// rememberScopeLocked 记下一个会话的可见域，返回是否发生了变化。
+func (p *Plugin) rememberScopeLocked(sessionID string, sc plugin.Scope) bool {
+	if sessionID == "" {
+		changed := !sameScope(p.cueFallback, sc)
+		p.cueFallback = sc
+		return changed
+	}
+	if p.cueScopes == nil {
+		p.cueScopes = make(map[string]plugin.Scope)
+	}
+	if old, ok := p.cueScopes[sessionID]; ok && sameScope(old, sc) {
+		return false
+	}
+	p.cueScopes[sessionID] = sc
+	return true
+}
+
+// observeCueScope 记下某个会话本轮裁决出的可见域，供调度器判断理由值不值得提前
+// 叫醒。
+//
+// 只靠「上一次心跳的可见域」会漏掉人格切换：用户切到里人格后，调度器仍按表人格
+// 判断，里人格的提醒就可能错过提前唤醒、一直等到常规间隔。按会话记而不是全局记，
+// 是因为并发会话按结束顺序回调：表人格会话先开始、后结束时，全局那份会被它盖掉，
+// 而下一拍实际落在后开始、先结束的里人格会话上。实际领取仍在 TurnPrompt 里按当轮
+// 裁决过滤，这份缓存只影响「要不要提前」。
+//
+// 锁序与 nextBeatAt 一致：先 p.mu 后 cueMu，避免与持 p.mu 读快照的调度路径互锁。
+func (p *Plugin) observeCueScope(sessionID string, sc plugin.Scope, now time.Time) {
+	p.mu.Lock()
+	p.cueMu.Lock()
+	changed := p.rememberScopeLocked(sessionID, sc)
+	wake := p.wake
+	p.cueMu.Unlock()
+	p.mu.Unlock()
+	if wake == nil {
+		return
+	}
+	// 这个会话的可见域没变也要叫醒：真人轮次可能把落点换到另一个已有缓存的
+	// 会话上（如切回里人格的 IM 会话），下一拍的目标变了。只在公告板还有待发
+	// 理由时才有意义——没有理由时落点不影响任何提前判断。
+	if !changed && !cue.Pending(now) {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// OnSessionIdle 在会话轮次锁真正释放后收到通知：撞忙的那次重试不必再等满
+// 退避间隔。OnTurnEnd 仍在锁内，不能在那里清——那时重试只会再撞一次忙。
+func (p *Plugin) OnSessionIdle(_ context.Context, sessionID string) {
+	p.mu.Lock()
+	if p.sessionIdleGen == nil {
+		p.sessionIdleGen = make(map[string]uint64)
+	}
+	p.sessionIdleGen[sessionID]++
+	if p.beatRetrySession != sessionID {
+		p.mu.Unlock()
+		return
+	}
+	p.beatRetrySession = ""
+	p.beatRetryAt = time.Time{}
+	wake := p.wake
+	p.mu.Unlock()
+	if wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// idleGenLocked 返回一个会话已收到多少次解锁通知。调用方需持有 p.mu。
+func (p *Plugin) idleGenLocked(sessionID string) uint64 {
+	if p.sessionIdleGen == nil {
+		return 0
+	}
+	return p.sessionIdleGen[sessionID]
+}
+
+var _ plugin.SessionIdleObserver = (*Plugin)(nil)
+
+// sameScope 区分 nil 与空的白名单：nil 表示不限制，空切片只可读共享域。
+func sameScope(a, b plugin.Scope) bool {
+	if a.Write != b.Write || (a.Read == nil) != (b.Read == nil) {
+		return false
+	}
+	return slices.Equal(a.Read, b.Read)
+}
+
+// settleCues 收尾本轮领取的理由：成功即已送达，失败放回公告板等下一拍。
+func (p *Plugin) settleCues(ok bool) {
+	p.cueMu.Lock()
+	cues := p.takenCues
+	p.takenCues = nil
+	p.cueMu.Unlock()
+	if ok {
+		return
+	}
+	for _, c := range cues {
+		cue.Post(c)
+	}
 }
 
 // Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用
@@ -259,6 +461,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// 同一状态目录的重载接着内存里的最新状态：暂停等操作可能已经更新内存并取了
+	// 快照、只是还没落盘，磁盘上的旧值不能把这次更新盖掉。换目录才从磁盘读。
+	hot := p.stateDir != "" && p.stateDir == ictx.StateDir
+
 	p.lang = ictx.Lang
 	p.manual = ictx.ManualTime
 	p.base, p.minIv, p.maxIv = base, minIv, maxIv
@@ -272,9 +478,27 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.compactPct = plugin.CfgInt(cfg, "sleep_compact_percent", defSleepCompactPercent)
 	p.compact, p.status, p.notice = ictx.Compact, ictx.Status, ictx.Notice
 
+	// 只有真正停用后重新启用（或状态来源变了）才丢掉旧的重试与人格缓存：停用
+	// 期间世界仍在变，旧重试会绕过新配置的最快间隔，旧人格缓存会让停用期间切过
+	// 人格的会话继续按旧域过滤。运行中保存配置的热重载没有停用这回事，人格缓存
+	// 仍然有效——清掉它会让其他人格的提醒被当成「可见域未知」而提前叫醒心跳；
+	// 但待执行的重试要按新的调度参数重算，旧退避不能比新的最快间隔还早。
+	if !ictx.Reload || !hot {
+		p.beatRetryAt, p.beatRetrySession = time.Time{}, ""
+		p.cueMu.Lock()
+		p.cueScopes = nil
+		p.cueFallback = plugin.Scope{}
+		p.cueMu.Unlock()
+	}
+
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
-	// 「上次是几点」才推得出下一次
-	st := p.loadStateLocked()
+	// 「上次是几点」才推得出下一次。
+	var st state
+	if hot {
+		st = p.stateLocked()
+	} else {
+		st = p.loadStateLocked()
+	}
 	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.normalize)
 	p.lastActive = p.probeLastActiveLocked()
 	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, p.nowTime())
@@ -304,7 +528,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 起点当场落盘，别等第一次心跳才写：否则「启用后还没跳过一次就重启」这一段
 	// 时间里状态文件仍是空的，倒计时又会从头开始。persistState 不碰 p.mu，
 	// 在锁内直接调是安全的，且写完即返回，不会脱离 Init 的生命周期。
-	persistState(p.snapshotStateLocked())
+	p.commitState(p.snapshotStateLocked())
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.wake = make(chan struct{}, 1)
@@ -370,7 +594,9 @@ func (p *Plugin) Stop() {
 // 不会触发。定时类状态一律记「上一次发生的时刻」而不是「还剩多久」——进程内的
 // 定时器只是执行手段，不是状态载体。
 type state struct {
-	IntervalSeconds int `json:"interval_seconds"`
+	// seq 只在内存里存在：快照序号，用于拒绝过期写盘。
+	seq             uint64 `json:"-"`
+	IntervalSeconds int    `json:"interval_seconds"`
 	// Adjusted 表示上面那个间隔是动态判定**调整出来**的，而不只是当时基础间隔的
 	// 一份副本。少了这一位，两者在文件里长得一模一样，于是「上一次的基础间隔」
 	// 会盖住新配的基础间隔——设置页上那一项就永远改不动了。
@@ -444,8 +670,18 @@ func (p *Plugin) loadStateLocked() state {
 // snapshotStateLocked 取出该落盘的内容。调用方需持有 p.mu，写盘在锁外做——
 // 持锁写盘会让调用方只能另起 goroutine 绕开自锁，而那种写会脱离插件的生命周期，
 // 在插件停掉之后才落地（测试里表现为临时目录清理时「目录非空」）。
+// 每份快照带一个递增序号，写盘按序号提交，见 commitState。
 func (p *Plugin) snapshotStateLocked() (string, state) {
-	return p.stateDir, state{
+	p.stateSeq++
+	st := p.stateLocked()
+	st.seq = p.stateSeq
+	return p.stateDir, st
+}
+
+// stateLocked 把当前内存状态拍成一份快照（不分配序号）。热重载要接着内存里
+// 的最新状态走，而不是磁盘上可能还没追上的旧值。调用方需持有 p.mu。
+func (p *Plugin) stateLocked() state {
+	return state{
 		IntervalSeconds: int(p.cur / time.Second),
 		Adjusted:        p.adjusted,
 		LastBeat:        p.lastBeat,
@@ -455,6 +691,21 @@ func (p *Plugin) snapshotStateLocked() (string, state) {
 		Asleep:          p.asleep,
 		SleepCompacted:  p.sleepCompacted,
 	}
+}
+
+// commitState 按快照顺序提交状态文件。
+//
+// 更新在 p.mu 内串行发生并分配序号，写盘可以在锁外；暂停、调间隔这类路径会先
+// 取快照再解锁再写，旧快照完全可能晚于新快照落盘。只有序号比已提交值更新的
+// 快照才允许写，重启时读到的因此总是最后一次状态更新的结果。
+func (p *Plugin) commitState(dir string, st state) {
+	p.stateWriteMu.Lock()
+	defer p.stateWriteMu.Unlock()
+	if st.seq <= p.stateWritten {
+		return
+	}
+	p.stateWritten = st.seq
+	persistState(dir, st)
 }
 
 // persistState 写状态文件。失败只影响下次启动的初值，不值得让调用方失败。

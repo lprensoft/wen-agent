@@ -477,7 +477,7 @@ func TestCancelCommitment(t *testing.T) {
 	h := newHarness(t, false, nil)
 	h.call(t, "set_day_plan", `{"items":[]}`)
 	h.call(t, "add_commitment", `{"date":"2026-08-21","start":"18:30","end":"20:00","title":"和对方吃晚饭","with_user":true}`)
-	cue.Post(cue.Cue{Source: availabilitySource, Key: "soon|a1", Text: "x", Expire: time.Now().Add(time.Hour)})
+	cue.Post(cue.Cue{Source: availabilitySource, Key: soonKey("", "a1"), Text: "x", Expire: time.Now().Add(time.Hour)})
 	if err := h.fail(t, "cancel_commitment", `{"id":"c1","reason":"不想去"}`); !strings.Contains(err.Error(), "agreed_by_user") {
 		t.Fatalf("与对方的约定取消要先商量: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestTickEndAndCatchUp(t *testing.T) {
 		t.Fatalf("结束输入不符：\n%s", in)
 	}
 	cues := cue.Take(h.clk.now())
-	if len(cues) != 1 || cues[0].Key != "back|a1" || cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" ||
+	if len(cues) != 1 || cues[0].Key != backKey("", "a1") || cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" ||
 		!cues[0].Expire.Equal(at(16, 35).Add(90*time.Minute)) {
 		t.Fatalf("结束后应投「刚回来」理由: %+v", cues)
 	}
@@ -953,7 +953,7 @@ func TestSoonCue(t *testing.T) {
 	h.clk.set(at(17, 40))
 	h.tick()
 	cues := cue.Take(h.clk.now())
-	if len(cues) != 1 || cues[0].Key != "soon|a1" || cues[0].Text != "再过 50 分钟是和对方的约定：和对方吃晚饭（18:30）。" || !cues[0].Expire.Equal(at(18, 30)) {
+	if len(cues) != 1 || cues[0].Key != soonKey("", "a1") || cues[0].Text != "再过 50 分钟是和对方的约定：和对方吃晚饭（18:30）。" || !cues[0].Expire.Equal(at(18, 30)) {
 		t.Fatalf("提前提醒不符: %+v", cues)
 	}
 	h.tick()
@@ -1163,7 +1163,7 @@ func TestBackCueAfterFailedEndTurn(t *testing.T) {
 	recvInput(t, h)
 
 	cues := cue.Take(h.clk.now())
-	if len(cues) != 1 || cues[0].Key != "back|a1" ||
+	if len(cues) != 1 || cues[0].Key != backKey("", "a1") ||
 		cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" {
 		t.Fatalf("轮次失败也该投「刚回来」: %+v", cues)
 	}

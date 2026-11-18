@@ -49,6 +49,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Pinned:      true,
 			PinnedOrder: 1,
 			UpdatedAt:   latest,
+			Edits:       presenceEdits(q.Lang, snap),
 		})
 	}
 	if len(out) == 0 {
@@ -59,9 +60,36 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Key:   "presence",
 			Title: i18n.T(q.Lang, "plugin.presence.state.title", "现场"),
 			Empty: i18n.T(q.Lang, "plugin.presence.state.empty", "还没有记录现场。"),
+			Edits: presenceEdits(q.Lang, Snapshot{}),
 		}}
 	}
 	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection = "presence"
+	stateOpEdit  = "edit"
+)
+
+// presenceEdits 是这一域现场的快照修正：六个字段都能改，清空即删除该字段。
+func presenceEdits(lang string, snap Snapshot) []plugin.StateEdit {
+	fields := make([]plugin.StateField, 0, len(fieldDefs))
+	for _, d := range fieldDefs {
+		value := ""
+		if f, ok := snap[d.key]; ok {
+			value = f.Text
+		}
+		fields = append(fields, plugin.StateField{
+			Key: d.key, Label: presenceFieldLabel(lang, d.key),
+			Type: plugin.StateFieldText, Value: value, MaxLen: d.maxRunes,
+		})
+	}
+	return []plugin.StateEdit{{
+		Op:     stateOpEdit,
+		Label:  i18n.T(lang, "plugin.presence.state.edit", "修改现场"),
+		Fields: fields,
+	}}
 }
 
 // presenceRows 按 fieldDefs 的固定顺序生成行；字段的顺序是给读的人看的，

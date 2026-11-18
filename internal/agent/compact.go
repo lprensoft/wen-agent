@@ -97,7 +97,7 @@ const groupSeparator = "\n\n———\n\n"
 func (a *Agent) Compact(ctx context.Context, sessionID string, emit func(Event)) {
 	l := a.turnLock(sessionID)
 	l.Lock()
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	targets, opts := a.snapshot()
 	if err := a.compact(ctx, targets, opts, sessionID, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
@@ -113,7 +113,7 @@ func (a *Agent) CompactTurn(ctx context.Context, sessionID string) error {
 	if !l.TryLock() {
 		return plugin.ErrSessionBusy
 	}
-	defer l.Unlock()
+	defer a.unlockTurn(ctx, l, sessionID)
 	targets, opts := a.snapshot()
 	return a.compact(ctx, targets, opts, sessionID, func(Event) {})
 }

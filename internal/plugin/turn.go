@@ -132,6 +132,15 @@ type TurnObserver interface {
 	OnTurnEnd(ctx context.Context, ev TurnEndEvent)
 }
 
+// SessionIdleObserver 是插件的可选能力：观察会话轮次锁真正释放。
+//
+// OnTurnEnd 在轮次内部同步执行，此时 Run / RunTurn 仍持有该会话的轮次锁；
+// 在那里立刻重试只会再拿一次 ErrSessionBusy。本回调在 Unlock 之后广播，供
+// 「等会话空出来再试」的后台工作接上。实现必须快速返回，耗时工作自行开 goroutine。
+type SessionIdleObserver interface {
+	OnSessionIdle(ctx context.Context, sessionID string)
+}
+
 // Stoppable 是插件的可选能力：停止自己启动的后台活动（定时器、长连接等）。
 // 契约：只做取消与有界等待（不超过 5 秒量级），不得等待整轮对话完成。
 // Manager 在禁用插件、以新配置重新 Init 之前、进程退出时调用。

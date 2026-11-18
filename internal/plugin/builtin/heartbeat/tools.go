@@ -135,7 +135,7 @@ func (t *setIntervalTool) Execute(ctx context.Context, args json.RawMessage) (st
 
 	// 同步写：Execute 本就在轮次的同步路径上，另起 goroutine 会让这次写盘
 	// 脱离插件的生命周期
-	persistState(dir, st)
+	p.commitState(dir, st)
 	i18n.Logf(t.p.langOf(), "log.heartbeat.interval_set", "heartbeat: 模型设定心跳间隔为 %v（%s）", next, a.Reason)
 
 	out := prompt.Tf(lang, "prompt.heartbeat.result.set", "好，下次主动开口在 %s后%s。",
@@ -243,7 +243,7 @@ func (t *pauseTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
-	persistState(dir, st)
+	p.commitState(dir, st)
 	i18n.Logf(t.p.langOf(), "log.heartbeat.paused", "heartbeat: 模型暂停心跳至 %s（%s）", until.Format("2006-01-02 15:04"), a.Reason)
 
 	out := prompt.Tf(lang, "prompt.heartbeat.result.paused",

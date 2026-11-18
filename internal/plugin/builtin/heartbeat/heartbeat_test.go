@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -596,6 +597,251 @@ func TestLastBeatSurvivesRestart(t *testing.T) {
 	// 还剩约 20 分钟，不该立刻心跳
 	if left := time.Until(got.Add(60 * time.Minute)); left < 19*time.Minute {
 		t.Errorf("下次心跳只剩 %v，应还有约 20 分钟", left)
+	}
+}
+
+// 热重载（保存配置）要接着内存里的最新状态：暂停已更新内存、快照还没落盘时，
+// 不能从磁盘读回暂停前的旧值，也不能让随后到达的旧快照把暂停抹掉。
+func TestHotReloadKeepsUnpersistedPause(t *testing.T) {
+	store := mustStore(t, t.TempDir())
+	ictx := plugin.InitContext{
+		StateDir: t.TempDir(), Sessions: store, RunTurn: noTurn,
+	}
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 60, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	now := time.Now()
+	p.mu.Lock()
+	p.pausedUntil = now.Add(time.Hour)
+	p.pausedAt = now
+	dir, stale := p.snapshotStateLocked() // 暂停已取快照，尚未写盘
+	p.mu.Unlock()
+
+	ictx.Reload = true // 保存配置触发的热重载
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 90, "dynamic": true}); err != nil {
+		t.Fatalf("热重载 = %v", err)
+	}
+	p.Stop()
+
+	p.commitState(dir, stale) // 旧快照后到，不能覆盖热重载提交的新状态
+
+	p.mu.Lock()
+	until, cur := p.pausedUntil, p.cur
+	p.mu.Unlock()
+	if !until.After(now) {
+		t.Fatalf("热重载丢了尚未落盘的暂停：%v", until)
+	}
+	if cur != 90*time.Minute {
+		t.Fatalf("新配置没有作用到该状态上：cur=%v", cur)
+	}
+	if st := p.loadStateLocked(); !st.PausedUntil.After(now) {
+		t.Fatalf("旧快照覆盖了落盘的暂停状态：%+v", st)
+	}
+}
+
+// 停用期间不会有解锁通知来清撞忙重试；重新启用必须丢掉旧重试，否则它会绕过
+// 新配置的最快间隔。
+func TestReenableDropsOldBusyRetry(t *testing.T) {
+	cue.Reset()
+	defer cue.Reset()
+	store := mustStore(t, t.TempDir())
+	ictx := plugin.InitContext{StateDir: t.TempDir(), Sessions: store, RunTurn: noTurn}
+	p := New()
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	sess, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SetLastActive(sess.ID, time.Now().Add(-time.Minute))
+	now := time.Now()
+	p.mu.Lock()
+	p.lastBeat = now.Add(-5 * time.Minute)
+	p.beatRetryAt = now.Add(30 * time.Second) // 停用前留下的撞忙重试
+	p.beatRetrySession = sess.ID
+	p.mu.Unlock()
+
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 30, "max_minutes": 120,
+	}); err != nil {
+		t.Fatalf("重新启用 = %v", err)
+	}
+	p.Stop()
+
+	cue.Post(cue.Cue{Source: "agenda", Key: "x", Text: "催", Expire: now.Add(time.Hour)})
+	p.mu.Lock()
+	retry, lb, next := p.beatRetryAt, p.lastBeat, p.nextBeatLocked()
+	p.mu.Unlock()
+	if !retry.IsZero() {
+		t.Fatalf("重新启用应丢掉旧重试：%v", retry)
+	}
+	if want := lb.Add(30 * time.Minute); !next.Equal(want) {
+		t.Fatalf("下一拍应按新的最快间隔：next=%v want=%v", next, want)
+	}
+}
+
+// 停用期间人格可能已经切换；重新启用不能沿用停用前的可见域缓存，否则停用期间
+// 投递的提醒会被旧人格过滤掉。
+func TestReenableRefreshesPersonaCache(t *testing.T) {
+	cue.Reset()
+	defer cue.Reset()
+	store := mustStore(t, t.TempDir())
+	ictx := plugin.InitContext{StateDir: t.TempDir(), Sessions: store, RunTurn: noTurn}
+	cfg := map[string]any{"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120}
+	p := New()
+	if err := p.Init(ictx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	sess, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SetLastActive(sess.ID, time.Now().Add(-time.Minute))
+	p.takeCues(turnCueCtx("outer", []string{"outer"}), sess.ID) // 停用前是表人格
+	now := time.Now()
+	p.mu.Lock()
+	p.lastBeat = now.Add(-time.Minute)
+	p.mu.Unlock()
+	cue.Post(cue.Cue{Source: "agenda", Key: "inner", Domain: "inner", Text: "里", Expire: now.Add(10 * time.Minute)})
+	p.mu.Lock()
+	lb, before := p.lastBeat, p.nextBeatLocked()
+	p.mu.Unlock()
+	if !before.Equal(lb.Add(60 * time.Minute)) {
+		t.Fatalf("停用前里人格提醒不该提前：%v", before)
+	}
+
+	// 停用期间切到里人格：心跳没有机会观察，缓存仍是表人格。
+	if err := p.Init(ictx, cfg); err != nil {
+		t.Fatalf("重新启用 = %v", err)
+	}
+	p.Stop()
+
+	p.mu.Lock()
+	pulled, lb := p.nextBeatLocked(), p.lastBeat
+	p.mu.Unlock()
+	if want := lb.Add(5 * time.Minute); !pulled.Equal(want) {
+		t.Fatalf("重新启用后应按里人格读到提醒：next=%v want=%v", pulled, want)
+	}
+}
+
+// 运行中保存配置不是停用：仍有效的人格缓存要保留，否则其他人格的提醒会被
+// 当成「可见域未知」，把心跳提前到最快间隔。
+func TestConfigReloadKeepsPersonaCache(t *testing.T) {
+	cue.Reset()
+	defer cue.Reset()
+	store := mustStore(t, t.TempDir())
+	ictx := plugin.InitContext{StateDir: t.TempDir(), Sessions: store, RunTurn: noTurn}
+	p := New()
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	sess, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SetLastActive(sess.ID, time.Now().Add(-time.Minute))
+	p.takeCues(turnCueCtx("outer", []string{"outer"}), sess.ID) // 目标一直是表人格
+	now := time.Now()
+	p.mu.Lock()
+	p.lastBeat = now.Add(-time.Minute)
+	p.mu.Unlock()
+	cue.Post(cue.Cue{Source: "agenda", Key: "inner", Domain: "inner", Text: "里", Expire: now.Add(10 * time.Minute)})
+
+	ictx.Reload = true
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120, "prompt": "换过的提示词",
+	}); err != nil {
+		t.Fatalf("保存配置 = %v", err)
+	}
+	p.Stop()
+
+	p.mu.Lock()
+	next, lb := p.nextBeatLocked(), p.lastBeat
+	p.mu.Unlock()
+	if want := lb.Add(60 * time.Minute); !next.Equal(want) {
+		t.Fatalf("热重载不该让其他人格的提醒提前心跳：next=%v want=%v", next, want)
+	}
+}
+
+// 热重载保留待执行的重试，但要让新的最快间隔生效：调大最快间隔后，旧的 30 秒
+// 退避不能继续把下一拍放在最快间隔之前。
+func TestConfigReloadRecomputesBusyRetry(t *testing.T) {
+	cue.Reset()
+	defer cue.Reset()
+	store := mustStore(t, t.TempDir())
+	ictx := plugin.InitContext{StateDir: t.TempDir(), Sessions: store, RunTurn: noTurn}
+	p := New()
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	sess, err := store.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	oldRetry := now.Add(30 * time.Second) // 旧最快间隔下安排的撞忙重试
+	_ = store.SetLastActive(sess.ID, now.Add(-5*time.Minute))
+	p.mu.Lock()
+	p.lastBeat = now.Add(-5 * time.Minute)
+	p.beatRetryAt = oldRetry
+	p.beatRetrySession = sess.ID
+	p.mu.Unlock()
+	cue.Post(cue.Cue{Source: "agenda", Key: "x", Text: "催", Expire: now.Add(time.Hour)})
+
+	ictx.Reload = true
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 30, "max_minutes": 120,
+	}); err != nil {
+		t.Fatalf("保存配置 = %v", err)
+	}
+	p.Stop()
+
+	p.mu.Lock()
+	retry, lb, next := p.beatRetryAt, p.lastBeat, p.nextBeatLocked()
+	p.mu.Unlock()
+	if !retry.Equal(oldRetry) {
+		t.Fatalf("原始退避截止时间不该被改写：retry=%v want=%v", retry, oldRetry)
+	}
+	want := lb.Add(30 * time.Minute)
+	if !next.Equal(want) {
+		t.Fatalf("下一拍应按新的最快间隔取较晚值：next=%v want=%v", next, want)
+	}
+
+	// 再把最快间隔调回去：重试应回到原来的短截止时间，而不是停在调大期间。
+	if err := p.Init(ictx, map[string]any{
+		"interval_minutes": 60, "min_minutes": 5, "max_minutes": 120,
+	}); err != nil {
+		t.Fatalf("再次保存配置 = %v", err)
+	}
+	p.Stop()
+	p.mu.Lock()
+	next = p.nextBeatLocked()
+	p.mu.Unlock()
+	if !next.Equal(oldRetry) {
+		t.Fatalf("最快间隔调回后应按原始退避截止时间：next=%v want=%v", next, oldRetry)
 	}
 }
 

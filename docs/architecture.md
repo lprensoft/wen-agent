@@ -17,7 +17,7 @@ internal/agentplugin/    Agent Plugins 1.0 客户端（读取外源插件包、�
 internal/imbot/          消息通道的公共骨架（分发 / 命令 / 会话绑定 / 确认代理 / 通道路由）
 internal/atomicfile/     「写临时文件再改名」的落盘：崩溃不留半个文件，Windows 上改名遇占用会重试
 internal/clock/          可替换的「现在几点」：跟着 context 走，评测据此推进时间线
-internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前取走
+internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前按可读域取走
 internal/availability/   「忙碌状态」公告板：日程在活动进行中写，心跳与消息通道读
 internal/stylecheck/     「助手腔」检测规则与字数 / 句数 / 演绎占比度量，纯函数，style_watch 与 wen eval 共用
 internal/mdtext/         markdown 分段与转纯文本，各通道的格式降级共用
@@ -55,6 +55,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
 - `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用）。
 - `StateReporter`（`State(q)`）——向 Web UI 的「角色状态」页贡献只读快照（记忆索引、今日安排、现场……）。核心只负责收集、分组与限幅，不解释内容；按可见域分块，其它人格域由界面折叠。块可声明 `Pinned`（摘要进聊天页顶部那一行）、`Collapsed`（默认收起）与 `Global`（如心跳，任何人格下都显示），`PinnedOrder` 决定先后；`Manager.State(lang, pinnedOnly)` 只保留置顶块。与 `StatusLines` 同契约（廉价、无副作用），另外要求只读、不调模型、不写盘，且内容绝不进入模型上下文。
+- `StateEditor`（`EditState(req)`）——状态页的写入口（可选）。插件在 `State()` 里给行或块挂 `Edits`（操作、静态已译的按钮文字、按类型声明的字段、可选的确认句）与行身份 `ID`；`Manager.EditState` 把界面提交的 {域, 块, 行, 操作, 值} 同步交回插件，由它只认磁盘上真有的域、只按自己的数据核对行，并经自己的 store 接口落盘。`pinned` 查询会裁掉编辑描述与行身份，编辑字段计入状态块的字节上限；错误按请求语言返回给人看，不进模型上下文、不落会话。
 - `DayReporter`（`DayFacts(date)`）——为某一天补一句客观事实（天气插件据此答那天的天气）。谁要用这份汇总，经 `InitContext.DayFacts` 取——按日收束的日记就是这么在正文前加上抬头的。同样是廉价、无副作用的契约，答不上来返回 nil，别编。
 - `BackgroundWorker`（`NextBackgroundAt()` / `RunBackground()`）——声明自己会按时间做后台工作，并能被外部同步驱动。生产路径仍由插件自己的循环调用同一份逻辑；`ManualTime` 下由评测按虚拟时钟推进并在每个到期时刻同步执行，插件不自起 goroutine。`RunBackground` 遇到 `plugin.ErrTurnNotStarted`（预算/限额未开始）必须向上返回。
 - `TurnSettler`（`Settle()`）——在轮次彻底返回后执行 `OnTurnEnd` 登记的工作（规划、反思、记忆提炼）。生产路径仍起 goroutine；`ManualTime` 下由评测同步结算，并按插件的 `Requires` 做拓扑排序（例如 `growth` 依赖 `memory`，memory 先结算，反思才看得到刚落盘的昨日时间线）。手动待办不占 WaitGroup，`Stop` 要能正常返回。
@@ -64,7 +65,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `FailureTranslator`（`TranslateFailure()`）——轮次失败时把失败转成一句正常回复的机会（`roleplay` 据此把内容拦截演成角色的走神）。单所有者、按逆注册序征询，只在真人在场的轮次尝试；转译文本以正常助手消息落盘，原始错误转入会话注记；配置类错误（`llm.IsConfigError`）必须放行原样报出。
 - `NoticeObserver`（`OnNotice()`）——会话注记落盘并送达 Web 界面之后收到广播（IM 通道据此把后台工作的说明推给绑定用户）。事件携带的是已截断的落盘文本。
 
-插件之间还有几样共享的基础设施，核心不知道它们：`internal/imbot`（消息通道骨架，见下）、`internal/cue`（「开口理由」公告板——产生方按**事件**投递而不是按状态投递，同 (Source, Key) 幂等覆盖，必须带过期时刻；心跳开口前取走全部未过期的理由。只存内存，检测状态的权威在产生方自己的持久化里）与 `internal/availability`（「忙碌状态」公告板——存状态不存事件，每个写入方只有一条，查询不清、靠到期时刻自然过期；日程在活动进行中写，心跳与消息通道据此把下一拍压后或延后处理入站消息。同样只存内存，重启后由日程从当天的表重建）；`internal/skillroots` 则让用户自己写的技能与外源插件包里的技能进同一份清单；`internal/clock` 让「现在几点」跟着 context 走——时间戳、日界、衰减都读它，缺省是系统时间，评测换成一条自己推进的时间线，而耗时仍用真实时间。
+插件之间还有几样共享的基础设施，核心不知道它们：`internal/imbot`（消息通道骨架，见下）、`internal/cue`（「开口理由」公告板——产生方按**事件**投递而不是按状态投递，同 (Source, Key) 幂等覆盖，必须带过期时刻；理由可带可见域，心跳在裁决之后只领取目标轮次可读的那些，其余留在队列里。只存内存，检测状态的权威在产生方自己的持久化里）与 `internal/availability`（「忙碌状态」公告板——存状态不存事件，每个写入方只有一条，查询不清、靠到期时刻自然过期；日程在活动进行中写，心跳与消息通道据此把下一拍压后或延后处理入站消息。同样只存内存，重启后由日程从当天的表重建）；`internal/skillroots` 则让用户自己写的技能与外源插件包里的技能进同一份清单；`internal/clock` 让「现在几点」跟着 context 走——时间戳、日界、衰减都读它，缺省是系统时间，评测换成一条自己推进的时间线，而耗时仍用真实时间。
 
 `InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`Sessions`（会话的只读窄查询：最近活跃的会话、某会话是否还在）、`SessionDir`（会话目录，只给需要读会话正文的检索与归档类插件）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `RunTurnImages` / `RunTurnMedia` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、带图片跑一轮、带图片与文件跑一轮、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`DayFacts`（问某一天有什么可说的，汇总各插件的回答）、`Embed` / `EmbedModel`（把一批文本变成向量、取当前向量身份；服务由用户在设置页显式启用，默认关闭，未启用时 `Embed` 返回 `ErrEmbedUnavailable`，插件据此静默降级，且要连同 `Model` 一起存下向量——身份不同的向量不能比）、`Notice`（往会话里留一行只给人看的说明）、`Lang`（这个进程的语言，插件在 `Init` 里存下，此后提示词、工具描述、状态行与日志都按它取）、`Clock`（进程的「现在几点」；nil 表示系统时间）与 `ManualTime`（为真时时间由外部推进，插件不得自起定时循环，后台工作由 `BackgroundWorker` / `TurnSettler` 显式驱动）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
 

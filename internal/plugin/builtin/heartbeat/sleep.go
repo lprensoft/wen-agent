@@ -182,7 +182,7 @@ func (p *Plugin) sleepCompactAt(ctx context.Context, now time.Time) {
 	}
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
-	persistState(dir, st) // 记下这一觉已经整理过：重启后不该再来一次
+	p.commitState(dir, st) // 记下这一觉已经整理过：重启后不该再来一次
 }
 
 // pauseStateLocked 是暂停期间注入的心跳块。睡着时分两种：真人来了消息（被叫醒），

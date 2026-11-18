@@ -29,7 +29,7 @@ func TestStateActiveCondition(t *testing.T) {
 		t.Fatalf("State = %+v", secs)
 	}
 	got := secs[0]
-	if got.Title != "身体" || got.Summary != "共 1 个状况" || len(got.Rows) != 1 {
+	if got.Title != "健康状况" || got.Summary != "共 1 个状况" || len(got.Rows) != 1 {
 		t.Errorf("section = %+v", got)
 	}
 	if got.Rows[0].Value != "感冒" {

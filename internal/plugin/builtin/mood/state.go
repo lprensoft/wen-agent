@@ -101,6 +101,43 @@ func (s *Store) Clear() error {
 	return nil
 }
 
+// Set 把心情直接设成给定值：这是人从状态页修正用的绝对设值，不是模型的增量。
+// 设成 0 且没有起因时清掉记录——「平静」本来就是没有记录时的默认。
+func (s *Store) Set(value int, reason string, now time.Time) (State, error) {
+	return s.SetFields(&value, &reason, 0, now)
+}
+
+// SetFields 只改传了的项（nil 表示没改），在锁内先按回落速率折算到此刻再合并。
+// 两个窗口分别改数值和起因时，各自只提交自己动过的那一项。
+func (s *Store) SetFields(value *int, reason *string, decayPerHour int, now time.Time) (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok, err := s.load()
+	if err != nil {
+		return State{}, err
+	}
+	if ok {
+		st = decay(st, decayPerHour, now)
+	}
+	if value != nil {
+		st.Value = clamp(*value, moodMin, moodMax)
+	}
+	if reason != nil {
+		st.Reason = clipReason(*reason)
+	}
+	st.Updated = now
+	if st.Value == 0 && st.Reason == "" {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return State{}, fmt.Errorf(prompt.T(s.lang, "prompt.mood.store.reset_failed", "重置心情失败: %w"), err)
+		}
+		return State{}, nil
+	}
+	if err := s.save(st); err != nil {
+		return State{}, err
+	}
+	return st, nil
+}
+
 func (s *Store) load() (State, bool, error) {
 	raw, err := os.ReadFile(s.path)
 	if err != nil {

@@ -402,6 +402,73 @@ func (s *Server) pluginActionState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// editPluginState 把状态页上的一次修正交给插件。
+//
+// 请求体形如 {"domain":"", "section":"people", "row":"林舟", "op":"edit",
+// "values":{"relation":"同事"}}。各字段都来自客户端，插件负责核对自己那一行/那一块
+// 是否真的存在；这里只限体量与长度，避免一次请求把页面状态撑爆。语言按请求取，
+// 插件返回的错误因此是看得到的语言。
+func (s *Server) editPluginState(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Domain    string            `json:"domain"`
+		Section   string            `json:"section"`
+		Row       string            `json:"row"`
+		Op        string            `json:"op"`
+		Values    map[string]string `json:"values"`
+		Originals map[string]string `json:"originals"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, plugin.MaxStateEditBodyBytes))
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.bad_request", "请求格式错误"))
+		return
+	}
+	const (
+		maxDomain  = 64
+		maxSection = 64
+		// maxRow 要容得下最长的行身份：记忆标题不截断，只截文件名，长标题可能到几百字节。
+		maxRow   = 4096
+		maxOp    = 64
+		maxValue = 8 << 10
+	)
+	bad := len(req.Domain) > maxDomain || len(req.Section) > maxSection ||
+		len(req.Row) > maxRow || len(req.Op) > maxOp ||
+		!plugin.ValidDomainTag(req.Domain) || len(req.Values) > plugin.MaxStateEditValues ||
+		len(req.Originals) > plugin.MaxStateEditValues
+	if !bad {
+		for _, v := range req.Values {
+			if len(v) > maxValue {
+				bad = true
+				break
+			}
+		}
+	}
+	if !bad {
+		for _, v := range req.Originals {
+			if len(v) > maxValue {
+				bad = true
+				break
+			}
+		}
+	}
+	if bad {
+		writeError(w, http.StatusBadRequest, i18n.T(reqLang(r), "server.err.bad_request", "请求格式错误"))
+		return
+	}
+	if err := s.plugins.EditState(r.PathValue("name"), plugin.StateEditRequest{
+		Lang:      reqLang(r),
+		Domain:    req.Domain,
+		Section:   req.Section,
+		Row:       req.Row,
+		Op:        req.Op,
+		Values:    req.Values,
+		Originals: req.Originals,
+	}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // compact 压缩指定会话，过程以 SSE 流返回。
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

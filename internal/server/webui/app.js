@@ -1593,7 +1593,10 @@ const stateRefreshBtn = $("#btn-state-refresh");
 const chatStateEl = $("#chat-state");
 const chatStateTextEl = $("#chat-state-text");
 let stateLoading = false;
+let stateReloadQueued = false;
 let pinnedStateLoading = false;
+// lastStateEditKey 让刚改过的那一块在刷新后保持展开：整页重建会把 <details> 折回去。
+let lastStateEditKey = "";
 
 // relativeTime 用浏览器自带的复数与语序规则，不另造一套「N 分钟前」的字典。
 function relativeTime(iso) {
@@ -1609,7 +1612,13 @@ function relativeTime(iso) {
 }
 
 async function loadState() {
-  if (!stateEl || stateLoading) return;
+  if (!stateEl) return;
+  if (stateLoading) {
+    // 保存后紧接刷新时可能撞上一次正在进行的读取；记下来，等这次读完再补一次，
+    // 否则界面会停在这之前那一份快照上。
+    stateReloadQueued = true;
+    return;
+  }
   stateLoading = true;
   stateEl.textContent = t("common.loading");
   stateMetaEl.textContent = "";
@@ -1621,6 +1630,10 @@ async function loadState() {
     stateEl.textContent = t("settings.state.loadFailed", { msg: e.message });
   } finally {
     stateLoading = false;
+    if (stateReloadQueued) {
+      stateReloadQueued = false;
+      loadState();
+    }
   }
 }
 
@@ -1694,6 +1707,7 @@ async function loadPinnedState() {
 function renderState(snap) {
   if (!stateEl) return;
   stateEl.textContent = "";
+  stateMetaEl.classList.remove("error");
   stateMetaEl.textContent = t("settings.state.readonly");
 
   const plugins = (snap && snap.plugins) || [];
@@ -1725,7 +1739,7 @@ function renderState(snap) {
       else rest.push(s);
     }
     if (keep.length) primary.push({ ...p, sections: keep });
-    if (rest.length) others.push(...rest);
+    if (rest.length) for (const s of rest) others.push({ name: p.name, section: s });
   }
 
   renderStatePlugins(primary);
@@ -1735,9 +1749,9 @@ function renderState(snap) {
     const det = document.createElement("details");
     det.className = "state-others";
     const sum = document.createElement("summary");
-    sum.textContent = t("settings.state.others", { n: new Set(others.map((s) => s.domain)).size });
+    sum.textContent = t("settings.state.others", { n: new Set(others.map((o) => o.section.domain)).size });
     det.append(sum);
-    for (const s of others) det.append(renderStateSection(s, true));
+    for (const o of others) det.append(renderStateSection(o.section, o.name, true));
     stateEl.append(det);
   }
 
@@ -1769,7 +1783,7 @@ function renderStatePlugins(plugins) {
     for (const p of g.plugins) {
       const wrap = document.createElement("div");
       wrap.className = "state-plugin";
-      for (const s of p.sections) wrap.append(renderStateSection(s));
+      for (const s of p.sections) wrap.append(renderStateSection(s, p.name));
       if (p.truncated) {
         const note = document.createElement("div");
         note.className = "state-more";
@@ -1781,11 +1795,11 @@ function renderStatePlugins(plugins) {
   }
 }
 
-function renderStateSection(s, showDomain = false) {
+function renderStateSection(s, pluginName, showDomain = false) {
   const det = document.createElement("details");
   det.className = "state-block";
   const rows = s.rows || [];
-  det.open = !s.collapsed && rows.length <= 8;
+  det.open = (!s.collapsed && rows.length <= 8) || s.key === lastStateEditKey;
 
   const sum = document.createElement("summary");
   const title = document.createElement("span");
@@ -1825,12 +1839,14 @@ function renderStateSection(s, showDomain = false) {
       empty.textContent = s.empty;
       det.append(empty);
     }
+    const actions = renderStateEdits(s, pluginName, null);
+    if (actions) det.append(actions);
     return det;
   }
 
   const body = document.createElement("div");
   body.className = "state-rows";
-  for (const r of rows) body.append(renderStateRow(r));
+  for (const r of rows) body.append(renderStateRow(r, s, pluginName));
   det.append(body);
 
   if (s.more) {
@@ -1839,10 +1855,29 @@ function renderStateSection(s, showDomain = false) {
     more.textContent = t("settings.state.more", { n: s.more });
     det.append(more);
   }
+  const actions = renderStateEdits(s, pluginName, null);
+  if (actions) det.append(actions);
   return det;
 }
 
-function renderStateRow(r) {
+// renderStateEdits 渲染一块或一行的修改按钮。没有可做的事时返回 null。
+function renderStateEdits(section, pluginName, row) {
+  const edits = (row ? row.edits : section.edits) || [];
+  if (!edits.length) return null;
+  const box = document.createElement("span");
+  box.className = row ? "state-row-actions" : "state-block-actions";
+  for (const edit of edits) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-ghost state-edit-btn" + (edit.danger ? " danger" : "");
+    btn.textContent = edit.label || edit.op;
+    btn.addEventListener("click", () => startStateEdit({ pluginName, section, row, edit }));
+    box.append(btn);
+  }
+  return box;
+}
+
+function renderStateRow(r, section, pluginName) {
   const row = document.createElement("div");
   row.className = "state-row";
   if (r.tone === "muted" || r.tone === "warn") row.classList.add("tone-" + r.tone);
@@ -1871,7 +1906,171 @@ function renderStateRow(r) {
     detail.textContent = r.detail;
     row.append(detail);
   }
+  const actions = renderStateEdits(section, pluginName, r);
+  if (actions) row.append(actions);
   return row;
+}
+
+// ---------- 状态页的修改 ----------
+//
+// 编辑入口由插件经 StateEditor 声明：带字段的弹表单，不带字段的直接执行（删除、
+// 重置、批准）。域名、行身份与操作原样交回服务端，由插件按自己的数据核对。
+
+const stateEditModal = $("#state-edit-modal");
+const stateEditTitle = $("#state-edit-title");
+const stateEditForm = $("#state-edit-form");
+const stateEditError = $("#state-edit-error");
+const stateEditSaveBtn = $("#btn-state-edit-save");
+let stateEditPending = null;
+// 一次只放行一个修正：连点保存等于把同一次改动发两遍，第二次通常只会报「已经不在了」。
+let stateEditSaving = false;
+
+function startStateEdit(payload) {
+  if (stateEditSaving) return;
+  if (!payload.edit.fields || !payload.edit.fields.length) {
+    if (payload.edit.confirm && !window.confirm(payload.edit.confirm)) return;
+    runDirectStateEdit(payload);
+    return;
+  }
+  stateEditPending = payload;
+  stateEditTitle.textContent = [payload.section.title, payload.edit.label].filter(Boolean).join(" · ");
+  stateEditForm.textContent = "";
+  for (const f of payload.edit.fields) stateEditForm.append(renderStateField(f));
+  showStateEditError("");
+  stateEditModal.classList.remove("hidden");
+  const first = stateEditForm.querySelector("input,textarea,select");
+  if (first) first.focus();
+}
+
+async function runDirectStateEdit(payload) {
+  if (stateEditSaving) return;
+  stateEditSaving = true;
+  try {
+    await submitStateEdit(payload, {}, {});
+  } catch (e) {
+    showStatePageError(e.message);
+  } finally {
+    stateEditSaving = false;
+  }
+}
+
+function closeStateEdit() {
+  if (stateEditModal) stateEditModal.classList.add("hidden");
+  stateEditPending = null;
+}
+
+function showStateEditError(msg) {
+  if (!stateEditError) return;
+  stateEditError.textContent = msg || "";
+  stateEditError.classList.toggle("hidden", !msg);
+}
+
+// showStatePageError 是一行小字提示，用于没有弹窗的直接操作（删除、重置）。
+function showStatePageError(msg) {
+  if (!stateMetaEl) return;
+  stateMetaEl.textContent = t("settings.state.editFailed", { msg });
+  stateMetaEl.classList.add("error");
+}
+
+function renderStateField(f) {
+  const wrap = document.createElement("label");
+  wrap.className = "field";
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = f.label || f.key || "";
+  wrap.append(label);
+
+  let input;
+  switch (f.type) {
+    case "select": {
+      input = document.createElement("select");
+      for (const o of f.options || []) {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.label;
+        input.append(opt);
+      }
+      input.value = f.value || "";
+      break;
+    }
+    case "textarea":
+      input = document.createElement("textarea");
+      input.rows = 4;
+      input.value = f.value || "";
+      break;
+    case "number":
+      input = document.createElement("input");
+      input.type = "number";
+      if (f.min !== null && f.min !== undefined) input.min = f.min;
+      if (f.max !== null && f.max !== undefined) input.max = f.max;
+      input.value = f.value || "";
+      break;
+    default:
+      input = document.createElement("input");
+      input.type = "text";
+      input.value = f.value || "";
+  }
+  if (f.max_len) input.maxLength = f.max_len;
+  if (f.required) input.required = true;
+  input.dataset.fieldKey = f.key;
+  // 打开表单时的值：提交时带回去，服务端据此只写用户真正改过的字段。
+  input.dataset.originalValue = f.value || "";
+  wrap.append(input);
+  return wrap;
+}
+
+async function submitStateEdit(payload, values, originals) {
+  const body = {
+    domain: payload.section.domain || "",
+    section: payload.section.key || "",
+    row: payload.row ? payload.row.id || "" : "",
+    op: payload.edit.op || "",
+    values: values || {},
+    originals: originals || {},
+  };
+  const res = await fetch(withLang(`/api/plugins/${encodeURIComponent(payload.pluginName)}/state/edit`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  lastStateEditKey = payload.section.key || "";
+  closeStateEdit();
+  await loadState();
+  loadPinnedState();
+}
+
+if (stateEditForm) {
+  stateEditForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!stateEditPending || stateEditSaving) return;
+    const values = {};
+    const originals = {};
+    for (const el of stateEditForm.querySelectorAll("[data-field-key]")) {
+      values[el.dataset.fieldKey] = el.value;
+      originals[el.dataset.fieldKey] = el.dataset.originalValue ?? "";
+    }
+    stateEditSaving = true;
+    if (stateEditSaveBtn) stateEditSaveBtn.disabled = true;
+    try {
+      await submitStateEdit(stateEditPending, values, originals);
+    } catch (err) {
+      showStateEditError(t("settings.state.editFailed", { msg: err.message }));
+    } finally {
+      stateEditSaving = false;
+      if (stateEditSaveBtn) stateEditSaveBtn.disabled = false;
+    }
+  });
+}
+if (stateEditModal) {
+  $("#btn-state-edit-close")?.addEventListener("click", closeStateEdit);
+  $("#btn-state-edit-cancel")?.addEventListener("click", closeStateEdit);
+  stateEditModal.addEventListener("click", (e) => {
+    if (e.target === stateEditModal) closeStateEdit();
+  });
 }
 
 if (stateRefreshBtn) stateRefreshBtn.addEventListener("click", loadState);

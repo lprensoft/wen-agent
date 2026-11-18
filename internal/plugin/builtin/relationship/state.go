@@ -43,9 +43,52 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Rows:      relationshipRows(q.Lang, snap),
 			Domain:    tag,
 			UpdatedAt: snap.Updated,
+			Edits:     relationshipEdits(q.Lang, snap),
 		})
 	}
 	return out
+}
+
+// 状态页上的操作标识。静态、不翻译。
+const (
+	stateSection = "relationship"
+	stateOpEdit  = "edit"
+)
+
+// relationshipEdits 是这一段关系的字段修正。日子不在这里改：那些是由代码按
+// 阶段与纪念日维护的，单个删改走模型侧的 remove_date / add_date。
+func relationshipEdits(lang string, snap Snapshot) []plugin.StateEdit {
+	return []plugin.StateEdit{{
+		Op:    stateOpEdit,
+		Label: i18n.T(lang, "plugin.relationship.state.edit", "修改关系"),
+		Fields: []plugin.StateField{
+			{
+				Key: "stage", Label: i18n.T(lang, "plugin.relationship.state.field.stage", "阶段"),
+				Type: plugin.StateFieldText, Value: snap.Stage, MaxLen: maxStageRunes,
+			},
+			{
+				Key: "my_call", Label: i18n.T(lang, "plugin.relationship.state.field.my_call", "你对对方的称呼"),
+				Type: plugin.StateFieldText, Value: snap.MyCall, MaxLen: maxCallRunes,
+			},
+			{
+				Key: "their_call", Label: i18n.T(lang, "plugin.relationship.state.field.their_call", "对方对你的称呼"),
+				Type: plugin.StateFieldText, Value: snap.TheirCall, MaxLen: maxCallRunes,
+			},
+			{
+				Key: "recent", Label: i18n.T(lang, "plugin.relationship.state.field.recent", "最近变动"),
+				Type: plugin.StateFieldText, Value: snap.Recent, MaxLen: maxRecentRunes,
+			},
+			{
+				Key: "their_now", Label: i18n.T(lang, "plugin.relationship.state.field.their_now", "对方近况"),
+				Type: plugin.StateFieldText, Value: snap.TheirNow, MaxLen: maxTheirNowRunes,
+			},
+			{
+				Key: "bonds", Label: i18n.T(lang, "plugin.relationship.state.field.bonds", "默契与禁区（一行一条）"),
+				Type: plugin.StateFieldTextarea, Value: strings.Join(snap.Bonds, "\n"),
+				MaxLen: maxBonds*maxBondRunes + maxBonds - 1,
+			},
+		},
+	}}
 }
 
 // relationshipSummary 用阶段（没有就用最近变动）拼一行折叠摘要。

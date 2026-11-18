@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -245,16 +246,59 @@ func (p *Plugin) appendTimeline(dir string, e timelineEntry) {
 	if len(f.Entries) > maxTimelineEntries {
 		f.Entries = f.Entries[len(f.Entries)-maxTimelineEntries:]
 	}
-	raw, err := json.Marshal(f)
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-	if err := atomicfile.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600); err != nil {
+	if err := saveTimeline(p.langOf(), dir, f); err != nil {
 		i18n.Logf(p.langOf(), "log.memory.timeline_write_failed", "时间线：写入失败：%v", err)
 	}
+}
+
+// saveTimeline 把整份时间线原子写回。调用方需持有 timelineMu。
+func saveTimeline(lang, dir string, f timelineFile) error {
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(filepath.Join(dir, timelineFileName), raw, 0o600)
+}
+
+// errNoSuchDay 表示时间线上没有这一天。
+var errNoSuchDay = errors.New("timeline day not found")
+
+// updateTimeline 改某一天的摘要，保留当日事实与其它条目。
+func (p *Plugin) updateTimeline(dir, date, summary string) error {
+	p.timelineMu.Lock()
+	defer p.timelineMu.Unlock()
+	f := loadTimeline(dir)
+	for i := range f.Entries {
+		if f.Entries[i].Date == date {
+			f.Entries[i].Summary = summary
+			return saveTimeline(p.langOf(), dir, f)
+		}
+	}
+	return errNoSuchDay
+}
+
+// deleteTimeline 删掉某一天。
+func (p *Plugin) deleteTimeline(dir, date string) error {
+	p.timelineMu.Lock()
+	defer p.timelineMu.Unlock()
+	f := loadTimeline(dir)
+	out := f.Entries[:0]
+	found := false
+	for _, e := range f.Entries {
+		if e.Date == date {
+			found = true
+			continue
+		}
+		out = append(out, e)
+	}
+	if !found {
+		return errNoSuchDay
+	}
+	f.Entries = out
+	return saveTimeline(p.langOf(), dir, f)
 }
 
 func loadTimeline(dir string) timelineFile {

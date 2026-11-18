@@ -50,6 +50,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			Pinned:      true,
 			PinnedOrder: 2,
 			UpdatedAt:   st.Updated,
+			Edits:       moodEdits(q.Lang, st),
 		})
 	}
 	return out

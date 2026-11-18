@@ -27,8 +27,11 @@ const maxCues = 32
 
 // Cue 是一条开口理由。
 type Cue struct {
-	Source string    // 投递方插件名
-	Key    string    // 同源去重键：同 (Source, Key) 后投的覆盖先投的
+	Source string // 投递方插件名
+	Key    string // 同源去重键：同 (Source, Key) 后投的覆盖先投的
+	// Domain 是这条理由所属的可见域；空串表示共享，任何轮次都可读。
+	// 心跳在可见域裁决之后才领取，只取目标轮次可读的那些。
+	Domain string
 	Text   string    // 给模型看的一句话，说清发生了什么
 	Expire time.Time // 过期时刻，之后不再送达
 }
@@ -78,20 +81,53 @@ func Post(c Cue) {
 
 // Take 取走全部未过期的理由（消费即清），按投递顺序返回。
 func Take(now time.Time) []Cue {
+	return TakeFor(now, nil)
+}
+
+// TakeFor 只取走 keep 认可的理由，其余留在队列里。
+//
+// 心跳用它按目标轮次的可读域领取：别的域的提醒既不该出现在这一轮的输入里，
+// 也不该被这一轮消费掉——那会让它在自己那一轮真正开始时已经没了。
+func TakeFor(now time.Time, keep func(Cue) bool) []Cue {
 	mu.Lock()
 	defer mu.Unlock()
 	pruneLocked(now)
-	out := cues
-	cues = nil
-	return out
+	if keep == nil {
+		out := cues
+		cues = nil
+		return out
+	}
+	var taken, left []Cue
+	for _, c := range cues {
+		if keep(c) {
+			taken = append(taken, c)
+		} else {
+			left = append(left, c)
+		}
+	}
+	cues = left
+	return taken
 }
 
 // Pending 报告是否有未过期的理由待消费。
 func Pending(now time.Time) bool {
+	return PendingFor(now, nil)
+}
+
+// PendingFor 只报告 keep 认可的理由是否存在，不清队列。
+func PendingFor(now time.Time, keep func(Cue) bool) bool {
 	mu.Lock()
 	defer mu.Unlock()
 	pruneLocked(now)
-	return len(cues) > 0
+	if keep == nil {
+		return len(cues) > 0
+	}
+	for _, c := range cues {
+		if keep(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reset 清空未消费的理由并卸下通知回调。评测在同一进程里连续跑时用它隔离；

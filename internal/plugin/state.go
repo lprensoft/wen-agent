@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"fmt"
 	"time"
 
 	"wen/internal/i18n"
@@ -21,6 +22,9 @@ import (
 //
 // 静态文字用 i18n.T(q.Lang, "plugin.<name>.state.<key>...", 中文) 取，
 // Value / Detail 是运行时事实，原样返回、不翻译——与 ActionDef.Detail 同理。
+//
+// 需要让主人直接修正条目的插件另实现 StateEditor（见 stateedit.go）：它在行/块上挂
+// Edits，写入口与这里分开，本接口的只读契约不变。
 type StateReporter interface {
 	State(q StateQuery) []StateSection
 }
@@ -81,6 +85,9 @@ type StateSection struct {
 	// More 是被截掉的条数。先由插件按自己的语义截（最近 30 条），
 	// 核心再兜一层硬上限；前端渲染成「还有 12 条」。
 	More int `json:"more,omitempty"`
+	// Edits 是块级操作（新增一条、整块重置）。行级操作挂在 StateRow.Edits 上；
+	// 两者用同一种描述，请求里以 Row 是否为空区分。pinned 查询会裁掉它们。
+	Edits []StateEdit `json:"edits,omitempty"`
 }
 
 // StateRow 是状态页上的一行，只有标签与值，不做富文本。
@@ -98,6 +105,11 @@ type StateRow struct {
 	Detail string `json:"detail,omitempty"` // 次要说明，纯文本，不译
 	// Tone 只影响颜色，不承载语义："" 正常、"muted" 次要、"warn" 需要注意。
 	Tone string `json:"tone,omitempty"`
+	// ID 是这一行的不透明身份，编辑操作靠它指回来；空表示不可编辑。
+	// 插件实现要在 EditState 里按它核对，不能当路径或索引直接使用。
+	ID string `json:"id,omitempty"`
+	// Edits 是这一行可用的修改操作。pinned 查询会裁掉它们。
+	Edits []StateEdit `json:"edits,omitempty"`
 }
 
 const (
@@ -179,12 +191,25 @@ func (m *Manager) State(lang string, pinnedOnly bool) StateSnapshot {
 }
 
 // pinnedSections 只保留会进聊天页顶部那一行的块。
+//
+// 顶部只要 Summary：编辑描述与行身份一并裁掉，既让这条每轮都发的请求保持小，
+// 也不把可写入口暴露在一个只用来瞄一眼的地方。不改插件返回的切片。
 func pinnedSections(in []StateSection) []StateSection {
 	out := make([]StateSection, 0, len(in))
 	for _, s := range in {
-		if s.Pinned {
-			out = append(out, s)
+		if !s.Pinned {
+			continue
 		}
+		s.Edits = nil
+		if len(s.Rows) > 0 {
+			rows := make([]StateRow, len(s.Rows))
+			for i, r := range s.Rows {
+				r.ID, r.Edits = "", nil
+				rows[i] = r
+			}
+			s.Rows = rows
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -200,11 +225,28 @@ func clampState(in []StateSection) ([]StateSection, bool) {
 	out := make([]StateSection, 0, len(in))
 	total := 0
 	for _, s := range in {
-		if len(s.Rows) > maxStateRows {
-			// 行数超出只是这一块被压短，前端会显示「还有 N 条」；
-			// Truncated 留给整块被丢的情况，两者不能混成同一个信号。
-			s.More += len(s.Rows) - maxStateRows
-			s.Rows = append([]StateRow(nil), s.Rows[:maxStateRows]...)
+		s.Edits = clampEdits(s.Edits)
+		needCopy := len(s.Rows) > maxStateRows
+		if !needCopy {
+			for _, r := range s.Rows {
+				if len(r.Edits) > 0 {
+					needCopy = true
+					break
+				}
+			}
+		}
+		if needCopy {
+			if len(s.Rows) > maxStateRows {
+				// 行数超出只是这一块被压短，前端会显示「还有 N 条」；
+				// Truncated 留给整块被丢的情况，两者不能混成同一个信号。
+				s.More += len(s.Rows) - maxStateRows
+				s.Rows = append([]StateRow(nil), s.Rows[:maxStateRows]...)
+			} else {
+				s.Rows = append([]StateRow(nil), s.Rows...)
+			}
+			for i := range s.Rows {
+				s.Rows[i].Edits = clampEdits(s.Rows[i].Edits)
+			}
 		}
 		n := stateSectionSize(s)
 		if total+n > maxStatePerPlugin {
@@ -228,8 +270,42 @@ func stateSize(secs []StateSection) int {
 
 func stateSectionSize(s StateSection) int {
 	n := len(s.Key) + len(s.Title) + len(s.Summary) + len(s.Empty) + len(s.Domain)
+	for _, e := range s.Edits {
+		n += stateEditSize(e)
+	}
 	for _, r := range s.Rows {
-		n += len(r.Label) + len(r.Meta) + len(r.Value) + len(r.Detail) + len(r.Tone)
+		n += len(r.Label) + len(r.Meta) + len(r.Value) + len(r.Detail) + len(r.Tone) + len(r.ID)
+		for _, e := range r.Edits {
+			n += stateEditSize(e)
+		}
 	}
 	return n
+}
+
+// EditState 把一次状态修正请求交给插件。
+//
+// 与 StartAction 一样只在锁内取实例、锁外调用；错误文案面向界面，按请求语言取。
+// 插件不存在、未启用、未实现 StateEditor 都拒绝——不能因为界面上显示过一行，
+// 就假设那个插件此刻仍然可以写。
+func (m *Manager) EditState(name string, req StateEditRequest) error {
+	m.mu.RLock()
+	e, ok := m.entries[name]
+	var (
+		enabled = ok && e.enabled && e.inited
+		editor  StateEditor
+	)
+	if enabled {
+		editor, _ = any(e.plugin).(StateEditor)
+	}
+	m.mu.RUnlock()
+
+	switch {
+	case !ok:
+		return fmt.Errorf(i18n.T(req.Lang, "server.err.plugin_not_found", "插件 %q 不存在"), name)
+	case !enabled:
+		return fmt.Errorf(i18n.T(req.Lang, "server.err.plugin_disabled", "插件 %q 未启用"), name)
+	case editor == nil:
+		return fmt.Errorf(i18n.T(req.Lang, "server.err.state_edit_unsupported", "插件 %q 的状态不可修改"), name)
+	}
+	return safelyErr(req.Lang, name, "EditState", func() error { return editor.EditState(req) })
 }
