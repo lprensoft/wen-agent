@@ -2,12 +2,12 @@
 
 记录每个版本对使用者可见的变化，最新的排在最前面。
 内部重构、测试与依赖调整不记在这里，它们在提交历史中。
-每个版本中文在上、英文在下；早期的版本只有中文，不再回头补。
+每个版本先写完整的中文区块（新增/变更/修复），再写完整的英文区块；早期的版本只有中文，不再回头补。
 
 Changes visible to users, newest first. Internal refactoring, tests and dependency
-updates are not recorded here; they live in the commit history. Each release is
-written in Chinese first and English second; earlier releases are Chinese only and
-are not being backfilled.
+updates are not recorded here; they live in the commit history. Each release writes
+all Chinese sections first, then all English sections; earlier releases are Chinese
+only and are not being backfilled.
 
 ## [v1.4.0] - 2026-11-18
 
@@ -19,6 +19,12 @@ are not being backfilled.
 - 新增 `reaction` 插件：模型可以在对方的消息上加赞、笑、惊讶等表情，与文字回复并存或单独使用；支持 Telegram、Discord、Slack 与飞书
 - 媒体出站扩展到后台轮次：心跳、定时任务也能把工作目录里的图片或文件推给会话绑定的用户，图片同时留在会话与网页界面
 
+### 修复
+
+- 主动开口的提醒更可靠：提醒只交给读得到它的那一人格，不会出现在另一人格的心跳里；会话忙时会在真正空闲后重试，保存配置或重新启用后也不会提前触发或丢失
+- 状态页修正更安全：复制或重建记忆后不会删错条目，过期页面与后台并发修改不会把新值覆盖回旧值
+- `fetch_url` 只连公网：本机、内网与云厂商元数据地址都会被拒绝，重定向也绕不过
+
 ---
 
 ### Added
@@ -28,12 +34,6 @@ are not being backfilled.
 - New `web_search` plugin (off by default): with a Tavily API key the character can actively search the web; result count, hourly cap and timeout are configurable
 - New `reaction` plugin: the model can react to a message with a like, laugh, surprise and other emoji, alongside or instead of text; supported on Telegram, Discord, Slack and Feishu
 - Media output now works in background turns: heartbeat and scheduled turns can send images or files from the working directory to the user bound to the session, with images also kept in the conversation and web UI
-
-### 修复
-
-- 主动开口的提醒更可靠：提醒只交给读得到它的那一人格，不会出现在另一人格的心跳里；会话忙时会在真正空闲后重试，保存配置或重新启用后也不会提前触发或丢失
-- 状态页修正更安全：复制或重建记忆后不会删错条目，过期页面与后台并发修改不会把新值覆盖回旧值
-- `fetch_url` 只连公网：本机、内网与云厂商元数据地址都会被拒绝，重定向也绕不过
 
 ### Fixed
 
@@ -50,6 +50,10 @@ are not being backfilled.
 - 会话列表新增未读标记：心跳、定时任务或 IM 让角色主动开口后，不必刷新或切换会话才能发现
 - 设置页「通用」新增桌面通知：页面不在前台时弹一条系统通知，点击直接回到那个会话
 
+### 修复
+
+- 修复 Windows 上插件状态偶发保存失败：杀毒软件短暂占用状态文件时，保存会报 `Access is denied`
+
 ---
 
 ### Added
@@ -58,10 +62,6 @@ are not being backfilled.
 - New "Now" strip at the top of the chat: where the character is, their mood and when they will speak next; click it to open Character state
 - Unread markers in the session list: when the character speaks on its own (heartbeat, scheduled tasks or an IM channel), you no longer need to refresh or switch sessions to notice
 - New desktop notifications in General settings: a system notification while the page is not in front, and clicking it opens that chat
-
-### 修复
-
-- 修复 Windows 上插件状态偶发保存失败：杀毒软件短暂占用状态文件时，保存会报 `Access is denied`
 
 ### Fixed
 
