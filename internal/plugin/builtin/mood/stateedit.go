@@ -27,7 +27,7 @@ func moodEdits(lang string, st State) []plugin.StateEdit {
 			Fields: []plugin.StateField{
 				{
 					Key: "value", Label: i18n.T(lang, "plugin.mood.state.field.value", "心情（-100 到 100）"),
-					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Value),
+					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Value), Required: true,
 					Min: plugin.IntPtr(moodMin), Max: plugin.IntPtr(moodMax),
 				},
 				{

@@ -73,12 +73,12 @@ func bodyEdits(lang string, st BodyState) []plugin.StateEdit {
 			Fields: []plugin.StateField{
 				{
 					Key: "arousal", Label: i18n.T(lang, "plugin.body_sense.state.field.arousal", "唤起（0-100）"),
-					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Arousal),
+					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Arousal), Required: true,
 					Min: plugin.IntPtr(stateMin), Max: plugin.IntPtr(stateMax),
 				},
 				{
 					Key: "fatigue", Label: i18n.T(lang, "plugin.body_sense.state.field.fatigue", "疲劳（0-100）"),
-					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Fatigue),
+					Type: plugin.StateFieldNumber, Value: strconv.Itoa(st.Fatigue), Required: true,
 					Min: plugin.IntPtr(stateMin), Max: plugin.IntPtr(stateMax),
 				},
 				{
