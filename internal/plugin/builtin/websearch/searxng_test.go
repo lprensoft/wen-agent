@@ -110,6 +110,21 @@ func TestSearxngAuthRequired(t *testing.T) {
 	}
 }
 
+func TestSearxngFreshness(t *testing.T) {
+	cases := map[string]string{
+		"day": "day",
+		// 实例没有 week，退一档成 month
+		"week":  "month",
+		"month": "month", "year": "year",
+		"": "", "today": "",
+	}
+	for in, want := range cases {
+		if got := searxngFreshness(in); got != want {
+			t.Errorf("searxngFreshness(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestSearxngNeedsBaseURL(t *testing.T) {
 	p := newLocal(t, map[string]any{"provider": "searxng"})
 	_, err := run(t, p, map[string]any{"query": "随便"})

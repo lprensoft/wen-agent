@@ -80,6 +80,18 @@ func TestBraveAuthError(t *testing.T) {
 	}
 }
 
+func TestBraveFreshness(t *testing.T) {
+	cases := map[string]string{
+		"day": "pd", "week": "pw", "month": "pm", "year": "py",
+		"": "", "today": "",
+	}
+	for in, want := range cases {
+		if got := braveFreshness(in); got != want {
+			t.Errorf("braveFreshness(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestNormalizeProvider(t *testing.T) {
 	cases := map[string]string{
 		"brave": "brave", " Brave ": "brave", "searxng": "searxng",
