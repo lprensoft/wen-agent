@@ -4,11 +4,11 @@
 
 ## Basic tools (read_file / web_fetch / web_search / media plugins)
 
-These plugins are listed here only for completeness. `web_fetch` and `media` are on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it; `web_search` is also off — search terms go to Tavily, and the key is optional, with a free quota when left empty.
+These plugins are listed here only for completeness. `web_fetch` and `media` are on by default; `read_file` is off — it can read any file, session files and the memory directory included (visibility scopes are context isolation, not a sandbox), so turn it on from the settings page when you want it; `web_search` is also off — search terms go to a third party; see below.
 
 - **`read_file`** — reads a local text file, truncating past the limit. The tool has the same name.
 - **`web_fetch`** — fetches a web page and returns its text (`fetch_url`), with limits on both the timeout and the size. Public addresses only; see below.
-- **`web_search`** — searches the web and returns a few page snippets (`search_web`), with configurable result count, hourly cap and timeout; the key is optional, see below.
+- **`web_search`** — searches the web and returns a few page snippets (`search_web`); the service, result count, hourly cap and timeout are all configurable.
 - **`media`** — sends an image or file from the working directory to whoever this conversation belongs to (`send_image` / `send_file`), on message channels and background turns alike; see below for the limits and the path confinement.
 
 | Plugin | Setting | Default | Description |
@@ -16,7 +16,9 @@ These plugins are listed here only for completeness. `web_fetch` and `media` are
 | `read_file` | `max_bytes` | 65536 | The most bytes one read returns |
 | `web_fetch` | `timeout_seconds` | 20 | The longest to wait for a single page |
 | `web_fetch` | `max_bytes` | 65536 | The most bytes extracted from a single page |
-| `web_search` | `api_key` | empty | Tavily API key; leaving it empty uses the keyless free mode with a tighter quota |
+| `web_search` | `provider` | `tavily` | Which service: `tavily` / `brave` / `searxng` |
+| `web_search` | `api_key` | empty | Shared by Tavily and Brave; empty under Tavily means the keyless free mode, required for Brave |
+| `web_search` | `base_url` | empty | SearXNG only: the instance address |
 | `web_search` | `results` | 5 | How many snippets one search returns (1–10) |
 | `web_search` | `max_per_hour` | 20 | Searches per hour, at most (1–200); failed requests do not count |
 | `web_search` | `timeout_seconds` | 20 | The longest to wait for one search (1–120 seconds) |
@@ -27,7 +29,17 @@ When an HTTP proxy is configured, the hop to the proxy itself is not checked: lo
 
 ## Searching the web (web_search plugin)
 
-When enabled it provides `search_web`, which hands the query to Tavily and returns a few page snippets. Leaving `api_key` empty sends a keyless request with a tighter quota; filling it in buys quota, not availability. Search terms go to a third party, which is why the plugin is off by default. The hourly cap counts only successful requests: once the last hour is full, new web searches are refused; but the quota is recorded only after a request succeeds, so concurrent requests already in flight can still push the total slightly above the configured limit.
+When enabled it provides `search_web`: give it keywords and it returns a few page snippets. Search terms go to a third party, which is why the plugin is off by default.
+
+`provider` decides which service answers:
+
+| Service | What it takes | Worth knowing |
+|---|---|---|
+| `tavily` (default) | nothing: leaving `api_key` empty sends a keyless request | a key buys quota, not availability |
+| `brave` | an `api_key` | its own index; time filtering comes only in 24 hours / 7 days / 31 days / 1 year |
+| `searxng` | `base_url` pointing at your own instance | no cost, no vendor; the instance must enable json under search.formats, and it has no week, so week is searched as month |
+
+`api_key` is shared by Tavily and Brave; `base_url` is SearXNG's alone. Only the selected service's credentials are used, and a missing one is reported plainly — there is no silent fallback to Tavily, which would send your query to a service you did not pick. The hourly cap counts only successful requests: once the last hour is full, new web searches are refused; but the quota is recorded only after a request succeeds, so concurrent requests already in flight can still push the total slightly above the configured limit.
 
 ## Sending media (media plugin)
 

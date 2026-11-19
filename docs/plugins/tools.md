@@ -4,11 +4,11 @@
 
 ## 基础工具（read_file / web_fetch / web_search / media 插件）
 
-这几个插件放在这里只为让清单完整。`web_fetch` 与 `media` 默认启用；`read_file` 默认关闭——它能读任意文件，包括会话文件与记忆目录（可见域是上下文隔离，不是沙箱），要用就去设置页打开；`web_search` 也默认关闭——搜索词会发给 Tavily，密钥可选，留空也能用免费额度。
+这几个插件放在这里只为让清单完整。`web_fetch` 与 `media` 默认启用；`read_file` 默认关闭——它能读任意文件，包括会话文件与记忆目录（可见域是上下文隔离，不是沙箱），要用就去设置页打开；`web_search` 也默认关闭——搜索词会发给第三方，见下。
 
 - **`read_file`** —— 读取本地文本文件，超出上限截断。工具同名。
 - **`web_fetch`** —— 抓取网页并返回其文本内容（`fetch_url`），超时与体量都有上限。只抓公网地址，见下。
-- **`web_search`** —— 上网搜索并返回几条网页摘要（`search_web`），结果条数、每小时上限与超时都可配；密钥可选，见下。
+- **`web_search`** —— 上网搜索并返回几条网页摘要（`search_web`），服务商、结果条数、每小时上限与超时都可配。
 - **`media`** —— 把工作目录里的图片或文件发给这个会话的收件人（`send_image` / `send_file`），消息通道与后台轮次都可以；上限与路径限制见下。
 
 | 插件 | 配置项 | 默认 | 说明 |
@@ -16,7 +16,9 @@
 | `read_file` | `max_bytes` | 65536 | 单次读取返回的最大字节数 |
 | `web_fetch` | `timeout_seconds` | 20 | 抓取单个网页的最长等待时间 |
 | `web_fetch` | `max_bytes` | 65536 | 单个网页提取出的最大字节数 |
-| `web_search` | `api_key` | 空 | Tavily API Key；留空用免 key 的免费模式，额度更紧 |
+| `web_search` | `provider` | `tavily` | 用哪一家：`tavily` / `brave` / `searxng` |
+| `web_search` | `api_key` | 空 | Tavily 与 Brave 共用；Tavily 留空走免 key 的免费模式，Brave 必填 |
+| `web_search` | `base_url` | 空 | 只给 SearXNG：实例地址 |
 | `web_search` | `results` | 5 | 每次搜索返回几条摘要（1–10） |
 | `web_search` | `max_per_hour` | 20 | 每小时最多搜索几次（1–200），失败的请求不计 |
 | `web_search` | `timeout_seconds` | 20 | 单次搜索的最长等待时间（1–120 秒） |
@@ -27,7 +29,19 @@
 
 ## 上网搜索（web_search 插件）
 
-启用后提供 `search_web`，把查询词交给 Tavily 并拿回几条网页摘要。`api_key` 留空时发送免 key 请求，限额更紧；填上换的是额度，不是可用性。搜索词会发给第三方，所以默认关闭。每小时上限只计成功的请求：最近一小时已记满时，新的联网搜索会被拒绝；但额度是在请求成功之后才记账，已经在途的并发请求仍可能让总数略微超过设定值。
+启用后提供 `search_web`：给关键词，拿回几条网页摘要。搜索词会发给第三方，所以默认关闭。
+
+`provider` 决定用哪一家：
+
+| 服务 | 门槛 | 值得知道的 |
+|---|---|---|
+| `tavily`（默认） | 无：`api_key` 留空就发免 key 请求 | 填 key 换的是额度，不是可用性 |
+| `brave` | 要 `api_key` | 独立索引；时间过滤只有 24 小时 / 7 天 / 31 天 / 一年四档 |
+| `searxng` | 要 `base_url` 指向自己的实例 | 不花钱、不经厂商；实例得在 settings.yml 的 search.formats 里开 json；它没有 week，按 month 查 |
+
+`api_key` 由 Tavily 与 Brave 共用，`base_url` 只给 SearXNG。选了哪家就只用哪家的凭据，缺了会明说缺什么——不会静默回落到 Tavily，那等于把查询发到一家没选的服务上。
+
+每小时上限只计成功的请求：最近一小时已记满时，新的联网搜索会被拒绝；但额度是在请求成功之后才记账，已经在途的并发请求仍可能让总数略微超过设定值。
 
 ## 媒体出站（media 插件）
 

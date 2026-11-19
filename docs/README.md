@@ -24,3 +24,4 @@
 
 - [插件安装、生态兼容与语言选择](decisions/agent-plugins-analysis.md) —— 为什么继续用 Go，外源插件为什么走 Agent Plugins 标准（2026-08-25）
 - [P1 外部协议核对](decisions/external-protocol-verification.md) —— Responses、视觉、IM 媒体、语音与向量化的协议现状与实现边界（2026-11-09）
+- [联网搜索的三家服务](decisions/web-search-providers.md) —— Tavily / Brave / SearXNG 的协议现状与接入折衷（2026-11-19）

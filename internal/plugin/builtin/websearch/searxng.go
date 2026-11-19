@@ -1,0 +1,102 @@
+package websearch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"wen/internal/prompt"
+)
+
+// searxng 连一个自建实例：GET /search?format=json，没有 key、没有厂商。
+//
+// 它便宜在不用付钱，贵在要自己有一台：地址由用户填，所以这里的地址检查是「必须是
+// http/https 的完整地址」，不套 plugin.BlockedHost——自家内网里的实例本来就该能连。
+//
+// 两个坑写在这里，免得下一个人重新踩：
+//
+//   - 默认配置不给 JSON。settings.yml 的 search.formats 里没有 json 时，实例回 403，
+//     而那与「密钥不对」长得一模一样。403 因此单独翻一句能照做的话。
+//   - time_range 只有 day / month / year，没有 week。week 退成 month：宽一档是诚实的
+//     折衷，退成「不限时间」就成了另一件事。
+type searxng struct {
+	base   string
+	client *http.Client
+	lang   string
+}
+
+func (s *searxng) Search(ctx context.Context, query, freshness string, n int) ([]hit, error) {
+	base := strings.TrimSpace(s.base)
+	if base == "" {
+		return nil, errors.New(prompt.T(s.lang, "prompt.web_search.err.searxng_url",
+			"选了 SearXNG 但没填实例地址（设置页的 base_url），查不了。"))
+	}
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, errors.New(prompt.T(s.lang, "prompt.web_search.err.base_url",
+			"实例地址要填成 http:// 或 https:// 开头的完整地址。"))
+	}
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/search"
+	q := u.Query()
+	q.Set("q", query)
+	q.Set("format", "json")
+	if f := searxngFreshness(freshness); f != "" {
+		q.Set("time_range", f)
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	data, status, err := send(s.lang, s.client, req)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusForbidden {
+		return nil, errors.New(prompt.T(s.lang, "prompt.web_search.err.searxng_json",
+			"实例拒绝了这次请求（HTTP 403）：多半是没开 JSON 输出，去 settings.yml 的 search.formats 里加上 json。"))
+	}
+	if status != http.StatusOK {
+		return nil, statusError(s.lang, status, data)
+	}
+
+	var out struct {
+		Results []struct {
+			URL           string `json:"url"`
+			Title         string `json:"title"`
+			Content       string `json:"content"`
+			PublishedDate string `json:"publishedDate"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, badResponse(s.lang, status, data)
+	}
+
+	hits := make([]hit, 0, len(out.Results))
+	for _, r := range out.Results {
+		if len(hits) == n {
+			break // 实例不认条数，自己截
+		}
+		hits = append(hits, hit{Title: r.Title, URL: r.URL, Content: r.Content, Published: r.PublishedDate})
+	}
+	return hits, nil
+}
+
+// searxngFreshness 只映射实例认的三个取值；week 退一档成 month，理由见类型注释。
+func searxngFreshness(v string) string {
+	switch v {
+	case "day":
+		return "day"
+	case "week", "month":
+		return "month"
+	case "year":
+		return "year"
+	}
+	return ""
+}

@@ -20,10 +20,12 @@ func newPlugin(t *testing.T, cfg map[string]any, handler http.HandlerFunc) *Plug
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	p := New()
+	// endpoint 要在 Init 之前给：Searcher 是 Init 时按 provider 造好的，事后改字段
+	// 不会换掉它手里的地址。
+	p.endpoint = srv.URL
 	if err := p.Init(plugin.InitContext{Lang: "zh"}, cfg); err != nil {
 		t.Fatal(err)
 	}
-	p.endpoint = srv.URL
 	return p
 }
 
