@@ -79,6 +79,10 @@ func (s *searxng) Search(ctx context.Context, query, freshness string, n int) ([
 			Content       string `json:"content"`
 			PublishedDate string `json:"publishedDate"`
 		} `json:"results"`
+		// 上游故障也走 HTTP 200：哪一个引擎超时、被验证码拦了、解析失败了，都记在
+		// 这里，而 results 是空的。只认「有没有」不认内容——它的元素形状随版本与
+		// 语言变（[引擎, 译文]），这里不需要读。
+		Unresponsive []json.RawMessage `json:"unresponsive_engines"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, badResponse(s.lang, status, data)
@@ -90,6 +94,12 @@ func (s *searxng) Search(ctx context.Context, query, freshness string, n int) ([
 			break // 实例不认条数，自己截
 		}
 		hits = append(hits, hit{Title: r.Title, URL: r.URL, Content: r.Content, Published: r.PublishedDate})
+	}
+	if len(hits) == 0 && len(out.Unresponsive) > 0 {
+		// 全挂的消息不能当成「没搜到」：模型会照着这个说法编一句「网上没有」，
+		// 而且调用方会按成功记账——额度就白烧在一次没人答的请求上。
+		return nil, errors.New(prompt.Tf(s.lang, "prompt.web_search.err.engines_down",
+			"上游搜索引擎都没响应（%d 个超时或被验证码拦了），这不是没搜到。过一会儿再试。", len(out.Unresponsive)))
 	}
 	return hits, nil
 }

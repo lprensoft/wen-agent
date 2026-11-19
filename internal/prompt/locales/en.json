@@ -1171,6 +1171,7 @@
   "prompt.web_search.err.brave_key": "Brave is selected but no API key is set (api_key on the settings page), so it cannot search.",
   "prompt.web_search.err.empty_query": "the query is empty",
   "prompt.web_search.err.background": "No one is talking to you this turn, so you cannot search the web. Wait until they speak, and do not pretend you searched.",
+  "prompt.web_search.err.engines_down": "None of the upstream engines answered (%d timed out or hit a CAPTCHA); this is not an empty result. Try again later.",
   "prompt.web_search.err.http": "search failed (HTTP %d): %s",
   "prompt.web_search.err.network": "search failed: %w",
   "prompt.web_search.err.provider_limit": "the search service is rate-limiting us (HTTP %d); try again in a while.",

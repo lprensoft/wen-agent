@@ -22,6 +22,7 @@
 - 要 JSON 得让实例在 `settings.yml` 的 `search.formats` 里开 `json`，否则**回 403**。官方明确说公共实例多数把这类格式关着——这是接 SearXNG 最常踩的一脚，403 因此不能笼统当成「密钥不对」。
 - 只有 `format: json` 时响应才有 `results[]`：`url`、`title`、`content`、`publishedDate`（很常见为 null）、`engine`、`score`。
 - `time_range` **只有 `day` / `month` / `year`，没有 `week`**。
+- **上游故障也是 HTTP 200**：哪个引擎超时、被验证码拦、解析失败，都写在 `unresponsive_engines` 里（元素是 `[引擎, 译文]`），而 `results` 可能是空的。官方源码的 `get_json_response` 把它和 `results` 放在同一个字典里返回。当成「没搜到」会让模型照着编一句「网上没有」，调用方还会按成功记账——所以「结果为空且这个字段非空」必须报成故障。
 
 ## 三、Brave【原文（官方仓库源码）】
 

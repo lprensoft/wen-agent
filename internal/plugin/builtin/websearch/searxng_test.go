@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"wen/internal/plugin"
@@ -122,6 +123,72 @@ func TestSearxngFreshness(t *testing.T) {
 		if got := searxngFreshness(in); got != want {
 			t.Errorf("searxngFreshness(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+const searxAllEnginesDown = `{"query":"x","results":[],"unresponsive_engines":[["bing","CAPTCHA"],["google","timeout"]]}`
+
+func TestSearxngUpstreamFailureIsAnError(t *testing.T) {
+	base := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, searxAllEnginesDown)
+	})
+	p := newLocal(t, map[string]any{"provider": "searxng", "base_url": base})
+	_, err := run(t, p, map[string]any{"query": "随便"})
+	// 全挂也是 HTTP 200：说成「没搜到」会让模型照着编一句「网上没有」
+	if err == nil || !strings.Contains(err.Error(), "没响应") {
+		t.Fatalf("an all-engines-down reply must be an error, got %v", err)
+	}
+}
+
+func TestSearxngUpstreamFailureDoesNotSpendQuota(t *testing.T) {
+	var calls atomic.Int32
+	base := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			fmt.Fprint(w, searxAllEnginesDown)
+			return
+		}
+		fmt.Fprint(w, searxResults)
+	})
+	p := newLocal(t, map[string]any{"provider": "searxng", "base_url": base, "max_per_hour": 1})
+
+	if _, err := run(t, p, map[string]any{"query": "第一次"}); err == nil {
+		t.Fatal("the first call should report the upstream failure")
+	}
+	// 上游随后恢复，这一次不该撞上「查得太多了」——失败的请求不占额度
+	out, err := run(t, p, map[string]any{"query": "第二次"})
+	if err != nil {
+		t.Fatalf("a failed call must not spend the quota: %v", err)
+	}
+	if !strings.Contains(out, "结果一") {
+		t.Errorf("expected results after recovery, got:\n%s", out)
+	}
+}
+
+func TestSearxngEmptyWithoutUpstreamErrors(t *testing.T) {
+	base := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"query":"x","results":[],"unresponsive_engines":[]}`)
+	})
+	p := newLocal(t, map[string]any{"provider": "searxng", "base_url": base})
+	out, err := run(t, p, map[string]any{"query": "查无此事"})
+	if err != nil {
+		t.Fatalf("a genuinely empty result is not an error: %v", err)
+	}
+	if !strings.Contains(out, "没有搜到结果") {
+		t.Errorf("expected an explicit empty note, got:\n%s", out)
+	}
+}
+
+func TestSearxngPartialUpstreamFailureStillAnswers(t *testing.T) {
+	base := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"query":"x","results":[{"url":"https://example.com/a","title":"结果一","content":"摘要一","publishedDate":null}],"unresponsive_engines":[["google","timeout"]]}`)
+	})
+	p := newLocal(t, map[string]any{"provider": "searxng", "base_url": base})
+	out, err := run(t, p, map[string]any{"query": "随便"})
+	if err != nil {
+		t.Fatalf("one dead engine plus results is still a usable answer: %v", err)
+	}
+	if !strings.Contains(out, "结果一") {
+		t.Errorf("expected the surviving result, got:\n%s", out)
 	}
 }
 
