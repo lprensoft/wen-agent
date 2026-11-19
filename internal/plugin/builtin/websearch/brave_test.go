@@ -49,6 +49,11 @@ func TestBraveRequestAndParse(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
+	// page_age 是不带时区的 2006-01-02T15:04:05，认不出来就会把原始时间串整段挂进
+	// 标题行——这条断言就是盯那个「认不出来」的。
+	if strings.Contains(out, "T03:00:00") {
+		t.Errorf("page_age was not normalised to a date:\n%s", out)
+	}
 	if strings.Contains(out, "<b>") {
 		t.Errorf("description HTML not stripped:\n%s", out)
 	}

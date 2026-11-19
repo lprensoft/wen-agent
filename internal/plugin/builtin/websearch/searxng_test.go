@@ -68,6 +68,9 @@ func TestSearxngRequestAndParse(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "T03:00:00") {
+		t.Errorf("publishedDate was not normalised to a date:\n%s", out)
+	}
 }
 
 func TestSearxngTruncatesResults(t *testing.T) {
@@ -92,6 +95,18 @@ func TestSearxngJSONDisabled(t *testing.T) {
 	_, err := run(t, p, map[string]any{"query": "随便"})
 	if err == nil || !strings.Contains(err.Error(), "search.formats") {
 		t.Fatalf("403 should point at the JSON setting, got %v", err)
+	}
+}
+
+func TestSearxngAuthRequired(t *testing.T) {
+	base := newStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	p := newLocal(t, map[string]any{"provider": "searxng", "base_url": base})
+	_, err := run(t, p, map[string]any{"query": "随便"})
+	// 401 不是「密钥不对」：SearXNG 没有 key 可填，照着那句话去设置页会一无所获
+	if err == nil || !strings.Contains(err.Error(), "认证") {
+		t.Fatalf("401 should mention authentication, got %v", err)
 	}
 }
 

@@ -23,13 +23,21 @@
 - 只有 `format: json` 时响应才有 `results[]`：`url`、`title`、`content`、`publishedDate`（很常见为 null）、`engine`、`score`。
 - `time_range` **只有 `day` / `month` / `year`，没有 `week`**。
 
-## 三、Brave【待核对】
+## 三、Brave【原文（官方仓库源码）】
 
-> 文档站 `api-dashboard.search.brave.com` 对普通抓取返回 403，本次只从它的渲染摘要里读到了端点、鉴权头与时间过滤的取值，**响应字段没有读到正文**，接之前必须复核。
+> 文档站 `api-dashboard.search.brave.com` 对普通抓取返回 403。字段名改从 Brave 自己的 MCP 服务器仓库核对：`brave/brave-search-mcp-server` 的 `src/tools/web/types.ts` 里有完整的 `WebSearchApiResponse` 类型（核对日期 2026-11-19）。端点、鉴权头与时间过滤的取值来自文档站的渲染摘要。
 
 - 端点：`GET https://api.search.brave.com/res/v1/web/search?q=…&freshness=pw`，请求头 `X-Subscription-Token: <key>`。
 - `freshness`：`pd`（24 小时）/ `pw`（7 天）/ `pm`（31 天）/ `py`（一年），也支持自定义日期区间。
-- 结果按公开资料在 `web.results[]`，字段 `title`、`url`、`description`（带 `<b>` 高亮）、`age`（人话，如 `2 days ago`）、`page_age`（ISO 时间）【待核对】。另有面向模型的 LLM Context 端点，本次不接。
+- 响应顶层：`web?: Search`，其中 `Search { type, results: SearchResult[], family_friendly }`。`SearchResult` 继承 `Result`，字段是：
+  - `title: string`、`url: string`、`description?: string`（带 `<b>` 高亮）
+  - `page_age?: string`（官方注释：*A date representing the age of the web page*）
+  - `page_fetched?: string`（抓取时刻，不是发布日，别拿来当日期）
+  - `age?: string`（*A string representing the age*，形如 `2 days ago` / `August 7, 2022`）
+  - 另有 `language`、`meta_url`、`profile`、`thumbnail`、`extra_snippets` 等
+- **`page_age` 不带时区**：一个第三方集成的示例是 `"2022-08-07T03:07:47"`，不是 RFC 3339。按 `2006-01-02T15:04:05` 解析；少这一条布局不会报错，只会把原始时间串整段挂进标题行。
+- 查询上限（同一个仓库的 `src/tools/web/params.ts`）：400 字符、50 个词。
+- 另有面向模型的 LLM Context 端点，本次不接。
 
 ## 四、接入的结论
 

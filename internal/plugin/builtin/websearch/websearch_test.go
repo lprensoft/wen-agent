@@ -276,6 +276,38 @@ func TestSearchAllowedForScheduledTask(t *testing.T) {
 	}
 }
 
+func TestCacheKeepsProvidersApart(t *testing.T) {
+	var calls atomic.Int32
+	p := newPlugin(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method == http.MethodPost {
+			fmt.Fprint(w, twoResults) // tavily
+			return
+		}
+		fmt.Fprint(w, `{"web":{"results":[{"title":"brave 的结果","url":"https://example.com/b","description":"x","page_age":"2026-08-14T03:00:00"}]}}`)
+	})
+
+	if _, err := run(t, p, map[string]any{"query": "同一件事"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 换服务商：Init 重建 Searcher，但缓存里那条是上一家答的。键里不带来源的话，
+	// 换到 Brave 之后十分钟内还在看 Tavily 的摘要，而且没人会知道。
+	if err := p.Init(plugin.InitContext{Lang: "zh"}, map[string]any{"provider": "brave", "api_key": "k"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, p, map[string]any{"query": "同一件事"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("changing the provider must force a fresh search, got %d calls", n)
+	}
+	if !strings.Contains(out, "brave 的结果") {
+		t.Errorf("expected the new provider's result, got:\n%s", out)
+	}
+}
+
 func TestSearchEmptyQuery(t *testing.T) {
 	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("an empty query must not reach the network")

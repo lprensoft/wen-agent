@@ -58,6 +58,12 @@ func (s *searxng) Search(ctx context.Context, query, freshness string, n int) ([
 	if err != nil {
 		return nil, err
 	}
+	if status == http.StatusUnauthorized {
+		// 套了反向代理密码的实例会回 401。这一句不能沿用「密钥不对」——SearXNG 根本
+		// 没有 key 可填，照着那句去设置页翻会一无所获。
+		return nil, errors.New(prompt.T(s.lang, "prompt.web_search.err.searxng_auth",
+			"实例要求认证（HTTP 401）：这个插件不带认证信息，看看是不是套了反向代理的密码。"))
+	}
 	if status == http.StatusForbidden {
 		return nil, errors.New(prompt.T(s.lang, "prompt.web_search.err.searxng_json",
 			"实例拒绝了这次请求（HTTP 403）：多半是没开 JSON 输出，去 settings.yml 的 search.formats 里加上 json。"))

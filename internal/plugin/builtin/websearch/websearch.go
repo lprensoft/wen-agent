@@ -52,6 +52,10 @@ type Plugin struct {
 	results  int
 	perHour  int
 	searcher Searcher
+	// source 是「这一次的答案来自谁」：服务商名 + 实例地址。缓存键要带上它，否则换
+	// 服务商之后十分钟内还会拿到上一家的结果——换了 Brave 却看着 Tavily 的摘要，
+	// 而且没人会知道。
+	source string
 
 	// endpoint 只在测试里非空：三家各自有自己的默认地址，这里只给桩服务一个入口。
 	endpoint string
@@ -141,10 +145,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.results = clamp(plugin.CfgInt(cfg, "results", defaultResults), 1, 10)
 	p.perHour = clamp(plugin.CfgInt(cfg, "max_per_hour", defaultPerHour), 1, 200)
 	client := &http.Client{Timeout: timeout}
+	provider := normalizeProvider(plugin.CfgString(cfg, "provider", "tavily"))
+	baseURL := strings.TrimSpace(plugin.CfgString(cfg, "base_url", ""))
+	p.source = provider + "\x00" + baseURL
 	p.searcher = newSearcher(
-		normalizeProvider(plugin.CfgString(cfg, "provider", "tavily")),
+		provider,
 		strings.TrimSpace(plugin.CfgString(cfg, "api_key", "")),
-		strings.TrimSpace(plugin.CfgString(cfg, "base_url", "")),
+		baseURL,
 		client, p.lang, p.endpoint,
 	)
 	if p.book == nil {
@@ -163,12 +170,13 @@ func (p *Plugin) langOf() string {
 }
 
 // settings 是一次调用用到的全部配置。取快照而不是逐项读，是为了让一轮调用里看到的
-// 是同一份配置——否则设置页正好在中间改了超时，前后两段用的就是两个客户端。
+// 是同一份配置——否则设置页正好在中间换了服务商，同一轮就会一家发请求、一家渲染。
 type settings struct {
 	lang     string
 	results  int
 	perHour  int
 	searcher Searcher
+	source   string
 	// book 也走快照：Init 第一次初始化时会写它，Execute 不持锁读同一个字段就是一条
 	// 数据竞争。那条写只发生在还没有工具可调的时候，但让读者去依赖这个时序没有好处。
 	book *book
@@ -182,6 +190,7 @@ func (p *Plugin) snapshot() settings {
 		results:  p.results,
 		perHour:  p.perHour,
 		searcher: p.searcher,
+		source:   p.source,
 		book:     p.book,
 	}
 }
@@ -243,7 +252,7 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	// 缓存与限流都用真实时间，不跟 plugin.Clock 走：那个钟管的是「现在几点」这类业务
 	// 时刻（评测会推着它走），而十分钟的缓存寿命就是现实里的十分钟。
 	now := time.Now()
-	key := q + "\x00" + fresh
+	key := s.source + "\x00" + q + "\x00" + fresh
 	if out, at, ok := s.book.lookup(key, now); ok {
 		return out + "\n" + cachedNote(s.lang, now.Sub(at)), nil
 	}
@@ -320,7 +329,10 @@ func dateOf(lang, s string) string {
 	if s == "" {
 		return prompt.T(lang, "prompt.web_search.result.unknown_date", "日期未明")
 	}
-	for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC3339, "2006-01-02"} {
+	// 四家各写各的：Tavily 是 RFC1123（带 GMT），SearXNG 多半是带偏移的 RFC3339，
+	// Brave 的 page_age 是不带时区的 2006-01-02T15:04:05（形如 2022-08-07T03:07:47），
+	// 也有只给日期的。少一个布局的后果不是报错，是把原始时间串整段挂进标题行。
+	for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.Format("2006-01-02")
 		}

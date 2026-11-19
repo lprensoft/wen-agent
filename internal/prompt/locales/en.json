@@ -1175,6 +1175,7 @@
   "prompt.web_search.err.network": "search failed: %w",
   "prompt.web_search.err.provider_limit": "the search service is rate-limiting us (HTTP %d); try again in a while.",
   "prompt.web_search.err.quota": "already searched %d times this hour; not searching again for now. Try later, or skip it.",
+  "prompt.web_search.err.searxng_auth": "The instance requires authentication (HTTP 401): this plugin sends no credentials, so check whether a reverse proxy is asking for a password.",
   "prompt.web_search.err.searxng_json": "The instance refused the request (HTTP 403): it most likely does not serve JSON — add json to search.formats in settings.yml.",
   "prompt.web_search.err.searxng_url": "SearXNG is selected but no instance address is set (base_url on the settings page), so it cannot search.",
   "prompt.web_search.result.cached": "(these were found %d minutes ago and may already be out of date)",
