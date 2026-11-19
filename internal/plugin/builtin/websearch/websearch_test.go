@@ -308,6 +308,27 @@ func TestCacheKeepsProvidersApart(t *testing.T) {
 	}
 }
 
+func TestDateOf(t *testing.T) {
+	cases := map[string]string{
+		// Tavily
+		"Tue, 11 Mar 2025 17:00:00 GMT": "2025-03-11",
+		// SearXNG 的 publishedDate 多半带偏移
+		"2026-08-14T03:00:00+00:00": "2026-08-14",
+		// Brave 的 page_age：不带时区，这一条是补布局的那个理由
+		"2022-08-07T03:07:47": "2022-08-07",
+		// 只给日期的
+		"2026-08-14": "2026-08-14",
+		"":           "日期未明",
+		// 认不出来的保留原文：一个反常的日期字符串仍然是「这条有日期」的信号
+		"2 days ago": "2 days ago",
+	}
+	for in, want := range cases {
+		if got := dateOf("zh", in); got != want {
+			t.Errorf("dateOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestSearchEmptyQuery(t *testing.T) {
 	p := newPlugin(t, nil, func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("an empty query must not reach the network")
