@@ -29,10 +29,6 @@ import (
 )
 
 const (
-	// tavilyEndpoint 只在测试里被替换（见 Plugin.endpoint）：真去打 api.tavily.com 的
-	// 测试既慢又不可复现，还会把开发机的 IP 算进限流。
-	tavilyEndpoint = "https://api.tavily.com/search"
-
 	defaultResults = 5
 	defaultPerHour = 20
 	defaultTimeout = 20 // 秒
@@ -53,17 +49,22 @@ type Plugin struct {
 	mu sync.RWMutex
 
 	lang     string
-	apiKey   string
 	results  int
 	perHour  int
-	client   *http.Client
+	searcher Searcher
+	// source 是「这一次的答案来自谁」：服务商名 + 实例地址。缓存键要带上它，否则换
+	// 服务商之后十分钟内还会拿到上一家的结果——换了 Brave 却看着 Tavily 的摘要，
+	// 而且没人会知道。
+	source string
+
+	// endpoint 只在测试里非空：三家各自有自己的默认地址，这里只给桩服务一个入口。
 	endpoint string
 
 	book *book
 }
 
 func New() *Plugin {
-	return &Plugin{results: defaultResults, perHour: defaultPerHour, endpoint: tavilyEndpoint}
+	return &Plugin{results: defaultResults, perHour: defaultPerHour}
 }
 
 func (p *Plugin) Name() string { return "web_search" }
@@ -80,10 +81,29 @@ func (p *Plugin) SystemPrompt() string {
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
+			Key:         "provider",
+			Label:       "搜索服务",
+			Type:        plugin.FieldSelect,
+			Description: "用哪一家查。Tavily 不填 key 也能用（免费模式，限额紧）；Brave 要 key；SearXNG 要自己的实例地址。",
+			Default:     "tavily",
+			Options: []plugin.ConfigOption{
+				{Value: "tavily", Label: "Tavily"},
+				{Value: "brave", Label: "Brave Search"},
+				{Value: "searxng", Label: "SearXNG（自建）"},
+			},
+		},
+		{
 			Key:         "api_key",
-			Label:       "Tavily API Key",
+			Label:       "搜索服务的 API Key",
 			Type:        plugin.FieldString,
-			Description: "留空则用免 key 的免费模式，限额更紧；填上换的是额度，不是可用性。",
+			Description: "Tavily 与 Brave 共用这一个。Tavily 留空则走免 key 的免费模式，填上换的是额度；Brave 必填。",
+			Default:     "",
+		},
+		{
+			Key:         "base_url",
+			Label:       "SearXNG 实例地址",
+			Type:        plugin.FieldString,
+			Description: "只给 SearXNG 用，形如 https://searx.example.com；实例要在 settings.yml 的 search.formats 里开 json。",
 			Default:     "",
 		},
 		{
@@ -122,10 +142,18 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lang = ictx.Lang
-	p.apiKey = strings.TrimSpace(plugin.CfgString(cfg, "api_key", ""))
 	p.results = clamp(plugin.CfgInt(cfg, "results", defaultResults), 1, 10)
 	p.perHour = clamp(plugin.CfgInt(cfg, "max_per_hour", defaultPerHour), 1, 200)
-	p.client = &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: timeout}
+	provider := normalizeProvider(plugin.CfgString(cfg, "provider", "tavily"))
+	baseURL := strings.TrimSpace(plugin.CfgString(cfg, "base_url", ""))
+	p.source = provider + "\x00" + baseURL
+	p.searcher = newSearcher(
+		provider,
+		strings.TrimSpace(plugin.CfgString(cfg, "api_key", "")),
+		baseURL,
+		client, p.lang, p.endpoint,
+	)
 	if p.book == nil {
 		// 缓存跨 Init 保留：改个超时不该让刚查过的东西再查一遍
 		p.book = newBook(cacheTTL, cacheSize)
@@ -142,14 +170,13 @@ func (p *Plugin) langOf() string {
 }
 
 // settings 是一次调用用到的全部配置。取快照而不是逐项读，是为了让一轮调用里看到的
-// 是同一份配置——否则设置页正好在中间改了超时，前后两段用的就是两个客户端。
+// 是同一份配置——否则设置页正好在中间换了服务商，同一轮就会一家发请求、一家渲染。
 type settings struct {
 	lang     string
-	apiKey   string
 	results  int
 	perHour  int
-	client   *http.Client
-	endpoint string
+	searcher Searcher
+	source   string
 	// book 也走快照：Init 第一次初始化时会写它，Execute 不持锁读同一个字段就是一条
 	// 数据竞争。那条写只发生在还没有工具可调的时候，但让读者去依赖这个时序没有好处。
 	book *book
@@ -160,11 +187,10 @@ func (p *Plugin) snapshot() settings {
 	defer p.mu.RUnlock()
 	return settings{
 		lang:     p.lang,
-		apiKey:   p.apiKey,
 		results:  p.results,
 		perHour:  p.perHour,
-		client:   p.client,
-		endpoint: p.endpoint,
+		searcher: p.searcher,
+		source:   p.source,
 		book:     p.book,
 	}
 }
@@ -226,7 +252,7 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 	// 缓存与限流都用真实时间，不跟 plugin.Clock 走：那个钟管的是「现在几点」这类业务
 	// 时刻（评测会推着它走），而十分钟的缓存寿命就是现实里的十分钟。
 	now := time.Now()
-	key := q + "\x00" + fresh
+	key := s.source + "\x00" + q + "\x00" + fresh
 	if out, at, ok := s.book.lookup(key, now); ok {
 		return out + "\n" + cachedNote(s.lang, now.Sub(at)), nil
 	}
@@ -235,7 +261,7 @@ func (t *tool) Execute(ctx context.Context, args json.RawMessage) (string, error
 			"这个小时已经查了 %d 次，先不查了。等一会儿再说，或者不查也行。", s.perHour))
 	}
 
-	hits, err := t.p.search(ctx, s, q, fresh)
+	hits, err := s.searcher.Search(ctx, q, fresh, s.results)
 	if err != nil {
 		return "", err
 	}
@@ -303,7 +329,10 @@ func dateOf(lang, s string) string {
 	if s == "" {
 		return prompt.T(lang, "prompt.web_search.result.unknown_date", "日期未明")
 	}
-	for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC3339, "2006-01-02"} {
+	// 四家各写各的：Tavily 是 RFC1123（带 GMT），SearXNG 多半是带偏移的 RFC3339，
+	// Brave 的 page_age 是不带时区的 2006-01-02T15:04:05（形如 2022-08-07T03:07:47），
+	// 也有只给日期的。少一个布局的后果不是报错，是把原始时间串整段挂进标题行。
+	for _, layout := range []string{time.RFC1123, time.RFC1123Z, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.Format("2006-01-02")
 		}

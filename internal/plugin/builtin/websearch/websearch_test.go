@@ -20,10 +20,12 @@ func newPlugin(t *testing.T, cfg map[string]any, handler http.HandlerFunc) *Plug
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	p := New()
+	// endpoint 要在 Init 之前给：Searcher 是 Init 时按 provider 造好的，事后改字段
+	// 不会换掉它手里的地址。
+	p.endpoint = srv.URL
 	if err := p.Init(plugin.InitContext{Lang: "zh"}, cfg); err != nil {
 		t.Fatal(err)
 	}
-	p.endpoint = srv.URL
 	return p
 }
 
@@ -271,6 +273,59 @@ func TestSearchAllowedForScheduledTask(t *testing.T) {
 	ctx := plugin.WithTurnOrigin(context.Background(), "scheduler")
 	if _, err := p.Tools()[0].Execute(ctx, raw); err != nil {
 		t.Fatalf("a scheduled task should be able to search: %v", err)
+	}
+}
+
+func TestCacheKeepsProvidersApart(t *testing.T) {
+	var calls atomic.Int32
+	p := newPlugin(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method == http.MethodPost {
+			fmt.Fprint(w, twoResults) // tavily
+			return
+		}
+		fmt.Fprint(w, `{"web":{"results":[{"title":"brave 的结果","url":"https://example.com/b","description":"x","page_age":"2026-08-14T03:00:00"}]}}`)
+	})
+
+	if _, err := run(t, p, map[string]any{"query": "同一件事"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 换服务商：Init 重建 Searcher，但缓存里那条是上一家答的。键里不带来源的话，
+	// 换到 Brave 之后十分钟内还在看 Tavily 的摘要，而且没人会知道。
+	if err := p.Init(plugin.InitContext{Lang: "zh"}, map[string]any{"provider": "brave", "api_key": "k"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, p, map[string]any{"query": "同一件事"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("changing the provider must force a fresh search, got %d calls", n)
+	}
+	if !strings.Contains(out, "brave 的结果") {
+		t.Errorf("expected the new provider's result, got:\n%s", out)
+	}
+}
+
+func TestDateOf(t *testing.T) {
+	cases := map[string]string{
+		// Tavily
+		"Tue, 11 Mar 2025 17:00:00 GMT": "2025-03-11",
+		// SearXNG 的 publishedDate 多半带偏移
+		"2026-08-14T03:00:00+00:00": "2026-08-14",
+		// Brave 的 page_age：不带时区，这一条是补布局的那个理由
+		"2022-08-07T03:07:47": "2022-08-07",
+		// 只给日期的
+		"2026-08-14": "2026-08-14",
+		"":           "日期未明",
+		// 认不出来的保留原文：一个反常的日期字符串仍然是「这条有日期」的信号
+		"2 days ago": "2 days ago",
+	}
+	for in, want := range cases {
+		if got := dateOf("zh", in); got != want {
+			t.Errorf("dateOf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
