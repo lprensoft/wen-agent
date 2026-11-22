@@ -329,3 +329,31 @@ func TestForecastCueWindowUsesPersonaClock(t *testing.T) {
 		t.Fatal("角色当地上午不该为明天的雨开口")
 	}
 }
+
+// 夏令时切换后，预报城市的午夜要按新偏移算：伦敦 3 月 29 日进入 BST，
+// 3 月 30 日 00:30 已经过了当地午夜，不能再把「明天有雨」取走。
+func TestForecastCueExpiresAtDstMidnight(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	p := New()
+	cur := Report{
+		Place: "伦敦", Condition: "多云",
+		Fetched:          time.Date(2026, 3, 29, 0, 30, 0, 0, london), // GMT
+		Timezone:         "Europe/London",
+		UTCOffsetSeconds: 0, UTCOffsetSet: true,
+		Tomorrow: DayInfo{Date: "2026-03-30", Condition: "小雨", MinC: 8, MaxC: 12},
+	}
+	if !p.forecastCue("zh", "你所在的", "伦敦", Report{}, cur, true) {
+		t.Fatal("应投递预报理由")
+	}
+	if !cue.Pending(time.Date(2026, 3, 29, 23, 30, 0, 0, london)) {
+		t.Error("当地午夜之前应仍可取")
+	}
+	if cue.Pending(time.Date(2026, 3, 30, 0, 30, 0, 0, london)) {
+		t.Error("夏令时后的当地午夜应已过期")
+	}
+}
