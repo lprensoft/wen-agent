@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,28 @@ func TestWriteBackendRefusesWhileRunLockHeld(t *testing.T) {
 	}
 	if _, _, err := openBackendForWrite(cfg); err == nil {
 		t.Fatal("运行权还在别人手里时不该给出可写的后端")
+	}
+}
+
+// 旧版服务只写登记、不持运行权：登记核实过它在运行，但接口暂时不应答时，这里仍能
+// 取到运行锁——不能因此离线写，改动会被那个服务覆盖。
+func TestWriteBackendRefusesRunningButUnreachable(t *testing.T) {
+	base := t.TempDir()
+	cfg, err := config.Load(filepath.Join(base, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:1","started":%q}`,
+		os.Getpid(), time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(runlock.Path(base), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openBackendForWrite(cfg); err == nil {
+		t.Fatal("实例还在运行（只是没应答）时不该给出可写的后端")
+	}
+	// 只读入口退回离线读本地状态，不连那个地址。
+	if b, err := openBackend(cfg); err != nil || b == nil {
+		t.Fatalf("只读入口应当退回离线模式：%v", err)
 	}
 }
 

@@ -251,9 +251,10 @@ func (b *offlineBackend) changePassword(current, next string) error {
 // openBackend 选择模式：有实例在跑就走在线，否则离线。用于只读的入口（状态、
 // 插件清单）。
 func openBackend(cfg *config.Config) (backend, error) {
-	// 判不出身份时仍然连一次：只读入口沿用「有登记就试」的旧语义，写入口才要求核实。
+	// 只有核实过身份才读在线数据：判不出身份时连上去，拿到的可能是另一份配置目录的
+	// 状态。
 	info, state := runlock.ReadState(cfg.BaseDir)
-	if state != runlock.StateNone {
+	if state == runlock.StateRunning {
 		if c, ok := dialInfo(info); ok {
 			return &onlineBackend{c: c, addr: info.Addr}, nil
 		}
@@ -275,6 +276,9 @@ func openBackendForWrite(cfg *config.Config) (backend, func(), error) {
 		if c, ok := dialInfo(info); ok {
 			return &onlineBackend{c: c, addr: info.Addr}, func() {}, nil
 		}
+		// 登记核实过：那个进程还活着，只是接口暂时不应答（启动中、重启中、探活超时）。
+		// 旧版服务不持运行权，这里能取到锁，但离线写会被它覆盖。
+		return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
 	}
 	run, err := runlock.Lock(cfg.BaseDir)
 	if err != nil {

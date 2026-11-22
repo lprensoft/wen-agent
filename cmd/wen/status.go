@@ -38,9 +38,15 @@ func runStatus(args []string) error {
 	fmt.Print(trf("cli.status.config_dir", "配置目录  %s\n", cfg.BaseDir))
 	fmt.Print(trf("cli.status.lang", "界面语言  %s\n", langSummary(cfg)))
 
-	if info, ok := runlock.Read(cfg.BaseDir); ok && reachable(info.Addr) {
+	info, state := runlock.ReadState(cfg.BaseDir)
+	switch {
+	case state == runlock.StateRunning && reachable(info.Addr):
 		fmt.Print(trf("cli.status.running", "运行状态  运行中 · 监听 %s · PID %d · 版本 %s\n", info.Addr, info.PID, info.Version))
-	} else {
+	case state == runlock.StateRunning:
+		fmt.Print(trf("cli.status.unreachable", "运行状态  已登记（%s · PID %d）但接口没有应答\n", info.Addr, info.PID))
+	case state == runlock.StateUnknown:
+		fmt.Print(tr("cli.status.unverified", "运行状态  无法核实（登记存在，但判不出它是不是这个配置目录的实例；可能是权限不足，或实例由另一个账号运行）\n"))
+	default:
 		fmt.Print(trf("cli.status.stopped", "运行状态  未运行（配置里的监听地址为 %s:%d）\n", cfg.Server.Host, cfg.Server.Port))
 	}
 
