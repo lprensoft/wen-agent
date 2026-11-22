@@ -49,6 +49,7 @@ type Run struct {
 	dir    string
 	f      *os.File
 	unlock func() error
+	pid    int
 	once   sync.Once
 }
 
@@ -88,15 +89,27 @@ func (r *Run) Register(info Info) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(r.dir), raw, 0o644)
+	if err := os.WriteFile(Path(r.dir), raw, 0o644); err != nil {
+		return err
+	}
+	r.pid = info.PID
+	return nil
 }
 
 // Release 放开运行权。可以重复调用。
+//
+// 只删自己写下的那份登记：拒绝启动时还没有注册过，这时删文件会把仍在运行的旧实例
+// 的登记一起抹掉，下一次启动就查不到它了。同样，期间若有旧版实例把自己的登记写进
+// 来，也不能删。
 func (r *Run) Release() {
 	r.once.Do(func() {
-		// 先删登记文件、再放开运行权：反过来的话，新实例可能已经取得运行权并写下
-		// 自己的登记，这里再删就把它的删掉了。
-		_ = os.Remove(Path(r.dir))
+		// 先删登记、再放开运行权：反过来的话，新实例可能已经取得运行权并写下自己
+		// 的登记，这里再删就把它的删掉了。
+		if r.pid != 0 {
+			if info, ok := Read(r.dir); ok && info.PID == r.pid {
+				_ = os.Remove(Path(r.dir))
+			}
+		}
 		_ = r.unlock()
 		_ = r.f.Close()
 	})

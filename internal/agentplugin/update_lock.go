@@ -28,34 +28,19 @@ var (
 // 移进 work，再把新包顶上）如果正好发生在预检与遍历之间，归档会漏掉那个包，却仍然
 // 报告成功。
 //
-// 取不到锁而目录又写不进去时（从只读快照导出），按只读数据放行：更新操作同样改不动
-// 它，不存在需要互斥的并发切换。
+// 这是给**只读遍历**用的入口：更新目录里还没有锁文件时直接放行，也不去创建它。锁
+// 文件由第一次更新操作建立并长期保留，没有它就说明这个目录里从来没有暂存或应用过
+// 更新，也就不可能有正在进行的目录切换。只读快照（挂载的副本、从备份恢复的目录）
+// 因此仍能导出，且不必往数据源里写任何东西。
+//
+// 判断依据是目录里有没有锁文件，而不是「我们能不能写」：备份账号可能读得到插件包、
+// 却打不开服务账号建的 0600 锁文件，那种情况必须把错误报上去，不能当成只读目录。
 func LockUpdates(ctx context.Context, lang, baseDir string) (func(), error) {
-	unlock, err := NewStore(lang, baseDir).acquireUpdateLock(ctx)
-	if err == nil {
-		return unlock, nil
+	lockPath := filepath.Join(baseDir, StoreDirName, updateDirName, updateLockFile)
+	if _, err := os.Stat(lockPath); os.IsNotExist(err) {
+		return func() {}, nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		// 等锁超时：另一个更新操作确实在跑。
-		return nil, err
-	}
-	if dirWritable(filepath.Join(baseDir, StoreDirName, updateDirName)) {
-		return nil, err
-	}
-	return func() {}, nil
-}
-
-// dirWritable 探一下目录能不能写。只在取锁失败时调用：写不进去说明是只读快照，
-// 而不是有别人持着锁。
-func dirWritable(dir string) bool {
-	f, err := os.CreateTemp(dir, ".probe-")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	_ = f.Close()
-	_ = os.Remove(name)
-	return true
+	return NewStore(lang, baseDir).acquireUpdateLock(ctx)
 }
 
 // acquireUpdateLock 跨进程串行化「读状态—修改—写回」。opMu 只管一个 Store

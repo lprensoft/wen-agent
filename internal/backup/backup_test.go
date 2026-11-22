@@ -47,8 +47,21 @@ func baseFixture(t *testing.T) string {
 	return base
 }
 
+// writeUpdateLock 造出更新操作留下的锁文件。有它存在，导出才会去取锁。
+func writeUpdateLock(t *testing.T, base string) {
+	t.Helper()
+	path := filepath.Join(base, "bundles", ".updates", ".op.lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExportWaitsForBundleUpdateLock(t *testing.T) {
 	base := baseFixture(t)
+	writeUpdateLock(t, base)
 	unlock, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
 	if err != nil {
 		t.Fatal(err)
@@ -66,25 +79,36 @@ func TestExportWaitsForBundleUpdateLock(t *testing.T) {
 	}
 }
 
-// 只读快照上建不出锁文件（这里用一个占住 .updates 名字的文件模拟），导出仍应成功。
-func TestExportToleratesUnavailableUpdateLock(t *testing.T) {
+// 从备份恢复出来的目录带着更新来源、却没有锁文件，还可能挂载成只读。导出不该往
+// 数据源里写任何东西。
+func TestExportFromSnapshotWithoutUpdateLock(t *testing.T) {
 	base := baseFixture(t)
-	if err := os.WriteFile(filepath.Join(base, "bundles", ".updates"), []byte("not a directory"), 0o644); err != nil {
+	sources := filepath.Join(base, "bundles", ".updates", "sources.json")
+	if err := os.MkdirAll(filepath.Dir(sources), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sources, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
-		t.Fatalf("取不到更新锁时应按只读数据继续导出：%v", err)
+		t.Fatalf("没有锁文件的快照应能直接导出：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "bundles", ".updates", ".op.lock")); !os.IsNotExist(err) {
+		t.Fatalf("导出在数据源里建了锁文件：%v", err)
 	}
 }
 
 func TestExportReleasesBundleUpdateLock(t *testing.T) {
 	base := baseFixture(t)
+	writeUpdateLock(t, base)
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
 		t.Fatal(err)
 	}
-	unlock, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, err := agentplugin.LockUpdates(ctx, i18n.LangZH, base)
 	if err != nil {
 		t.Fatalf("备份没有释放更新锁：%v", err)
 	}
