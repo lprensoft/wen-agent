@@ -39,12 +39,12 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		rep, ok, lastErr := p.lastReport(loc)
 		if !ok {
 			row := plugin.StateRow{
-				Label: label,
-				Meta:  loc, // 取不到时也让人知道是哪个城市没取到
-				Value: i18n.T(q.Lang, "plugin.weather.state.pending", "尚未取得"),
+				Label:  label,
+				Value:  i18n.T(q.Lang, "plugin.weather.state.pending", "尚未取得"),
+				Detail: loc, // 取不到时也让人知道是哪个城市没取到
 			}
 			if lastErr != "" {
-				row.Detail = lastErr
+				row.Detail = loc + " · " + lastErr
 				row.Tone = plugin.StateToneWarn // 从来没取到过、还有报错，是需要人看一眼的状态
 			}
 			rows = append(rows, row)

@@ -136,7 +136,7 @@ func TestStatePendingWithError(t *testing.T) {
 		t.Fatalf("State = %+v", secs)
 	}
 	row := secs[0].Rows[0]
-	if row.Meta != "杭州" || row.Value != "尚未取得" || row.Detail != "解析地址失败" || row.Tone != plugin.StateToneWarn {
+	if row.Value != "尚未取得" || row.Detail != "杭州 · 解析地址失败" || row.Tone != plugin.StateToneWarn {
 		t.Errorf("row = %+v", row)
 	}
 }
