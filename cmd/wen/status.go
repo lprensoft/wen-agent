@@ -79,7 +79,13 @@ func runStatus(args []string) error {
 	}
 	fmt.Print(trf("cli.status.enabled", "已启用插件（%d）%s\n", len(on), wrapNames(on)))
 	fmt.Print(trf("cli.status.disabled", "已禁用插件（%d）%s\n", len(off), wrapNames(off)))
-	fmt.Print(trf("cli.status.source", "\n数据来源  %s\n", b.mode()))
+	// 数据来源只说「读的是哪儿」：运行状态已经由上面那一行交代，这里再按后端类型
+	// 报「服务未运行」会与它打架（身份没核实、或已登记但没应答时也是离线读本地）。
+	source := tr("cli.status.source_local", "本地配置文件")
+	if _, online := b.(*onlineBackend); online {
+		source = tr("cli.status.source_online", "运行中的服务")
+	}
+	fmt.Print(trf("cli.status.source", "\n数据来源  %s\n", source))
 	return nil
 }
 
