@@ -9,7 +9,7 @@ import (
 )
 
 func TestStateShowsToday(t *testing.T) {
-	now := time.Date(2026, 11, 22, 14, 0, 0, 0, time.Local)
+	now := time.Date(2026, 3, 5, 14, 0, 0, 0, time.Local)
 	p := New()
 	p.statsMu.Lock()
 	p.st = stats{Days: []dayStat{{
@@ -27,7 +27,7 @@ func TestStateShowsToday(t *testing.T) {
 		t.Fatalf("State = %+v", secs)
 	}
 	got := secs[0]
-	if got.Title != "文风" || !got.Global {
+	if got.Title != "文风" || !got.Global || got.Summary != "今日" {
 		t.Errorf("section = %+v", got)
 	}
 	if len(got.Rows) != 2 {
@@ -42,7 +42,7 @@ func TestStateShowsToday(t *testing.T) {
 }
 
 func TestStateEmpty(t *testing.T) {
-	now := time.Date(2026, 11, 22, 14, 0, 0, 0, time.Local)
+	now := time.Date(2026, 3, 5, 14, 0, 0, 0, time.Local)
 	p := New()
 	p.statsMu.Lock()
 	p.st = stats{}
@@ -55,7 +55,7 @@ func TestStateEmpty(t *testing.T) {
 }
 
 func TestStatePinnedOnlySkipsEverything(t *testing.T) {
-	now := time.Date(2026, 11, 22, 14, 0, 0, 0, time.Local)
+	now := time.Date(2026, 3, 5, 14, 0, 0, 0, time.Local)
 	p := New()
 	if secs := p.State(plugin.NewStateQuery("zh", true, now)); len(secs) != 0 {
 		t.Fatalf("PinnedOnly = %+v", secs)

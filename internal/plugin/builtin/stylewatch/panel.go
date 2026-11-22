@@ -43,10 +43,11 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		})
 	}
 	return []plugin.StateSection{{
-		Key:    "style_watch",
-		Title:  title,
-		Rows:   rows,
-		Global: true,
+		Key:     "style_watch",
+		Title:   title,
+		Summary: i18n.T(q.Lang, "plugin.style_watch.state.scope", "今日"),
+		Rows:    rows,
+		Global:  true,
 	}}
 }
 

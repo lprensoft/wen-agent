@@ -40,19 +40,25 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		if !ok {
 			row := plugin.StateRow{
 				Label: label,
+				Meta:  loc, // 取不到时也让人知道是哪个城市没取到
 				Value: i18n.T(q.Lang, "plugin.weather.state.pending", "尚未取得"),
 			}
 			if lastErr != "" {
 				row.Detail = lastErr
-				row.Tone = plugin.StateToneMuted
+				row.Tone = plugin.StateToneWarn // 从来没取到过、还有报错，是需要人看一眼的状态
 			}
 			rows = append(rows, row)
 			return
 		}
 		detail := shortPlace(rep.Place)
 		if d := rep.Today; d.known() && d.Date == now.Format("2006-01-02") {
-			detail += " · " + i18n.Tf(q.Lang, "plugin.weather.state.today",
+			today := i18n.Tf(q.Lang, "plugin.weather.state.today",
 				"今天 %s %.0f~%.0f℃", conditions.For(q.Lang, d.Condition), d.MinC, d.MaxC)
+			if detail == "" {
+				detail = today
+			} else {
+				detail += " · " + today
+			}
 		}
 		cond := rep.Condition
 		if cond == "" {
@@ -76,7 +82,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	}
 
 	if s.sameCity {
-		add(i18n.T(q.Lang, "plugin.weather.state.both", "同在"), s.personaLoc)
+		add(i18n.T(q.Lang, "plugin.weather.state.both", "同城"), s.personaLoc)
 	} else {
 		add(i18n.T(q.Lang, "plugin.weather.state.persona", "角色"), s.personaLoc)
 		add(i18n.T(q.Lang, "plugin.weather.state.user", "我"), s.userLoc)

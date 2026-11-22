@@ -31,7 +31,7 @@ func TestStateListsRecentItems(t *testing.T) {
 		t.Fatalf("State = %+v", secs)
 	}
 	got := secs[0]
-	if got.Title != "手机" || !got.Global {
+	if got.Title != "手机" || !got.Global || got.Summary != "共 2 条" {
 		t.Errorf("section = %+v", got)
 	}
 	if !got.UpdatedAt.Equal(last) {
@@ -63,6 +63,9 @@ func TestStateLimitsRowsAndReportsMore(t *testing.T) {
 	if len(secs[0].Rows) != stateMaxRows || secs[0].More != 2 {
 		t.Errorf("rows=%d more=%d，期望 %d 条与 2 条省略", len(secs[0].Rows), secs[0].More, stateMaxRows)
 	}
+	if secs[0].Summary != "共 12 条" {
+		t.Errorf("summary = %q", secs[0].Summary)
+	}
 }
 
 func TestStateListsFailedFeeds(t *testing.T) {
@@ -77,6 +80,9 @@ func TestStateListsFailedFeeds(t *testing.T) {
 	row := secs[0].Rows[0]
 	if row.Label != "未能取到" || row.Value != "bad.example" || row.Detail != "超时" || row.Tone != plugin.StateToneWarn {
 		t.Errorf("row = %+v", row)
+	}
+	if secs[0].Summary != "1 个源取不到" {
+		t.Errorf("summary = %q", secs[0].Summary)
 	}
 }
 
