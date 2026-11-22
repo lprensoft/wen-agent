@@ -120,7 +120,7 @@ func (r *Run) Release() {
 // 谁的——原路径在改名之后空出来，谁在这时写进去都不归我们删。若拿到的不是自己的
 // 登记，原样放回。
 func dropRegistration(path string, pid int) {
-	trash := path + ".releasing"
+	trash := releasingPath(path)
 	if err := os.Rename(path, trash); err != nil {
 		return
 	}
@@ -133,8 +133,19 @@ func dropRegistration(path string, pid int) {
 
 // Read 读取登记文件。第二个返回值为 false 表示没有登记（文件缺失或内容损坏）。
 // 文件存在不代表进程还活着，调用方需要自行探活。
+//
+// 上一次交接如果被打断（wen.lock 已经改名成 .releasing，还没来得及判断或放回），
+// 登记就停在那里；这时也要读它，否则仍在运行的旧实例会从所有调用方眼前消失。
 func Read(dir string) (Info, bool) {
-	return readInfo(Path(dir))
+	if info, ok := readInfo(Path(dir)); ok {
+		return info, true
+	}
+	return readInfo(releasingPath(Path(dir)))
+}
+
+// releasingPath 是交接中被临时改名的登记文件。
+func releasingPath(path string) string {
+	return path + ".releasing"
 }
 
 func readInfo(path string) (Info, bool) {

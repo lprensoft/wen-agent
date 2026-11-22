@@ -57,6 +57,25 @@ func TestReleaseKeepsRegistrationItNeverWrote(t *testing.T) {
 	}
 }
 
+// 交接被打断（改名之后、判断之前进程退出）：登记停在 .releasing 里，读取端仍要
+// 找得到仍在运行的那个实例。
+func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(releasingPath(Path(dir)), []byte(`{"pid":123,"addr":"127.0.0.1:8090"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, ok := Read(dir); !ok || info.PID != 123 {
+		t.Fatalf("被打断的交接没有留下可发现的登记：%+v %v", info, ok)
+	}
+	// 新的登记写回来之后，以它为准。
+	if err := os.WriteFile(Path(dir), []byte(`{"pid":456,"addr":"127.0.0.1:8091"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, ok := Read(dir); !ok || info.PID != 456 {
+		t.Fatalf("有正式登记时不该回落到 .releasing：%+v %v", info, ok)
+	}
+}
+
 // 新版退出时，旧版实例正好完成登记：不管它落在改名之前还是之后，那份登记都必须
 // 活下来。
 func TestReleaseDoesNotSwallowConcurrentRegistration(t *testing.T) {

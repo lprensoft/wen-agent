@@ -85,9 +85,9 @@ type fileEntry struct {
 // 所以正常情况下两遍就结束。
 const exportAttempts = 3
 
-// afterArchiveWritten 在读完之后、复查更新锁之前调用，只给测试用来模拟「第一次
-// 写操作正好在读取期间开始」。
-var afterArchiveWritten = func() {}
+// afterCollect 在枚举完文件、开始读内容之前调用，只给测试用来模拟「第一次写操作
+// 正好在读取期间开始」。
+var afterCollect = func() {}
 
 // Export 把 baseDir 里程序维护的数据写成 out。
 func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
@@ -132,17 +132,30 @@ func exportArchive(baseDir, absOut string, opt Options) (Manifest, Stats, bool, 
 	}
 	unlock, locked, err := agentplugin.LockUpdates(ctx, lang, baseDir)
 	if err != nil {
-		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "插件包目录正被更新操作占用，备份没有开始：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "无法取得插件包目录的更新锁，备份没有开始：%v", err))
 	}
 	defer unlock()
 
+	// 没取锁时，任何读取失败都要先看一眼是不是写操作开始了：它会把文件挪走或删掉，
+	// 我们读到的失败正是它造成的。那种情况下重来时持锁，比把竞争错误报给用户好。
+	retryIfWriting := func(cause error) (Manifest, Stats, bool, error) {
+		if !locked {
+			if active, err := agentplugin.UpdatesActive(baseDir); err == nil && active {
+				return Manifest{}, Stats{}, true, nil
+			}
+		}
+		return Manifest{}, Stats{}, false, cause
+	}
+
 	entries, stats, err := collect(baseDir, opt, absOut)
 	if err != nil {
-		return Manifest{}, Stats{}, false, err
+		return retryIfWriting(err)
 	}
 	if len(entries) == 0 {
-		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容"))
+		return retryIfWriting(fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容")))
 	}
+
+	afterCollect()
 
 	manifest := Manifest{
 		Format:     FormatVersion,
@@ -171,7 +184,7 @@ func exportArchive(baseDir, absOut string, opt Options) (Manifest, Stats, bool, 
 	}()
 
 	if err := writeArchive(tmp, entries, manifest, lang); err != nil {
-		return Manifest{}, Stats{}, false, err
+		return retryIfWriting(err)
 	}
 	if err := tmp.Sync(); err != nil {
 		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
@@ -185,9 +198,14 @@ func exportArchive(baseDir, absOut string, opt Options) (Manifest, Stats, bool, 
 
 	// 没有取锁时，锁文件可能出现——第一次写操作刚在这份目录上开始，读到的包可能
 	// 只复制了一半。丢掉这一份，重来时就会持锁。
-	afterArchiveWritten()
-	if !locked && agentplugin.UpdatesActive(baseDir) {
-		return Manifest{}, Stats{}, true, nil
+	if !locked {
+		active, err := agentplugin.UpdatesActive(baseDir)
+		if err != nil {
+			return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_state", "无法确认插件包目录是否正在更新：%v", err))
+		}
+		if active {
+			return Manifest{}, Stats{}, true, nil
+		}
 	}
 
 	if opt.Overwrite {
@@ -311,10 +329,20 @@ func checkBundleUpdateRecovery(baseDir, lang string) error {
 	return nil
 }
 
-func skippedBundleUpdatePath(rel string) bool {
+// skippedBundleTransientPath 判断要跳过的插件包目录内容：更新用的暂存、回滚、
+// pending 与操作锁（只迁移来源，不恢复半完成更新），以及 ZIP 安装的解包临时目录——
+// 那是还没装好的东西，恢复到另一台机器上只是一堆散文件。
+func skippedBundleTransientPath(rel string) bool {
 	rel = filepath.ToSlash(rel)
-	return rel == "bundles/.updates/work" || strings.HasPrefix(rel, "bundles/.updates/work/") ||
-		rel == "bundles/.updates/.op.lock" || strings.HasPrefix(rel, "bundles/.updates/pending-")
+	if rel == "bundles/.updates/work" || strings.HasPrefix(rel, "bundles/.updates/work/") ||
+		rel == "bundles/.updates/.op.lock" || strings.HasPrefix(rel, "bundles/.updates/pending-") {
+		return true
+	}
+	if !strings.HasPrefix(rel, "bundles/") {
+		return false
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(rel, "bundles/"), "/")
+	return strings.HasPrefix(name, ".unpack-")
 }
 
 func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry, stats *Stats, lang, excludeAbs string) error {
@@ -343,7 +371,7 @@ func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry,
 		}
 		// 更新来源要随备份迁走；尚未提交的暂存、回滚与 pending 不带过去，
 		// 否则恢复到另一台机器后可能把半完成更新当成可应用状态。
-		if skippedBundleUpdatePath(fullRel) {
+		if skippedBundleTransientPath(fullRel) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}

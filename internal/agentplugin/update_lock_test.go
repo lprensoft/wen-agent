@@ -47,6 +47,21 @@ func TestUpdateLockBlocksAndIgnoresAbandonedFile(t *testing.T) {
 	release()
 }
 
+// 查不了与查到「没有」是两回事：查询失败必须报出去，不能被当成没有锁。
+func TestUpdatesActiveReportsQueryFailure(t *testing.T) {
+	original := statUpdateLock
+	statUpdateLock = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+	defer func() { statUpdateLock = original }()
+
+	base := t.TempDir()
+	if active, err := UpdatesActive(base); err == nil || active {
+		t.Fatalf("查询失败被当成了「没有锁」：active=%v err=%v", active, err)
+	}
+	if _, _, err := LockUpdates(context.Background(), "", base); err == nil {
+		t.Fatal("查询失败时不该放行无锁读取")
+	}
+}
+
 // 只读快照里的锁文件必须能按只读方式打开：Windows 上带 O_CREATE 打开会要求写
 // 权限，于是备份只能等到上下文超时。
 func TestLockUpdatesOpensReadOnlyLockFile(t *testing.T) {

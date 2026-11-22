@@ -19,6 +19,7 @@ const (
 var (
 	errUpdateLockBusy         = errors.New("插件包更新文件锁正被占用")
 	openUpdateLockFile        = os.OpenFile
+	statUpdateLock            = os.Stat
 	updateLockOpenBusyTimeout = 5 * time.Minute
 )
 
@@ -36,7 +37,11 @@ var (
 // 判断依据是目录里有没有锁文件，而不是「我们能不能写」：备份账号可能读得到插件包、
 // 却打不开服务账号建的 0600 锁文件，那种情况必须把错误报上去，不能当成只读目录。
 func LockUpdates(ctx context.Context, lang, baseDir string) (release func(), locked bool, err error) {
-	if !UpdatesActive(baseDir) {
+	active, err := UpdatesActive(baseDir)
+	if err != nil {
+		return nil, false, err
+	}
+	if !active {
 		return func() {}, false, nil
 	}
 	unlock, err := NewStore(lang, baseDir).acquireExistingUpdateLock(ctx)
@@ -48,9 +53,19 @@ func LockUpdates(ctx context.Context, lang, baseDir string) (release func(), loc
 
 // UpdatesActive 报告更新目录里有没有锁文件。锁文件由第一次更新操作建立并长期保留，
 // 它一出现就说明这份目录可能正在被写入。
-func UpdatesActive(baseDir string) bool {
-	_, err := os.Stat(filepath.Join(baseDir, StoreDirName, updateDirName, updateLockFile))
-	return err == nil
+//
+// 查不了（权限、路径坏掉）与查到了「没有」是两回事：前者必须报错，否则调用方会把
+// 「看不到」当成「不存在」，于是在一份可能正在被写的目录上无锁读取。
+func UpdatesActive(baseDir string) (bool, error) {
+	_, err := statUpdateLock(filepath.Join(baseDir, StoreDirName, updateDirName, updateLockFile))
+	switch {
+	case err == nil:
+		return true, nil
+	case os.IsNotExist(err):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // acquireUpdateLock 跨进程串行化「读状态—修改—写回」。opMu 只管一个 Store

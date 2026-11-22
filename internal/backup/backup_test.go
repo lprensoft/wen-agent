@@ -124,15 +124,15 @@ func TestExportReleasesBundleUpdateLock(t *testing.T) {
 // 读的过程中第一次写操作开始了（锁文件出现）：这一份归档不可信，应当丢掉重来。
 func TestExportRetriesWhenWriteStartsMidRead(t *testing.T) {
 	base := baseFixture(t)
-	original := afterArchiveWritten
+	original := afterCollect
 	attempts := 0
-	afterArchiveWritten = func() {
+	afterCollect = func() {
 		attempts++
 		if attempts == 1 {
 			writeUpdateLock(t, base)
 		}
 	}
-	defer func() { afterArchiveWritten = original }()
+	defer func() { afterCollect = original }()
 
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
@@ -143,6 +143,49 @@ func TestExportRetriesWhenWriteStartsMidRead(t *testing.T) {
 	}
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("重试后没有归档：%v", err)
+	}
+}
+
+// 读取过程中写操作把文件拿走、读失败：也要复查锁，确认是竞争造成的就持锁重来，
+// 而不是把这个错误报给用户。
+func TestExportRetriesWhenWriteBreaksRead(t *testing.T) {
+	base := baseFixture(t)
+	original := afterCollect
+	attempts := 0
+	afterCollect = func() {
+		attempts++
+		if attempts == 1 {
+			writeUpdateLock(t, base)
+			if err := os.RemoveAll(filepath.Join(base, "bundles", "demo")); err != nil {
+				t.Errorf("删除测试包失败：%v", err)
+			}
+		}
+	}
+	defer func() { afterCollect = original }()
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("竞争造成的读取失败没有重试：%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("读取次数 = %d，想要 2", attempts)
+	}
+}
+
+// ZIP 安装的解包目录还不是插件包，备份不该把它带过去。
+func TestExportSkipsInstallTempDir(t *testing.T) {
+	base := baseFixture(t)
+	unpack := filepath.Join(base, "bundles", ".unpack-12345")
+	write(t, filepath.Join(unpack, "pkg", "plugin.json"), `{"name":"half"}`, 0o644)
+	write(t, filepath.Join(unpack, "pkg", "skills", "a.md"), "x", 0o644)
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	manifest, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FileCount != 7 {
+		t.Fatalf("解包目录混进了归档：文件数 %d，想要 7", manifest.FileCount)
 	}
 }
 
