@@ -214,3 +214,17 @@ func TestLocalDateUsesIanaZoneAcrossDst(t *testing.T) {
 		t.Errorf("localDate = %q，期望按 BST 得到 2026-03-30", got)
 	}
 }
+
+// 跨日回拨会让当地日期先到达目标日、退回前一天、再到达一次；
+// 这里要取第一次到达的时刻，而不是二分碰到的第二个午夜。
+func TestFirstInstantOfDateHandlesCrossMidnightFallback(t *testing.T) {
+	goose, err := time.LoadLocation("America/Goose_Bay")
+	if err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	got, ok := firstInstantOfDate("2010-11-07", goose)
+	want := time.Date(2010, 11, 7, 3, 0, 0, 0, time.UTC)
+	if !ok || !got.Equal(want) {
+		t.Fatalf("firstInstantOfDate = %v (%v), %v，期望 %v", got, got.UTC(), ok, want)
+	}
+}
