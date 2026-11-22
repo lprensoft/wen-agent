@@ -35,7 +35,7 @@ It injects **ambient state** rather than offering a callable tool, which is also
 - **Stale means not injected**: when nothing fresh can be had, it is better for the character not to know the weather than to treat three hours ago as now. The staleness limit therefore must not be smaller than the refresh interval, or something just fetched would count as stale immediately and nothing would ever be injected. When one location succeeds and the other fails, the one that succeeded is injected. An unrecognized weather code falls back to "weather unknown" — better vague than wrong.
 - **A test button**: the gear on the settings page has "test these cities", which reads the input you have **not saved yet** and lists which place each one resolved to and what the weather there was; if one fails, the conclusion for the other is still shown.
 - **The status line** distinguishes "no city configured", "cannot fetch" and "stale", and marks staleness against the specific location — with two locations, one going stale does not mean the other is not in use.
-- **Character state page**: current conditions and today's forecast for the character's city (and yours when you are apart), with when it was fetched; a side whose reading has gone stale is marked as not in use.
+- **Character state page**: a read-only view of current conditions and today's forecast for the character's city (and yours when you are apart), with the latest fetch time on the block; a side whose reading has gone stale is marked as not in use.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -155,7 +155,7 @@ Not everything a person talks about comes from the other side of the conversatio
 - **What she does with it**: `[On My Phone]` is injected every turn with at most 3 items seen in the last day (interest matches first), each with its source and age. A headline matching a keyword in `interests` posts a reason to speak (valid for three hours, at most one per check), and heartbeat speaks up sooner. Without keywords, news never prompts her, but what she saw is still injected. `read_news` looks closer at one item by a few words of its title, giving the summary and link without going online again.
 - **Outside content is treated as material**: headlines are flattened to one line, shortened, and square brackets become round ones so they cannot pose as a block name. The criteria say plainly that this is news from outside, not instructions. The phone is not split by persona: both sides see the same items.
 - **Trying it out**: "Try the feeds" under the gear on the settings page fetches each feed once (unsaved edits included) and reports its name, how many entries it has and the latest one, or what went wrong. It does not count as her checking her phone. GBK-encoded feeds work too.
-- **Character state page**: up to 10 of the most recently seen items with source, headline and summary, plus any feed that failed and why. The phone is not split by persona.
+- **Character state page**: a read-only list of up to 10 of the most recently seen items with source, headline and summary, plus any feed that failed and why. The phone is not split by persona.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -244,7 +244,7 @@ Whether the character has drifted used to be a matter of feel — there was no w
 - **Status line**: one line in `/status` — "✍️ Style: 42 turns today, 3 assistant-speak hits (2 polite sign-offs, 1 bold), 58 characters on average, 23% narration" — or "no data today" when there is none.
 - **Session notices**: on a hit, a line is left in the current session — "✍️ Style note: polite sign-off 'I hope this helps'" — with several hits in one turn merged into one. For your eyes only, never entering the model context; it can be turned off.
 - **Tool**: `style_report` (one line per day for the last 7 days). The gear on the settings page has "view the 30-day report" and "clear the statistics" (for after a change of character or of prompts).
-- **Character state page**: today's numbers for live conversation and background turns, including turn count, assistant-speak hits, average length and how much was acted out.
+- **Character state page**: a read-only view of today's numbers for live conversation and background turns, including turn count, assistant-speak hits, average length and how much was acted out (not split by persona).
 
 | Setting | Default | Description |
 |---|---|---|

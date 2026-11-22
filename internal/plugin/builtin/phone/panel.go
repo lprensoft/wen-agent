@@ -40,6 +40,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	p.dataMu.RUnlock()
 
 	sort.SliceStable(items, func(i, j int) bool { return items[i].when().After(items[j].when()) })
+	total := len(items)
 	more := 0
 	if len(items) > stateMaxRows {
 		more = len(items) - stateMaxRows
@@ -48,7 +49,13 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 
 	rows := make([]plugin.StateRow, 0, len(items)+len(errs))
 	for _, it := range items {
-		row := plugin.StateRow{Value: it.Title, Meta: it.Source}
+		// 标题与源名也来自外部，可能很长或带换行：同样折成一行并截断，
+		// 免得一个坏源把整块顶穿字节上限。
+		title := clipText(it.Title, 200)
+		if title == "" {
+			title = clipText(it.Source, 80)
+		}
+		row := plugin.StateRow{Value: title, Meta: clipText(it.Source, 80)}
 		if s := clipText(it.Summary, 160); s != "" {
 			row.Detail = s
 		}
@@ -65,15 +72,31 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	for _, u := range urls {
 		rows = append(rows, plugin.StateRow{
 			Label:  i18n.T(q.Lang, "plugin.phone.state.failed", "未能取到"),
-			Value:  hostOf(u),
-			Detail: errs[u],
+			Value:  clipText(hostOf(u), 80),
+			Detail: clipText(errs[u], 200),
 			Tone:   plugin.StateToneWarn,
 		})
+	}
+
+	// 超过 8 行的块在前端默认收起；摘要给条数与取不到的源数，收起时也知道
+	// 这里有东西可看，而不是只剩一个「手机」。
+	summary := ""
+	if total > 0 {
+		summary = i18n.Tf(q.Lang, "plugin.phone.state.summary", "共 %d 条", total)
+	}
+	if len(errs) > 0 {
+		failed := i18n.Tf(q.Lang, "plugin.phone.state.summary_failed", "%d 个源取不到", len(errs))
+		if summary == "" {
+			summary = failed
+		} else {
+			summary += " · " + failed
+		}
 	}
 
 	sec := plugin.StateSection{
 		Key:       "phone",
 		Title:     title,
+		Summary:   summary,
 		Rows:      rows,
 		More:      more,
 		Global:    true,
