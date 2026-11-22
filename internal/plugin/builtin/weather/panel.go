@@ -51,7 +51,7 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			return
 		}
 		detail := shortPlace(rep.Place)
-		if d := rep.Today; d.known() && d.Date == now.Format("2006-01-02") {
+		if d := rep.Today; d.known() && d.Date == rep.localDate(now) {
 			today := i18n.Tf(q.Lang, "plugin.weather.state.today",
 				"今天 %s %.0f~%.0f℃", conditions.For(q.Lang, d.Condition), d.MinC, d.MaxC)
 			if detail == "" {

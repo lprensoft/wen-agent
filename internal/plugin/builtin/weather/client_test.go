@@ -59,7 +59,7 @@ const geoOK = `{"results":[{"name":"杭州","latitude":30.2936,"longitude":120.1
 const fcOK = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3}}`
 
 // fcOKDaily 带昨天/今天/明天三天的概要（past_days=1 + forecast_days=2 的形状）。
-const fcOKDaily = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3},` +
+const fcOKDaily = `{"utc_offset_seconds":-18000,"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3},` +
 	`"daily":{"time":["2026-08-19","2026-08-20","2026-08-21"],"weather_code":[3,61,63],` +
 	`"temperature_2m_max":[24.2,20.1,17.8],"temperature_2m_min":[16.5,15.3,12.1]}}`
 
@@ -77,6 +77,9 @@ func TestFetchCurrentParsesDays(t *testing.T) {
 	}
 	if rep.Tomorrow.Date != "2026-08-21" || rep.Tomorrow.Condition != "中雨" || rep.Tomorrow.MinC != 12.1 {
 		t.Errorf("明天 = %+v", rep.Tomorrow)
+	}
+	if !rep.UTCOffsetSet || rep.UTCOffsetSeconds != -18000 {
+		t.Errorf("时区偏移 = (%v, %d)，期望记录 -18000", rep.UTCOffsetSet, rep.UTCOffsetSeconds)
 	}
 }
 
@@ -179,5 +182,18 @@ func TestConditionOfUnknownCode(t *testing.T) {
 	// 未收录的代码不编造说法：注入的内容宁可含糊，也不能是错的
 	if got := conditionOf(4242); got != "天气不明" {
 		t.Errorf("未知代码 = %q，应当含糊回落", got)
+	}
+}
+
+// 偏移为 0（UTC）也是有效信息，不能和「旧缓存没存过偏移」混在一起。
+func TestFetchCurrentKeepsZeroOffset(t *testing.T) {
+	body := `{"utc_offset_seconds":0,` + strings.TrimPrefix(fcOK, "{")
+	stubServer(t, geoOK, body)
+	rep, err := fetchCurrent(context.Background(), "", http.DefaultClient, Place{Name: "伦敦"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.UTCOffsetSet || rep.UTCOffsetSeconds != 0 {
+		t.Errorf("偏移 = (%v, %d)，期望记录 0 且标记为已知", rep.UTCOffsetSet, rep.UTCOffsetSeconds)
 	}
 }

@@ -47,11 +47,26 @@ type Report struct {
 	// Fetched 是取到这份数据的本地时刻。过期判定用它而不是接口给的观测时间：
 	// 我们要防的是「取不到新数据还在拿旧的当现在用」，那是取数这一侧的事。
 	Fetched time.Time
+	// UTCOffsetSeconds 是观测地点当时相对 UTC 的偏移（秒）。daily 的日期按地点
+	// 当地时区给，判断「今天」必须按同一时区，不能用服务器时区。
+	UTCOffsetSeconds int `json:"UTCOffsetSeconds,omitempty"`
+	// UTCOffsetSet 区分「偏移为 0（UTC）」与「旧缓存没有存过偏移」。
+	// 旧缓存退回查询侧的日期，与修复前一致。
+	UTCOffsetSet bool `json:"UTCOffsetSet,omitempty"`
 	// Yesterday / Today / Tomorrow 是昨天、今天与明天的概要，与现况同一次请求带回
 	// （零额外调用）。旧缓存没有这几项，零值表示未知、不注入，下次刷新自动补上。
 	Yesterday DayInfo `json:"Yesterday,omitzero"`
 	Today     DayInfo `json:"Today,omitzero"`
 	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
+}
+
+// localDate 返回这份观测所在城市的当地日期。
+// 没有偏移的旧缓存退回查询侧；新缓存按取数时记下的偏移换算。
+func (r Report) localDate(now time.Time) string {
+	if r.UTCOffsetSet {
+		now = now.In(time.FixedZone("", r.UTCOffsetSeconds))
+	}
+	return now.Format("2006-01-02")
 }
 
 // DayInfo 是一天的天气概要。Date 是当地日期（如 2026-08-21）：「明天」会在午夜
@@ -134,7 +149,8 @@ func fetchCurrent(ctx context.Context, lang string, client *http.Client, p Place
 	q.Set("timezone", "auto")
 
 	var body struct {
-		Current struct {
+		UtcOffsetSeconds *int `json:"utc_offset_seconds"`
+		Current          struct {
 			Temperature float64 `json:"temperature_2m"`
 			Humidity    float64 `json:"relative_humidity_2m"`
 			Apparent    float64 `json:"apparent_temperature"`
@@ -160,6 +176,10 @@ func fetchCurrent(ctx context.Context, lang string, client *http.Client, p Place
 		Humidity:  int(c.Humidity + 0.5),
 		WindKmh:   c.Wind,
 		Fetched:   time.Now(),
+	}
+	if body.UtcOffsetSeconds != nil {
+		rep.UTCOffsetSeconds = *body.UtcOffsetSeconds
+		rep.UTCOffsetSet = true
 	}
 	// 形状不符（字段缺失、长度不齐）就整体放弃这两项：宁缺勿错
 	d := body.Daily
