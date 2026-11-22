@@ -43,10 +43,11 @@ func runConfig(args []string) error {
 		return fmt.Errorf(tr("cli.err.load_config", "加载配置失败: %w"), err)
 	}
 	adoptLang(cfg)
-	b, err := openBackendForWrite(cfg)
+	b, release, err := openBackendForWrite(cfg)
 	if err != nil {
 		return err
 	}
+	defer release()
 
 	fmt.Print(trf("cli.config.head", "配置文件 %s\n模式 %s\n\n", path, b.mode()))
 

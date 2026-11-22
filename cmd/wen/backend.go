@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -250,31 +251,42 @@ func (b *offlineBackend) changePassword(current, next string) error {
 // openBackend 选择模式：有实例在跑就走在线，否则离线。用于只读的入口（状态、
 // 插件清单）。
 func openBackend(cfg *config.Config) (backend, error) {
-	return openBackendMode(cfg, false)
-}
-
-// openBackendForWrite 与 openBackend 相同，但登记无法核实时拒绝继续：那时代码只能
-// 退回离线写状态文件，而仍在运行的服务下次全量重写会把改动抹掉，也可能读到半份状态。
-func openBackendForWrite(cfg *config.Config) (backend, error) {
-	return openBackendMode(cfg, true)
-}
-
-func openBackendMode(cfg *config.Config, writing bool) (backend, error) {
+	// 判不出身份时仍然连一次：只读入口沿用「有登记就试」的旧语义，写入口才要求核实。
 	info, state := runlock.ReadState(cfg.BaseDir)
-	switch state {
-	case runlock.StateUnknown:
-		if writing {
-			return nil, fmt.Errorf("%s", tr("cli.err.instance_unknown", "配置目录里的运行实例登记无法核实（可能是权限不足，或实例由另一个账号运行）。为避免改动被运行中的服务覆盖，本次没有写入；请用运行服务的账号执行，或先用 wen status 确认服务状态。"))
-		}
-	case runlock.StateRunning:
+	if state != runlock.StateNone {
 		if c, ok := dialInfo(info); ok {
 			return &onlineBackend{c: c, addr: info.Addr}, nil
 		}
 	}
-	if writing && runlock.InUse(cfg.BaseDir) {
-		// 运行权还在别人手里：服务在跑，只是 HTTP 还没起来或暂时没应答。这时退回
-		// 离线写文件，改动会被服务内存里的旧状态覆盖。
-		return nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
-	}
 	return newOfflineBackend(cfg)
+}
+
+// openBackendForWrite 返回可写的后端，以及一个调用方必须在退出前调用的收尾函数。
+//
+// 离线时收尾函数放开运行权：整段编辑期间锁都握在本进程手里，服务不会在用户填表的
+// 中途启动、再把改动盖回去。运行权取不到就说明服务在跑（它在开始提供 HTTP 之前就
+// 已经登记并持锁），或者根本查不了锁文件——两种都不该离线写。
+func openBackendForWrite(cfg *config.Config) (backend, func(), error) {
+	info, state := runlock.ReadState(cfg.BaseDir)
+	if state == runlock.StateUnknown {
+		return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_unknown", "配置目录里的运行实例登记无法核实（可能是权限不足，或实例由另一个账号运行）。为避免改动被运行中的服务覆盖，本次没有写入；请用运行服务的账号执行，或先用 wen status 确认服务状态。"))
+	}
+	if state == runlock.StateRunning {
+		if c, ok := dialInfo(info); ok {
+			return &onlineBackend{c: c, addr: info.Addr}, func() {}, nil
+		}
+	}
+	run, err := runlock.Lock(cfg.BaseDir)
+	if err != nil {
+		if errors.Is(err, runlock.ErrBusy) {
+			return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
+		}
+		return nil, nil, fmt.Errorf("%s", trf("cli.err.instance_check_failed", "无法确认配置目录的运行权（%v）。为避免改动被覆盖，本次没有写入。", err))
+	}
+	b, err := newOfflineBackend(cfg)
+	if err != nil {
+		run.Release()
+		return nil, nil, err
+	}
+	return b, run.Release, nil
 }

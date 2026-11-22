@@ -40,25 +40,6 @@ func TestLockIsExclusivePerDirectory(t *testing.T) {
 	defer again.Release()
 }
 
-// 运行权还在别人手里时，配置工具不能当成「没人管这份目录」去离线写。
-func TestInUseFollowsRunLock(t *testing.T) {
-	dir := t.TempDir()
-	if InUse(dir) {
-		t.Fatal("没有实例时不该报占用")
-	}
-	inst, err := Lock(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !InUse(dir) {
-		t.Fatal("运行权被持有时应当报占用")
-	}
-	inst.Release()
-	if InUse(dir) {
-		t.Fatal("释放后不该再报占用")
-	}
-}
-
 // 拒绝启动时还没有 Register 过，Release 不能把仍在运行的旧实例的登记抹掉：否则
 // 连着启动两次就查不到它了。
 func TestReleaseKeepsRegistrationItNeverWrote(t *testing.T) {

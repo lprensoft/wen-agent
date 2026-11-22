@@ -114,21 +114,6 @@ func (r *Run) Release() {
 	})
 }
 
-// InUse 报告是否有进程正持着这个配置目录的运行权：服务已经起来，或正在启动。
-//
-// 服务在开始提供 HTTP 之前就写好了登记，那时探活会失败。配置工具不能因此认为
-// 「没人管这份目录」而退回离线写入——那份改动会被服务内存里的旧状态覆盖。
-//
-// 它只做一次非阻塞尝试，取到就立刻放开。
-func InUse(dir string) bool {
-	run, err := Lock(dir)
-	if err != nil {
-		return errors.Is(err, ErrBusy)
-	}
-	run.Release()
-	return false
-}
-
 // dropRegistration 只删属于 pid 的那一份登记。
 //
 // 「读内容、再删文件」不是原子的：旧版实例不受运行权约束，它可能正好在这两步之间
@@ -201,13 +186,18 @@ func ReadState(dir string) (Info, State) {
 // 留下，端口随后可能被另一份配置目录的实例接管，那时探活能成功，连上去改的就是别人
 // 的配置。所以进程不在、或它的创建时间晚于登记（PID 被复用），都算陈旧。
 //
-// 核对不了身份时不否决——旧版登记可能没有 started，容器里 PIDs 也可能看不见，那时
-// 只能靠调用方的探活。
+// 核对不了身份（旧版登记没有 started、拿不到创建时间）就报 StateUnknown：读的调用
+// 方照旧能拿到地址（Read 仍返回 true），但写的入口会停下——复用的 PID 可能正把地址
+// 指给另一份配置目录的实例。
 func primaryState(info Info) (Info, State) {
 	if processAlive(info.PID) == processGone {
 		return Info{}, StateNone
 	}
-	if after, known := creationAfter(info); known && after {
+	after, known := creationAfter(info)
+	if !known {
+		return info, StateUnknown
+	}
+	if after {
 		return Info{}, StateNone
 	}
 	return info, StateRunning

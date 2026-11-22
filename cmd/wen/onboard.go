@@ -59,10 +59,11 @@ func runOnboard(args []string) error {
 
 	// 与 wen config 同一条判定：身份无法核实、或运行权还在别人手里时停下，别把
 	// 用户填的密钥发给别人的实例，也别写一份会被运行中服务覆盖的 models.json。
-	b, err := openBackendForWrite(cfg)
+	b, release, err := openBackendForWrite(cfg)
 	if err != nil {
 		return err
 	}
+	defer release()
 
 	err = onboard(b, cfg, path, false)
 	if errors.Is(err, errOnboardAborted) {
@@ -117,7 +118,14 @@ func ensureModel(cfg *config.Config, path string, portFixed bool) error {
 				"容器这类没有终端的部署，也可以在 config.yaml 里写好 model 与 providers 两段。", reason))
 	}
 	fmt.Print(trf("cli.onboard.why", "还没有可用的模型（%v），先花一分钟做个首次配置。\n\n", reason))
-	return onboard(&offlineBackend{cfg: cfg, models: store}, cfg, path, portFixed)
+	// 自动进入的向导同样是写：与 wen onboard 一条判定，身份未核实或运行权取不到
+	// 都不写，别让它在服务启动途中把 models.json 改掉。
+	b, release, err := openBackendForWrite(cfg)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return onboard(b, cfg, path, portFixed)
 }
 
 // currentProvider 取当前选中的提供商（含来源标记）。

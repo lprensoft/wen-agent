@@ -255,7 +255,7 @@ func anotherInstanceRunning(baseDir string) error {
 	if prev, state := runlock.ReadState(baseDir); state != runlock.StateNone && prev.Addr != "" {
 		return fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
 	}
-	return fmt.Errorf("%s", tr("log.serve.another_instance_unknown", "同一配置目录下已有实例在运行，本次没有启动；待更新包也未改动"))
+	return fmt.Errorf("%s", tr("log.serve.another_instance_unknown", "同一配置目录的运行权已被占用（可能是正在运行的实例，或一个还开着的 wen config），本次没有启动；待更新包也未改动"))
 }
 
 // applyPendingForServe 只允许持有运行权的一方应用外源更新。调用方必须先取得该配置
