@@ -100,8 +100,33 @@ func runServe(args []string) {
 	}
 	adoptLang(cfg)
 
-	// 外源更新在运行期只暂存；只有真正启动服务时才切换，config/eval 不会动包目录。
-	for _, problem := range agentplugin.NewStore(uiLang, cfg.BaseDir).ApplyPending() {
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
+	if err != nil {
+		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
+	}
+	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
+	exposed := !server.IsLoopbackHost(cfg.Server.Host)
+	if exposed && !auth.HasPassword() {
+		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
+		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
+		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。", cfg.Server.Port, cfg.Server.Port)
+		cfg.Server.Host = "127.0.0.1"
+		exposed = false
+	}
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+
+	// 先取得监听端口，再确认没有存活实例；第二实例即使随后退出，也不能提前
+	// 替换第一个进程正在读取的插件目录。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
+	}
+	problems, err := applyPendingForServe(cfg.BaseDir)
+	if err != nil {
+		_ = ln.Close()
+		log.Fatal(err)
+	}
+	for _, problem := range problems {
 		logf("log.serve.bundle_update_warning", "警告: 外源插件包更新：%s", problem)
 	}
 
@@ -132,31 +157,12 @@ func runServe(args []string) {
 	}
 	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
-	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
-	if err != nil {
-		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
-	}
-
-	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
-	// 拒绝启动在新装的远程机器上是个死局——口令要在界面里设，而界面起不来。
-	// 降级同样一次都没暴露过，且 SSH 隧道进来就能把口令补上。
-	exposed := !server.IsLoopbackHost(cfg.Server.Host)
-	if exposed && !auth.HasPassword() {
-		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
-		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
-		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
-			cfg.Server.Port, cfg.Server.Port)
-		cfg.Server.Host = "127.0.0.1"
-		exposed = false
-	}
-
 	srv := server.New(ag, store, plugins, models, server.Options{
 		Auth:          auth,
 		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
 		Exposed:       exposed,
 		Lang:          uiLang,
 	})
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	if _, err := os.Stat(path); err == nil {
 		logf("log.serve.config_file", "配置文件: %s", path)
@@ -175,13 +181,6 @@ func runServe(args []string) {
 	}
 	logf("log.serve.access", "访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
 
-	// 先把端口拿到手再宣布「已启动」：此前监听放在 goroutine 里，端口被占用时
-	// 日志先说启动成功、紧接着进程退出，读的人得自己把两行拼起来。
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		plugins.StopAll()
-		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
-	}
 	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
@@ -235,6 +234,15 @@ func runServe(args []string) {
 		releaseLock()
 		relaunch(exePath)
 	}
+}
+
+// applyPendingForServe 只允许没有存活实例的一方应用外源更新。调用方必须先
+// 绑定监听端口；这个函数再把「另一实例仍在运行」挡在目录切换之前。
+func applyPendingForServe(baseDir string) ([]string, error) {
+	if prev, ok := runlock.Read(baseDir); ok && reachable(prev.Addr) {
+		return nil, fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
+	}
+	return agentplugin.NewStore(uiLang, baseDir).ApplyPending(), nil
 }
 
 // relaunch 用（已经被换成新版的）可执行文件接替当前进程。

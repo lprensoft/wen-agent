@@ -185,7 +185,7 @@ func (s *Store) StageUpdate(ctx context.Context, name, token string) (*PendingUp
 	}
 	pending := &PendingUpdate{
 		Name: name, FromVersion: current.Manifest.Version, FromDigest: fromDigest,
-		Version: candidate.Version, ToDigest: toDigest, SHA256: candidate.SHA256,
+		Version: candidate.Version, ToDigest: toDigest, SHA256: candidate.SHA256, Token: candidate.Token,
 	}
 	if err := s.writePending(pending); err != nil {
 		_ = updateRemoveAll(newPath)
@@ -196,11 +196,12 @@ func (s *Store) StageUpdate(ctx context.Context, name, token string) (*PendingUp
 
 // CancelUpdate 取消尚未开始切换的暂存更新，正式包与工具缓存不变。
 func (s *Store) CancelUpdate(name string) error {
-	return s.CancelUpdateContext(context.Background(), name)
+	return s.CancelUpdateContext(context.Background(), name, "")
 }
 
 // CancelUpdateContext 与 CancelUpdate 相同，但允许调用方取消文件锁等待。
-func (s *Store) CancelUpdateContext(ctx context.Context, name string) error {
+// expectedToken 非空时，只允许取消界面上实际看到的那一份 pending。
+func (s *Store) CancelUpdateContext(ctx context.Context, name, expectedToken string) error {
 	if err := checkName(s.lang, name); err != nil {
 		return err
 	}
@@ -217,6 +218,9 @@ func (s *Store) CancelUpdateContext(ctx context.Context, name string) error {
 	}
 	if pending == nil {
 		return nil
+	}
+	if expectedToken != "" && expectedToken != pending.actionToken() {
+		return fmt.Errorf("%s", i18n.T(s.lang, "plugin.bundle.update.err.cancel_stale", "待更新记录已经变化，请刷新后再取消"))
 	}
 	if _, err := os.Stat(s.rollbackPath(name)); err == nil {
 		return fmt.Errorf("%s", i18n.T(s.lang, "plugin.bundle.update.err.cancel_started", "更新切换已经开始，不能直接取消；请重启服务完成恢复"))
@@ -264,6 +268,13 @@ func (s *Store) pendingNames() ([]string, error) {
 // ApplyPending 在服务真正启动、插件尚未注册前应用全部暂存更新。
 // 返回的问题用于启动日志；普通坏候选不阻止其它包与主程序启动。
 func (s *Store) ApplyPending() []string {
+	// 没有待更新包时不碰锁文件；即使目录权限有问题，正常启动也不该被维护
+	// 状态拖住。拿到锁后会再枚举一次，覆盖预检之后新暂存的记录。
+	if names, err := s.pendingNames(); err != nil {
+		return []string{err.Error()}
+	} else if len(names) == 0 {
+		return nil
+	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	unlock, err := s.acquireUpdateLock(context.Background())
@@ -398,10 +409,14 @@ func (s *Store) applyOne(p *PendingUpdate) error {
 }
 
 func (s *Store) finishApply(p *PendingUpdate) error {
+	// 缓存删除失败就保留 pending：LoadTools 会据此拒绝 legacy 缓存，
+	// 下次启动再重试清理，而不是让新版 MCP 拿到旧工具表。
+	if err := s.DropTools(p.Name); err != nil {
+		return err
+	}
 	if err := updateRemoveAll(s.rollbackPath(p.Name)); err != nil {
 		return err
 	}
-	s.DropTools(p.Name)
 	if err := os.Remove(s.pendingPath(p.Name)); err != nil && !os.IsNotExist(err) {
 		return err
 	}

@@ -2,10 +2,13 @@ package agentplugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"wen/internal/atomicfile"
@@ -44,6 +47,17 @@ type PendingUpdate struct {
 	Version     string `json:"version"`
 	ToDigest    string `json:"to_digest"`
 	SHA256      string `json:"sha256"`
+	Token       string `json:"token,omitempty"`
+}
+
+// actionToken 标识界面上看到的待更新记录。早期 pending 没有 token 字段时，
+// 用全部身份字段补算一个，旧窗口同样不能拿空 token 取消新记录。
+func (p *PendingUpdate) actionToken() string {
+	if p.Token != "" {
+		return p.Token
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{p.Name, p.FromVersion, p.FromDigest, p.Version, p.ToDigest, p.SHA256}, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Store) updatesDir() string {
@@ -161,10 +175,6 @@ func (s *Store) Track(name, manifestURL, publicKey string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.currentForUpdate(name); err != nil {
-		return err
-	}
-
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	unlock, err := s.acquireUpdateLock(context.Background())
@@ -172,6 +182,10 @@ func (s *Store) Track(name, manifestURL, publicKey string) error {
 		return err
 	}
 	defer unlock()
+	// 安装状态必须在跨进程锁内核对：等待期间另一个进程可能已经完成卸载。
+	if _, err := s.currentForUpdate(name); err != nil {
+		return err
+	}
 	sources, err := s.readSources()
 	if err != nil {
 		return err

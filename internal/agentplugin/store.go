@@ -115,9 +115,13 @@ func (s *Store) Remove(name string) error {
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
+	// 缓存清理只能在包名校验与正式目录删除都成功之后进行，且仍在同一把锁内。
+	var errs []error
+	if err := s.DropTools(name); err != nil {
+		errs = append(errs, err)
+	}
 	// 卸载同时清掉更新来源与尚未应用的暂存；PLUGIN_DATA 仍在包外，照旧保留。
 	// 各项都尽量清理完再汇总错误，尤其不能让一份坏 sources.json 把 pending 留下来。
-	var errs []error
 	if err := os.Remove(s.pendingPath(name)); err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err)
 	}

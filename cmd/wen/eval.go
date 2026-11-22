@@ -187,10 +187,12 @@ func runEval(args []string) error {
 }
 
 // evalSuppressed 圈出评测时不启动的插件：消息通道会连到真实平台，程序维护会在
-// 评测中途去够外网、甚至把脚下的二进制换掉。后台任务不压：它们改为手动时间线，
-// 由 run_hours / tick 显式驱动，不自起循环。
-// 按分组判断而不是点名：以后再加一条 IM 或一种后台任务，这里不用改。
+// 评测中途去够外网、甚至把脚下的二进制换掉；bundles 会把虚拟检查时间写进真实来源。
+// 其它后台任务不压：它们改为手动时间线，由 run_hours / tick 显式驱动，不自起循环。
 func evalSuppressed(p plugin.Plugin) bool {
+	if p.Name() == "bundles" {
+		return true // 更新检查会写真实 sources.json，并把虚拟时间带出评测
+	}
 	switch plugin.CategoryOf(p) {
 	case plugin.CategoryChannel, plugin.CategoryProgram:
 		return true

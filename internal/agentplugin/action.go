@@ -54,6 +54,7 @@ func (p *Plugin) Actions() []plugin.ActionDef {
 				Label:       i18n.T(p.langOf(), "plugin.external.action.cancel_update.label", "取消待更新"),
 				Description: i18n.T(p.langOf(), "plugin.external.action.cancel_update.desc", "删除尚未应用的暂存更新，继续保留当前版本。"),
 				Detail:      pending.FromVersion + " → " + pending.Version,
+				Token:       pending.actionToken(),
 			})
 		case src != nil:
 			out = append(out, plugin.ActionDef{
@@ -125,15 +126,15 @@ func (p *Plugin) StartAction(ctx context.Context, key string) error {
 	case actionStageUpdate:
 		go p.runStage(key, seq, lang, token)
 	case actionCancelUpdate:
-		go p.runCancel(key, seq, lang)
+		go p.runCancel(key, seq, lang, token)
 	}
 	return nil
 }
 
-func (p *Plugin) runCancel(key string, seq uint64, lang string) {
+func (p *Plugin) runCancel(key string, seq uint64, lang, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), updateStageTimeout)
 	defer cancel()
-	err := p.store.CancelUpdateContext(ctx, p.bundle.Manifest.Name)
+	err := p.store.CancelUpdateContext(ctx, p.bundle.Manifest.Name, token)
 	st := plugin.ActionState{Status: plugin.ActionDone,
 		Message: i18n.T(lang, "plugin.external.action.cancelled", "待更新已取消，当前包保持不变。")}
 	if err != nil {

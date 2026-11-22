@@ -17,6 +17,24 @@ import (
 	"wen/internal/agentplugin"
 )
 
+func TestUninstallRejectsTraversalWithoutDeletingCache(t *testing.T) {
+	base := t.TempDir()
+	victim := filepath.Join(base, "bundles", "victim.json")
+	if err := os.MkdirAll(filepath.Dir(victim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := agentplugin.NewStore("", base)
+	if err := uninstallBundle(store, "../victim", base); err == nil {
+		t.Fatal("含路径分隔符的包名不该通过")
+	}
+	if body, err := os.ReadFile(victim); err != nil || string(body) != "keep" {
+		t.Fatalf("校验失败误删了缓存目录之外的文件：%q, %v", body, err)
+	}
+}
+
 func TestPluginUpdateCommands(t *testing.T) {
 	base := t.TempDir()
 	store := agentplugin.NewStore("", base)

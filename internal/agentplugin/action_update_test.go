@@ -60,7 +60,10 @@ func TestSkillOnlyBundleUpdateActions(t *testing.T) {
 	if len(actions) != 1 || actions[0].Key != actionCancelUpdate {
 		t.Fatalf("待更新时该只显示取消：%+v", actions)
 	}
-	if err := p.StartAction(context.Background(), actionCancelUpdate); err != nil {
+	if actions[0].Token == "" {
+		t.Fatal("取消按钮没有绑定 pending token")
+	}
+	if err := p.StartAction(plugin.WithActionToken(context.Background(), actions[0].Token), actionCancelUpdate); err != nil {
 		t.Fatal(err)
 	}
 	if st := waitExternalAction(t, p, actionCancelUpdate); st.Status != plugin.ActionDone {

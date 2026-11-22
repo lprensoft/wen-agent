@@ -241,7 +241,6 @@ func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Conf
 }
 
 func uninstallBundle(store *agentplugin.Store, name, baseDir string) error {
-	defer store.DropTools(name)
 	if err := store.Remove(name); err != nil {
 		return err
 	}

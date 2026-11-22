@@ -169,7 +169,9 @@ func TestToolCacheRoundTrip(t *testing.T) {
 	if list, problems := store.List(); len(list) != 0 || len(problems) != 0 {
 		t.Fatalf("缓存目录被当成插件包了: %d %v", len(list), problems)
 	}
-	store.DropTools("demo")
+	if err := store.DropTools("demo"); err != nil {
+		t.Fatal(err)
+	}
 	if got, _ := store.LoadTools("demo", "1.0.0"); len(got) != 0 {
 		t.Error("卸载之后缓存还在")
 	}

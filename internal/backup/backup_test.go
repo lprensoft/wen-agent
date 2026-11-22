@@ -128,6 +128,25 @@ func TestExportBundleUpdateSourcesWithoutPending(t *testing.T) {
 	}
 }
 
+func TestExportRefusesInterruptedBundleSwap(t *testing.T) {
+	base := baseFixture(t)
+	work := filepath.Join(base, "bundles", ".updates", "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(base, "bundles", "demo"), filepath.Join(work, "demo.old")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(base, "bundles", ".updates", "pending-demo.json"), `{"name":"demo"}`, 0o600)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", SessionDir: filepath.Join(base, "sessions")}); err == nil {
+		t.Fatal("切换中断、旧包只在 work 时不该生成缺包备份")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("失败的备份不该留下归档：%v", err)
+	}
+}
+
 func TestExportRefusesExistingOutput(t *testing.T) {
 	base := baseFixture(t)
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")

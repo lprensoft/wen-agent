@@ -87,6 +87,33 @@ func TestConcurrentTrackAcrossStoresDoesNotLoseSources(t *testing.T) {
 	}
 }
 
+func TestTrackRechecksInstalledStateInsideLock(t *testing.T) {
+	base := t.TempDir()
+	store := NewStore("", base)
+	installUpdatableBundle(t, store, "1.0.0")
+	release, err := store.acquireUpdateLock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	done := make(chan error, 1)
+	go func() {
+		done <- store.Track("pdf-tools", "https://example.com/update.json", base64.StdEncoding.EncodeToString(pub))
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := os.RemoveAll(store.Path("pdf-tools")); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	release()
+	if err := <-done; err == nil {
+		t.Fatal("等待锁期间被卸载的包不该绑定成功")
+	}
+	if src, _ := store.Source("pdf-tools"); src != nil {
+		t.Fatal("卸载后仍写入了更新来源")
+	}
+}
+
 func TestSourcesRejectsNullDocument(t *testing.T) {
 	base := t.TempDir()
 	store := NewStore("", base)

@@ -89,9 +89,17 @@ func (s *Store) LoadTools(bundle, version string) ([]ToolInfo, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("工具清单缓存已损坏：%w", err)
 	}
-	// 没有版本的旧缓存来自更新机制引入之前，仍属于当前已安装包，先兼容读取。
-	// 一旦包更新，启动应用 pending 时会先删掉旧缓存，因此它不会误供新版本。
-	if c.Version != "" && c.Version != version {
+	// 没有版本的旧缓存来自更新机制引入之前，只有「没有同版本待应用更新」时
+	// 才能兼容读取。pending 没清掉就说明更新可能已切换，绝不能把旧工具交给新版。
+	if c.Version == "" {
+		pending, err := s.Pending(bundle)
+		if err != nil {
+			return nil, err
+		}
+		if pending != nil && pending.Version == version {
+			return nil, nil
+		}
+	} else if c.Version != version {
 		return nil, nil
 	}
 	return c.Tools, nil
@@ -117,9 +125,17 @@ func (s *Store) SaveTools(bundle, version string, tools []ToolInfo) error {
 	return atomicfile.WriteFile(path, data, 0o644)
 }
 
-// DropTools 删掉某个插件包的缓存，卸载时用。
-func (s *Store) DropTools(bundle string) {
-	if path := s.cachePath(bundle); path != "" {
-		_ = os.Remove(path)
+var removeToolCache = os.Remove
+
+// DropTools 删掉某个插件包的缓存。删除失败必须显式返回：调用方要保留
+// pending 或其它证据，避免新版插件静默沿用旧版工具清单。
+func (s *Store) DropTools(bundle string) error {
+	path := s.cachePath(bundle)
+	if path == "" {
+		return nil
 	}
+	if err := removeToolCache(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

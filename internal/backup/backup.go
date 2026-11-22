@@ -155,6 +155,9 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats, error) {
 	lang := opt.Lang
 	var stats Stats
+	if err := checkBundleUpdateRecovery(baseDir, lang); err != nil {
+		return nil, stats, err
+	}
 	seen := map[string]bool{}
 	var entries []fileEntry
 
@@ -224,6 +227,39 @@ func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats
 	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
 	stats.Files = len(entries)
 	return entries, stats, nil
+}
+
+// checkBundleUpdateRecovery 拒绝在目录切换尚未完成时导出。正常暂存（正式旧包
+// 仍在、没有回滚目录）可以备份；一旦旧包只存在于 work，或新旧目录状态未定，
+// 静默跳过 work 就会生成缺包归档。
+func checkBundleUpdateRecovery(baseDir, lang string) error {
+	updates := filepath.Join(baseDir, "bundles", ".updates")
+	entries, err := os.ReadDir(updates)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "pending-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		bundle := strings.TrimSuffix(strings.TrimPrefix(name, "pending-"), ".json")
+		_, formalErr := os.Stat(filepath.Join(baseDir, "bundles", bundle))
+		_, rollbackErr := os.Stat(filepath.Join(updates, "work", bundle+".old"))
+		if os.IsNotExist(formalErr) || rollbackErr == nil {
+			return fmt.Errorf(i18n.Tf(lang, "backup.err.bundle_update_interrupted", "外源插件包 %s 的更新切换尚未完成，请先启动服务完成恢复，再导出备份"), bundle)
+		}
+		if formalErr != nil {
+			return formalErr
+		}
+		if rollbackErr != nil && !os.IsNotExist(rollbackErr) {
+			return rollbackErr
+		}
+	}
+	return nil
 }
 
 func skippedBundleUpdatePath(rel string) bool {

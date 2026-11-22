@@ -31,7 +31,7 @@ It includes:
 It does not include:
 
 - `wen.lock` (the running-instance record);
-- pending, staging and rollback directories and operation locks for external bundle updates (sources migrate, half-finished updates and process locks do not);
+- pending, staging and rollback directories and operation locks for external bundle updates (sources migrate, half-finished updates and process locks do not). If a swap has started and the live bundle is missing or a rollback directory exists, export refuses to run; start the service to finish recovery first rather than producing an incomplete archive;
 - symbolic links and special files;
 - a session directory outside the configuration directory (`session.dir` pointing elsewhere prints a note);
 - project memories outside the configuration directory: when the `memory` plugin uses `scope=project` and the working directory is elsewhere, it prints a note and skips them; when the working directory is inside the configuration directory, the per-domain `memories-<tag>` libraries are included as well.

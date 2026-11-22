@@ -183,6 +183,30 @@ func TestCancelUpdateKeepsCurrentBundle(t *testing.T) {
 	}
 }
 
+func TestCancelRejectsTokenFromOlderPending(t *testing.T) {
+	store := NewStore("", t.TempDir())
+	a := &PendingUpdate{Name: "demo", FromVersion: "1.0.0", Version: "1.1.0", Token: "A"}
+	if err := store.writePending(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CancelUpdate("demo"); err != nil {
+		t.Fatal(err)
+	}
+	b := &PendingUpdate{Name: "demo", FromVersion: "1.0.0", Version: "1.2.0", Token: "B"}
+	if err := store.writePending(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CancelUpdateContext(context.Background(), "demo", a.actionToken()); err == nil {
+		t.Fatal("旧窗口的 token 不该取消后来暂存的版本")
+	}
+	if pending, _ := store.Pending("demo"); pending == nil || pending.Version != "1.2.0" {
+		t.Fatalf("后来的 pending 被误删：%+v", pending)
+	}
+	if err := store.CancelUpdateContext(context.Background(), "demo", b.actionToken()); err != nil {
+		t.Fatalf("当前 token 取消失败：%v", err)
+	}
+}
+
 func TestApplyRefusesCurrentChangedAfterStaging(t *testing.T) {
 	f := newStageFixture(t)
 	if _, err := f.store.StageUpdate(context.Background(), "pdf-tools", f.candidate.Token); err != nil {
@@ -288,6 +312,38 @@ func TestCheckRejectsBrokenCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestApplyCacheDeleteFailureNeverRegistersLegacyTools(t *testing.T) {
+	f := newStageFixture(t)
+	if _, err := f.store.StageUpdate(context.Background(), "pdf-tools", f.candidate.Token); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"bundle":"pdf-tools","tools":[{"local":"legacy_tool"}]}`)
+	if err := os.WriteFile(f.store.cachePath("pdf-tools"), legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := removeToolCache
+	removeToolCache = func(string) error { return fmt.Errorf("injected cache delete failure") }
+	problems := f.store.ApplyPending()
+	removeToolCache = original
+	if len(problems) != 1 {
+		t.Fatalf("缓存删除失败没有报出来：%v", problems)
+	}
+	installed, err := Load("", f.store.Path("pdf-tools"))
+	if err != nil || installed.Manifest.Version != "1.3.0" {
+		t.Fatalf("这个用例需要先让新版目录就位：%+v, %v", installed, err)
+	}
+	if pending, _ := f.store.Pending("pdf-tools"); pending == nil {
+		t.Fatal("缓存删除失败后 pending 不该被清掉")
+	}
+	p := NewPlugin("", installed, f.store)
+	if len(p.Tools()) != 0 {
+		t.Fatal("新版插件沿用了旧版 MCP 工具")
+	}
+	if problems := f.store.ApplyPending(); len(problems) != 0 {
+		t.Fatalf("恢复删除后重试失败：%v", problems)
+	}
+}
+
 func TestVersionedToolCache(t *testing.T) {
 	store := NewStore("", t.TempDir())
 	if err := store.SaveTools("demo", "1.0.0", []ToolInfo{{Local: "one"}}); err != nil {
@@ -338,5 +394,8 @@ func TestUninstallRemovesSourceAndPending(t *testing.T) {
 	}
 	if _, err := os.Stat(f.store.stagedPath("pdf-tools")); !os.IsNotExist(err) {
 		t.Fatal("卸载后暂存目录还在")
+	}
+	if _, err := os.Stat(f.store.cachePath("pdf-tools")); !os.IsNotExist(err) {
+		t.Fatal("卸载后工具缓存还在")
 	}
 }

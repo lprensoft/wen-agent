@@ -201,6 +201,28 @@ func TestInstallBadBundleLeavesNothing(t *testing.T) {
 	}
 }
 
+func TestDescendRecognizesForeignFormatsAtRoot(t *testing.T) {
+	for _, f := range formats[1:] {
+		t.Run(f.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(f.Manifest)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manifest := []byte(`{"name":"demo","version":"1.0.0"}`)
+			if err := os.WriteFile(filepath.Join(dir, f.Manifest), manifest, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := descend("", dir)
+			if err != nil || got != dir {
+				t.Fatalf("根层 %s 清单没有被识别：%q, %v", f.Name, got, err)
+			}
+		})
+	}
+}
+
 func TestInstallFromZip(t *testing.T) {
 	base := t.TempDir()
 	zipPath := filepath.Join(base, "pkg.zip")
