@@ -9,6 +9,58 @@ updates are not recorded here; they live in the commit history. Each release wri
 all Chinese sections first, then all English sections; earlier releases are Chinese
 only and are not being backfilled.
 
+## [v1.5.0] - 2026-11-22
+
+### 新增
+
+- 角色状态页新增天气、手机与文风三块状态
+- 联网搜索新增 Brave 与 SearXNG，Tavily 仍为默认
+- 外源插件包可绑定签名更新来源，自动验签并在重启时应用
+
+### 修复
+
+- 天气状态页、对话与降雨提醒都按观测城市的当地日期和钟点判断
+- 手机状态页按刷到时间展示消息
+- 清空订阅源后仍保留已刷到的消息
+- 重复的订阅地址只抓取一次
+- 失败的订阅源按配置里的原始序号标出
+- 外源插件包的更新在并发、中断和重启时不会破坏安装目录
+- 备份不会导出只复制了一半的插件目录
+- 同一配置目录只允许一个实例运行，换端口启动的第二个实例不再改动同一份状态
+- 配置向导与 `wen config` 在无法确认服务身份时拒绝写入
+- `wen status` 把运行状态与数据来源分开显示
+- 英文状态输出不再把两行粘在一起
+- 切换联网搜索服务商后不再复用上一家的缓存
+- SearXNG 上游搜索引擎全挂时按搜索失败处理
+- Brave 的发布日期按原始字段解析，不再把时间串挂进标题
+- SearXNG 的反向代理密码错误会明确提示 401
+
+---
+
+### Added
+
+- The Character state page adds weather, phone and writing-style blocks
+- Web search adds Brave and SearXNG; Tavily remains the default
+- External plugin packages can bind a signed update source, verify it automatically and apply updates on restart
+
+### Fixed
+
+- Weather in the state page, conversations and rain reminders follows the observed city's local date and hour
+- The phone block orders messages by when they were seen
+- Already-seen messages stay available after all feeds are removed
+- Duplicate feed addresses are requested only once
+- A failing feed is labelled with its original position in the configuration
+- External plugin updates no longer damage the install directory when runs overlap, are interrupted or restart
+- Backups no longer capture a half-copied plugin directory while an update is in progress
+- Only one instance can run against a configuration directory; a second one on another port cannot change the same state
+- The setup wizard and `wen config` refuse to write when the service identity cannot be confirmed
+- `wen status` shows the running state and the data source separately
+- English status output no longer joins two lines together
+- Switching search providers no longer reuses the previous provider's cache
+- An all-engines-down reply from SearXNG is treated as a search failure
+- Brave publish dates are parsed from the raw field instead of pasting the timestamp into the headline
+- SearXNG reports a proxy password error as 401
+
 ## [v1.4.0] - 2026-11-18
 
 ### 新增
