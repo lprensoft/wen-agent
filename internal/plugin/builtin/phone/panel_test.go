@@ -202,3 +202,23 @@ func TestStateDistinguishesSameHostErrors(t *testing.T) {
 		t.Errorf("summary = %q", secs[0].Summary)
 	}
 }
+
+// 去重不能丢掉用户配置里的原始序号：A、A、B 中 B 失败时，页面应显示 #3。
+func TestStateKeepsOriginalFeedOrdinal(t *testing.T) {
+	now := time.Date(2026, 11, 22, 14, 0, 0, 0, time.Local)
+	p := stateTestPlugin(t, now)
+	feeds, positions, err := parseFeedsWithPositions("", "https://news.example/a\nhttps://news.example/a\nhttps://news.example/b\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.feeds, p.feedPos = feeds, positions
+	p.st.Errors = map[string]string{"https://news.example/b": "503"}
+
+	secs := p.State(plugin.NewStateQuery("zh", false, now))
+	if len(secs) != 1 || len(secs[0].Rows) != 1 {
+		t.Fatalf("State = %+v", secs)
+	}
+	if row := secs[0].Rows[0]; row.Meta != "#3" || row.Value != "news.example" {
+		t.Errorf("row = %+v，期望原始序号 #3", row)
+	}
+}

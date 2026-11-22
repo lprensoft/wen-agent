@@ -277,3 +277,55 @@ func TestRenderDaysUsesLocationDate(t *testing.T) {
 		t.Errorf("renderDays = %q", got)
 	}
 }
+
+// 「明天有雨」的到期时刻必须按预报城市的午夜算，否则当地已经过了午夜，
+// 心跳还能把一句指错日子的话取走。
+func TestForecastCueExpiresAtLocationMidnight(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	p := New()
+
+	// 让报告时区确定不同于服务器时区，避免测试结果依赖跑测试的机器。
+	_, serverOffset := time.Date(2026, 3, 5, 0, 0, 0, 0, time.Local).Zone()
+	reportOffset := serverOffset - 3600
+	loc := time.FixedZone("report", reportOffset)
+	cur := Report{
+		Place:            "台北",
+		Condition:        "多云",
+		Fetched:          time.Date(2026, 3, 4, 20, 0, 0, 0, loc),
+		UTCOffsetSeconds: reportOffset,
+		UTCOffsetSet:     true,
+		Tomorrow:         DayInfo{Date: "2026-03-05", Condition: "小雨", MinC: 15, MaxC: 20},
+	}
+	if !p.forecastCue("zh", "你所在的", "台北", Report{}, cur, true) {
+		t.Fatal("应投递预报理由")
+	}
+	midnight := time.Date(2026, 3, 5, 0, 0, 0, 0, loc)
+	if !cue.Pending(midnight.Add(-30 * time.Minute)) {
+		t.Error("当地午夜之前应仍可取")
+	}
+	if cue.Pending(midnight.Add(30 * time.Minute)) {
+		t.Error("过了当地午夜应过期")
+	}
+}
+
+// 晚间窗口也按角色所在地的钟点：服务器已经入夜、角色当地仍是上午时，
+// 不该为明天的雨开口。
+func TestForecastCueWindowUsesPersonaClock(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	p := New()
+	p.personaLoc, p.refresh, p.tomorrowFrom, p.sameCity = "台北", 30*time.Minute, 18, true
+
+	serverEvening := time.Date(2026, 3, 4, 20, 0, 0, 0, time.FixedZone("server", -5*3600))
+	cur := Report{
+		Place: "台北", Condition: "多云", Fetched: serverEvening,
+		UTCOffsetSeconds: 8 * 3600, UTCOffsetSet: true,
+		Tomorrow: DayInfo{Date: "2026-03-06", Condition: "中雨", MinC: 17, MaxC: 22},
+	}
+	setObs(p, "台北", cur)
+
+	if p.maybePostCue("台北", Report{}, false, cur) || cue.Pending(serverEvening) {
+		t.Fatal("角色当地上午不该为明天的雨开口")
+	}
+}

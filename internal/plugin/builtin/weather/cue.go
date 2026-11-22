@@ -35,7 +35,13 @@ func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) 
 			cue.Post(cue.Cue{Source: "weather", Key: loc, Text: text, Expire: cur.Fetched.Add(cueTTL)})
 		}
 	}
-	return p.forecastCue(s.lang, prefix, loc, prev, cur, s.inTomorrowWindow(cur.Fetched))
+	// 「看明天」的时段按角色所在地的钟点算，与 TurnPrompt 同一个口径；
+	// 角色侧没配地点时退回用户侧。
+	windowNow := p.localNowFor(s.personaLoc, cur.Fetched)
+	if s.personaLoc == "" {
+		windowNow = p.localNowFor(s.userLoc, cur.Fetched)
+	}
+	return p.forecastCue(s.lang, prefix, loc, prev, cur, s.inTomorrowWindow(windowNow))
 }
 
 // forecastCue 盯着明天的预报：预报里出现降水时投一条理由——「明天有雨，记得带伞」
@@ -43,7 +49,7 @@ func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) 
 //
 // 只在「看明天」的时段里投（白天的人不会为明天的雨开口），且每一天只投一次
 // （Cued 随观测延续，刷新不重投）：理由可能已被心跳说出口，重投会让它反复念叨。
-// 理由的有效期到今天为止——过了午夜「明天有雨」这句话就指错了日子。
+// 理由的有效期到预报城市的午夜为止——过了那一刻「明天有雨」这句话就指错了日子。
 // 返回本次是否投递了，调用方据此把 Cued 记到缓存上。
 func (p *Plugin) forecastCue(lang, prefix, loc string, prev, cur Report, inWindow bool) bool {
 	tm := cur.Tomorrow
@@ -57,7 +63,8 @@ func (p *Plugin) forecastCue(lang, prefix, loc string, prev, cur Report, inWindo
 		if tm.Cued || !inWindow {
 			return false // 已投过，或还没到看明天的时候
 		}
-		expire, err := time.ParseInLocation("2006-01-02", tm.Date, time.Local)
+		// 到期时刻必须是预报城市的午夜：过了那一刻，「明天」就指错日子了。
+		expire, err := time.ParseInLocation("2006-01-02", tm.Date, cur.localZone())
 		if err != nil {
 			return false
 		}

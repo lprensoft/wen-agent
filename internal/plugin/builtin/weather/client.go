@@ -60,8 +60,16 @@ type Report struct {
 	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
 }
 
+// localZone 返回观测地点的时区；没有偏移的旧缓存退回服务器本地时区。
+func (r Report) localZone() *time.Location {
+	if r.UTCOffsetSet {
+		return time.FixedZone("", r.UTCOffsetSeconds)
+	}
+	return time.Local
+}
+
 // localNow 把查询时刻换算到观测地点时区。
-// 没有偏移的旧缓存退回查询侧；新缓存按取数时记下的偏移换算。
+// 没有偏移时原样返回，保留调用方传入的时区（与修复前一致）。
 func (r Report) localNow(now time.Time) time.Time {
 	if r.UTCOffsetSet {
 		return now.In(time.FixedZone("", r.UTCOffsetSeconds))
