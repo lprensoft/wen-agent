@@ -127,3 +127,23 @@ func TestCorruptStateIgnored(t *testing.T) {
 		t.Error("损坏的缓存不该产出观测")
 	}
 }
+
+// 时区偏移要跟着观测一起落盘：重启后判断「今天」不能退回服务器时区。
+func TestObservationKeepsOffsetAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	p := withObs(t, "纽约", time.Now().Add(-time.Minute))
+	p.dataMu.Lock()
+	rep := p.obs["纽约"].cur
+	rep.UTCOffsetSeconds = -5 * 3600
+	rep.UTCOffsetSet = true
+	p.obs["纽约"].cur = rep
+	p.dataMu.Unlock()
+	p.save(dir)
+
+	p2 := New()
+	p2.loadInto(dir, []string{"纽约"})
+	rep, ok := p2.fresh("纽约", time.Hour, time.Now())
+	if !ok || !rep.UTCOffsetSet || rep.UTCOffsetSeconds != -5*3600 {
+		t.Fatalf("重启后偏移 = (%v, %d)，ok=%v", rep.UTCOffsetSet, rep.UTCOffsetSeconds, ok)
+	}
+}

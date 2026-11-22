@@ -140,3 +140,31 @@ func TestStatePendingWithError(t *testing.T) {
 		t.Errorf("row = %+v", row)
 	}
 }
+
+// daily 的日期按地点当地时区给：服务器已经是 3 月 5 日、纽约还是 3 月 4 日时，
+// 不能把刚取回的纽约「今天」预报过滤掉。
+func TestStateUsesLocationDateForToday(t *testing.T) {
+	now := time.Date(2026, 3, 5, 2, 0, 0, 0, time.FixedZone("server", 8*3600))
+	p := withObs(t, "纽约", now.Add(-5*time.Minute))
+	p.lang = "zh"
+	p.personaLoc = "纽约"
+	p.sameCity = true
+	p.stale = time.Hour
+
+	p.dataMu.Lock()
+	rep := p.obs["纽约"].cur
+	rep.Place = "纽约 · 美国"
+	rep.UTCOffsetSeconds = -5 * 3600
+	rep.UTCOffsetSet = true
+	rep.Today = DayInfo{Date: "2026-03-04", Condition: condCloudy, MinC: 1, MaxC: 8}
+	p.obs["纽约"].cur = rep
+	p.dataMu.Unlock()
+
+	secs := p.State(plugin.NewStateQuery("zh", false, now))
+	if len(secs) != 1 || len(secs[0].Rows) != 1 {
+		t.Fatalf("State = %+v", secs)
+	}
+	if detail := secs[0].Rows[0].Detail; !strings.Contains(detail, "今天 多云 1~8℃") {
+		t.Errorf("detail = %q，期望按纽约当地日期带上今日概要", detail)
+	}
+}

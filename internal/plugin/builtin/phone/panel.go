@@ -2,6 +2,7 @@ package phone
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"wen/internal/i18n"
@@ -20,15 +21,8 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	if q.PinnedOnly {
 		return nil
 	}
+	s := p.snapshot()
 	title := i18n.T(q.Lang, "plugin.phone.state.title", "手机")
-	if len(p.snapshot().feeds) == 0 {
-		return []plugin.StateSection{{
-			Key:    "phone",
-			Title:  title,
-			Empty:  i18n.T(q.Lang, "plugin.phone.state.no_feeds", "还没有配置订阅源。"),
-			Global: true,
-		}}
-	}
 
 	p.dataMu.RLock()
 	items := append([]Item(nil), p.st.Items...)
@@ -39,7 +33,9 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	}
 	p.dataMu.RUnlock()
 
-	sort.SliceStable(items, func(i, j int) bool { return items[i].when().After(items[j].when()) })
+	// 按刷到的时刻排，而不是文章的发布时间：页面问的是「最近刷到了什么」。
+	// Seen 在同一批刷新里相同，稳定排序会保留缓存里「新条目在前」的顺序。
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Seen.After(items[j].Seen) })
 	total := len(items)
 	more := 0
 	if len(items) > stateMaxRows {
@@ -56,24 +52,27 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			title = clipText(it.Source, 80)
 		}
 		row := plugin.StateRow{Value: title, Meta: clipText(it.Source, 80)}
-		if s := clipText(it.Summary, 160); s != "" {
-			row.Detail = s
+		if detail := clipText(it.Summary, 160); detail != "" {
+			row.Detail = detail
 		}
 		rows = append(rows, row)
 	}
 
 	// 取不到的源单独列出来：否则状态页看起来只是「最近没刷到什么」，
-	// 而实际原因是某个源坏了。
-	urls := make([]string, 0, len(errs))
-	for u := range errs {
-		urls = append(urls, u)
-	}
-	sort.Strings(urls)
-	for _, u := range urls {
+	// 而实际原因是某个源坏了。只认当前配置里的地址——换源后磁盘上还留着
+	// 旧源的错误，不能在页面和摘要里继续算数。
+	failed := 0
+	for i, feed := range s.feeds {
+		msg, ok := errs[feed]
+		if !ok {
+			continue
+		}
+		failed++
 		rows = append(rows, plugin.StateRow{
+			Meta:   "#" + strconv.Itoa(i+1), // 同主机的几个源靠序号区分
 			Label:  i18n.T(q.Lang, "plugin.phone.state.failed", "未能取到"),
-			Value:  clipText(hostOf(u), 80),
-			Detail: clipText(errs[u], 200),
+			Value:  clipText(hostOf(feed), 80),
+			Detail: clipText(msg, 200),
 			Tone:   plugin.StateToneWarn,
 		})
 	}
@@ -84,12 +83,12 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 	if total > 0 {
 		summary = i18n.Tf(q.Lang, "plugin.phone.state.summary", "共 %d 条", total)
 	}
-	if len(errs) > 0 {
-		failed := i18n.Tf(q.Lang, "plugin.phone.state.summary_failed", "%d 个源取不到", len(errs))
+	if failed > 0 {
+		text := i18n.Tf(q.Lang, "plugin.phone.state.summary_failed", "%d 个源取不到", failed)
 		if summary == "" {
-			summary = failed
+			summary = text
 		} else {
-			summary += " · " + failed
+			summary += " · " + text
 		}
 	}
 
@@ -103,7 +102,13 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 		UpdatedAt: last,
 	}
 	if len(rows) == 0 {
-		sec.Empty = i18n.T(q.Lang, "plugin.phone.state.empty", "还没刷到什么。")
+		// 清空订阅源不该把手机上已经刷到的消息一起藏掉：缓存还在，
+		// read_news 与注入也还能用。只有缓存也是空的时候才说没配源。
+		if len(s.feeds) == 0 {
+			sec.Empty = i18n.T(q.Lang, "plugin.phone.state.no_feeds", "还没有配置订阅源。")
+		} else {
+			sec.Empty = i18n.T(q.Lang, "plugin.phone.state.empty", "还没刷到什么。")
+		}
 	}
 	return []plugin.StateSection{sec}
 }
