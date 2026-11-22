@@ -57,15 +57,11 @@ func runOnboard(args []string) error {
 	}
 	adoptLang(cfg)
 
-	var b modelsBackend
-	if c, ok := dial(cfg.BaseDir); ok {
-		b = &onlineBackend{c: c, addr: c.base}
-	} else {
-		store, err := modelcfg.NewStore(uiLang, filepath.Join(cfg.BaseDir, "models.json"), cfg)
-		if err != nil {
-			return fmt.Errorf(tr("cli.err.load_models", "加载模型配置失败: %w"), err)
-		}
-		b = &offlineBackend{cfg: cfg, models: store}
+	// 与 wen config 同一条判定：身份无法核实、或运行权还在别人手里时停下，别把
+	// 用户填的密钥发给别人的实例，也别写一份会被运行中服务覆盖的 models.json。
+	b, err := openBackendForWrite(cfg)
+	if err != nil {
+		return err
 	}
 
 	err = onboard(b, cfg, path, false)

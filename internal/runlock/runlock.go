@@ -114,6 +114,21 @@ func (r *Run) Release() {
 	})
 }
 
+// InUse 报告是否有进程正持着这个配置目录的运行权：服务已经起来，或正在启动。
+//
+// 服务在开始提供 HTTP 之前就写好了登记，那时探活会失败。配置工具不能因此认为
+// 「没人管这份目录」而退回离线写入——那份改动会被服务内存里的旧状态覆盖。
+//
+// 它只做一次非阻塞尝试，取到就立刻放开。
+func InUse(dir string) bool {
+	run, err := Lock(dir)
+	if err != nil {
+		return errors.Is(err, ErrBusy)
+	}
+	run.Release()
+	return false
+}
+
 // dropRegistration 只删属于 pid 的那一份登记。
 //
 // 「读内容、再删文件」不是原子的：旧版实例不受运行权约束，它可能正好在这两步之间
@@ -163,37 +178,69 @@ func Read(dir string) (Info, bool) {
 // ReadState 与 Read 相同，但把「确认没有实例」与「判不出来」分开，供需要在两者
 // 之间做不同决定的调用方使用（配置工具在后者必须停下）。
 //
-// 登记文件本身（wen.lock）由运行中的实例自己维护，读到就以它为准；只有接手中断
-// 留下的备用登记（.releasing）才需要核实身份：旧实例退出时只清 wen.lock，这个文件
-// 会留下，端口后来可能被另一份配置目录的服务复用。
+// 两份登记都要核对身份（进程还在，且创建时间不晚于登记时间——登记由进程自己在启动
+// 时写下，创建只可能更早；晚于它的是后来占了同一个 PID 的新进程），只是判不出来时
+// 的取舍不同：
 //
-// 核实分两步：进程还在（活着，或存在但无权查询），并且它的创建时间不晚于登记时间
-// ——登记由进程自己在启动时写下，创建只可能更早；晚于它的是后来占了同一个 PID 的
-// 新进程。
+//   - 正式登记（wen.lock）由运行中的实例自己维护，是「有实例」的主要证据，核对不了
+//     仍然采纳：旧版登记可能没有 started，容器里也可能看不见宿主的 PID，一律否决会
+//     把好好的服务判成没有。
+//   - 接手中断留下的备用登记（.releasing）没有实例在维护，判不出来就报 StateUnknown：
+//     它的地址可能已经属于别人，写下去会和仍在运行的服务抢同一份状态。
 func ReadState(dir string) (Info, State) {
 	if info, ok := readInfo(Path(dir)); ok {
-		return info, StateRunning
+		return primaryState(info)
 	}
-	info, ok := readInfo(releasingPath(Path(dir)))
-	if !ok {
-		return Info{}, StateNone
+	if info, ok := readInfo(releasingPath(Path(dir))); ok {
+		return leftoverState(info)
 	}
+	return Info{}, StateNone
+}
+
+// primaryState 核对正式登记。它是运行中实例自己维护的那一份：服务被强杀时文件会
+// 留下，端口随后可能被另一份配置目录的实例接管，那时探活能成功，连上去改的就是别人
+// 的配置。所以进程不在、或它的创建时间晚于登记（PID 被复用），都算陈旧。
+//
+// 核对不了身份时不否决——旧版登记可能没有 started，容器里 PIDs 也可能看不见，那时
+// 只能靠调用方的探活。
+func primaryState(info Info) (Info, State) {
 	if processAlive(info.PID) == processGone {
 		return Info{}, StateNone
 	}
-	started, err := time.Parse(time.RFC3339, info.Started)
-	if err != nil {
-		return info, StateUnknown
-	}
-	created, known := processStart(info.PID)
-	if !known || created.After(time.Now().Add(registrationSkew)) {
-		// 查不到创建时间，或查到的时间在未来（取错字段、换算不对）。
-		return info, StateUnknown
-	}
-	if created.After(started.Add(registrationSkew)) {
+	if after, known := creationAfter(info); known && after {
 		return Info{}, StateNone
 	}
 	return info, StateRunning
+}
+
+// leftoverState 核对接手中断留下的备用登记。没有实例在维护它，判不出身份就不能当成
+// 可写：写下去会和仍在运行的服务抢同一份状态。
+func leftoverState(info Info) (Info, State) {
+	if processAlive(info.PID) == processGone {
+		return Info{}, StateNone
+	}
+	created, known := creationAfter(info)
+	if !known {
+		return info, StateUnknown
+	}
+	if created {
+		return Info{}, StateNone
+	}
+	return info, StateRunning
+}
+
+// creationAfter 报告进程创建时间是否晚于登记时间。known 为 false 表示判不出来
+// （没有 started、平台拿不到创建时间、拿到的时间在未来）。
+func creationAfter(info Info) (after bool, known bool) {
+	started, err := time.Parse(time.RFC3339, info.Started)
+	if err != nil {
+		return false, false
+	}
+	created, ok := processStart(info.PID)
+	if !ok || created.After(time.Now().Add(registrationSkew)) {
+		return false, false
+	}
+	return created.After(started.Add(registrationSkew)), true
 }
 
 // processGone/processHere/processUnverifiable 是「进程在不在」的三种答案。

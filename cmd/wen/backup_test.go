@@ -92,7 +92,7 @@ func TestServiceRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inst.Register(runlock.Info{Addr: srv.Listener.Addr().String()}); err != nil {
+	if err := inst.Register(runlock.Info{PID: os.Getpid(), Addr: srv.Listener.Addr().String()}); err != nil {
 		inst.Release()
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestExportRefusesWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inst.Register(runlock.Info{Addr: srv.Listener.Addr().String()}); err != nil {
+	if err := inst.Register(runlock.Info{PID: os.Getpid(), Addr: srv.Listener.Addr().String()}); err != nil {
 		t.Fatal(err)
 	}
 	defer inst.Release()

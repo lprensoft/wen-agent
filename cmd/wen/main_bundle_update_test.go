@@ -4,12 +4,37 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"wen/internal/runlock"
 )
+
+// startForeignProcess 起一个会睡一会儿的子进程，当作「另一个活着的实例」。
+func startForeignProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestForeignProcessHelper")
+	cmd.Env = append(os.Environ(), "WEN_TEST_FOREIGN_PROCESS=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// TestForeignProcessHelper 不是测试：被 startForeignProcess 拉起来时只负责活着。
+func TestForeignProcessHelper(t *testing.T) {
+	if os.Getenv("WEN_TEST_FOREIGN_PROCESS") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
 
 func TestApplyPendingForServeRefusesLiveInstance(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +50,12 @@ func TestApplyPendingForServeRefusesLiveInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inst.Register(runlock.Info{PID: 123, Addr: strings.TrimPrefix(ts.URL, "http://")}); err != nil {
+	// 登记必须看起来像另一个活着的进程：PID 得在，且创建时间早于登记时间。
+	if err := inst.Register(runlock.Info{
+		PID:     startForeignProcess(t),
+		Addr:    strings.TrimPrefix(ts.URL, "http://"),
+		Started: time.Now().Format(time.RFC3339),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	defer inst.Release()

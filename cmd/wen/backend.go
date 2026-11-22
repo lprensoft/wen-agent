@@ -271,5 +271,10 @@ func openBackendMode(cfg *config.Config, writing bool) (backend, error) {
 			return &onlineBackend{c: c, addr: info.Addr}, nil
 		}
 	}
+	if writing && runlock.InUse(cfg.BaseDir) {
+		// 运行权还在别人手里：服务在跑，只是 HTTP 还没起来或暂时没应答。这时退回
+		// 离线写文件，改动会被服务内存里的旧状态覆盖。
+		return nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
+	}
 	return newOfflineBackend(cfg)
 }
