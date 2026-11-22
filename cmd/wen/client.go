@@ -52,7 +52,15 @@ func reachable(addr string) bool {
 // 第二个返回值为 false 表示没有实例在跑（或登记已陈旧），调用方应转入离线模式。
 func dial(dir string) (*client, bool) {
 	info, ok := runlock.Read(dir)
-	if !ok || !reachable(info.Addr) {
+	if !ok {
+		return nil, false
+	}
+	return dialInfo(info)
+}
+
+// dialInfo 按登记里的地址连一次，确认那个实例真的在应答。
+func dialInfo(info runlock.Info) (*client, bool) {
+	if !reachable(info.Addr) {
 		return nil, false
 	}
 	return &client{

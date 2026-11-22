@@ -247,14 +247,29 @@ func (b *offlineBackend) changePassword(current, next string) error {
 	return b.auth.Change(current, next, b.exposed)
 }
 
-// openBackend 选择模式：有实例在跑就走在线，否则离线。
+// openBackend 选择模式：有实例在跑就走在线，否则离线。用于只读的入口（状态、
+// 插件清单）。
 func openBackend(cfg *config.Config) (backend, error) {
-	if c, ok := dial(cfg.BaseDir); ok {
-		addr := c.base
-		if info, ok := runlock.Read(cfg.BaseDir); ok {
-			addr = info.Addr
+	return openBackendMode(cfg, false)
+}
+
+// openBackendForWrite 与 openBackend 相同，但登记无法核实时拒绝继续：那时代码只能
+// 退回离线写状态文件，而仍在运行的服务下次全量重写会把改动抹掉，也可能读到半份状态。
+func openBackendForWrite(cfg *config.Config) (backend, error) {
+	return openBackendMode(cfg, true)
+}
+
+func openBackendMode(cfg *config.Config, writing bool) (backend, error) {
+	info, state := runlock.ReadState(cfg.BaseDir)
+	switch state {
+	case runlock.StateUnknown:
+		if writing {
+			return nil, fmt.Errorf("%s", tr("cli.err.instance_unknown", "配置目录里的运行实例登记无法核实（可能是权限不足，或实例由另一个账号运行）。为避免改动被运行中的服务覆盖，本次没有写入；请用运行服务的账号执行，或先用 wen status 确认服务状态。"))
 		}
-		return &onlineBackend{c: c, addr: addr}, nil
+	case runlock.StateRunning:
+		if c, ok := dialInfo(info); ok {
+			return &onlineBackend{c: c, addr: info.Addr}, nil
+		}
 	}
 	return newOfflineBackend(cfg)
 }

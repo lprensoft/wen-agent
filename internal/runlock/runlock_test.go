@@ -83,6 +83,24 @@ func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
 	}
 }
 
+// 判不出身份时不能当成「没有实例」：配置工具会因此退回离线写文件，改动会被仍在
+// 运行的服务覆盖。
+func TestReadStateReportsUnknownWithoutIdentity(t *testing.T) {
+	dir := t.TempDir()
+	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:8090"}`, os.Getpid())
+	if err := os.WriteFile(releasingPath(Path(dir)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, state := ReadState(dir)
+	if state != StateUnknown || info.PID != os.Getpid() {
+		t.Fatalf("state=%v info=%+v，想要 StateUnknown", state, info)
+	}
+	// Read 仍然报告「有登记」：不能写，但也不能当成没有实例。
+	if got, ok := Read(dir); !ok || got.PID != os.Getpid() {
+		t.Fatalf("Read 把 StateUnknown 当成了没有实例：%+v %v", got, ok)
+	}
+}
+
 // PID 被复用的情形：登记里的 PID 现在确实活着，但它比这个进程还老，说明写登记的
 // 那个进程早已退出，活着的是后来占了同一个号的新进程。
 func TestReadRejectsRegistrationOlderThanProcess(t *testing.T) {

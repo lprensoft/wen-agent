@@ -132,38 +132,79 @@ func dropRegistration(path string, pid int) {
 	_ = os.Rename(trash, path)
 }
 
-// Read 读取登记文件。第二个返回值为 false 表示没有登记（文件缺失或内容损坏）。
+// State 是一个配置目录里服务实例的判定结果。
+type State int
+
+const (
+	// StateNone 表示确认没有实例在这个目录上运行。
+	StateNone State = iota
+	// StateRunning 表示登记指向的就是这个目录的实例。
+	StateRunning
+	// StateUnknown 表示有登记，但判不出它是否还对应这个目录（进程查不到身份、
+	// 平台拿不到创建时间）。这种状态下不该写状态文件——一个仍在运行的服务下次
+	// 全量重写会把改动抹掉；也不该把请求发给那个地址，它可能是别人的实例。
+	StateUnknown
+)
+
+// Read 读取登记文件。第二个返回值为 false 表示没有可以使用的实例登记。
 // 文件存在不代表进程还活着，调用方需要自行探活。
 //
-// 上一次交接如果被打断（wen.lock 已经改名成 .releasing，还没来得及判断或放回），
-// 登记就停在那里；这时也要读它，否则仍在运行的旧实例会从所有调用方眼前消失。
-//
-// 但备用登记只在它记录的那个进程还活着时才可信：旧实例退出时只清 wen.lock，这个
-// 文件会留下；端口后来可能被另一份配置目录的服务复用，那个地址应答的已经不是这边
-// 的实例，连上去改的就是别人的配置。
-//
-// 「活着」还要再加上一层：那个 PID 得是写下这份登记的进程，而不是被系统复用了的
-// 另一个进程。判据是进程的创建时间不早于登记时间——登记由父进程在启动时写下，创建
-// 只可能更早；晚于它的只可能是后来占了同一个 PID 的进程。
+// 判不出身份（StateUnknown）时仍然返回 true：登记确实存在，只是没法核实。要写状态
+// 文件的调用方必须改用 ReadState 并把 StateUnknown 当成「不能写」——这里给的
+// 「有实例」正是为了不让它们退回离线写。
 func Read(dir string) (Info, bool) {
-	if info, ok := readInfo(Path(dir)); ok {
-		return info, true
-	}
-	info, ok := readInfo(releasingPath(Path(dir)))
-	if !ok || !processAlive(info.PID) {
+	info, state := ReadState(dir)
+	if state == StateNone {
 		return Info{}, false
-	}
-	if started, err := time.Parse(time.RFC3339, info.Started); err == nil {
-		// 创建时间在未来只可能是取错了字段或平台换算不对：这种「判不出来」不能拿来
-		// 否决一份可能有效的登记。
-		if created, known := processStart(info.PID); known &&
-			created.After(started.Add(registrationSkew)) &&
-			created.Before(time.Now().Add(registrationSkew)) {
-			return Info{}, false
-		}
 	}
 	return info, true
 }
+
+// ReadState 与 Read 相同，但把「确认没有实例」与「判不出来」分开，供需要在两者
+// 之间做不同决定的调用方使用（配置工具在后者必须停下）。
+//
+// 登记文件本身（wen.lock）由运行中的实例自己维护，读到就以它为准；只有接手中断
+// 留下的备用登记（.releasing）才需要核实身份：旧实例退出时只清 wen.lock，这个文件
+// 会留下，端口后来可能被另一份配置目录的服务复用。
+//
+// 核实分两步：进程还在（活着，或存在但无权查询），并且它的创建时间不晚于登记时间
+// ——登记由进程自己在启动时写下，创建只可能更早；晚于它的是后来占了同一个 PID 的
+// 新进程。
+func ReadState(dir string) (Info, State) {
+	if info, ok := readInfo(Path(dir)); ok {
+		return info, StateRunning
+	}
+	info, ok := readInfo(releasingPath(Path(dir)))
+	if !ok {
+		return Info{}, StateNone
+	}
+	if processAlive(info.PID) == processGone {
+		return Info{}, StateNone
+	}
+	started, err := time.Parse(time.RFC3339, info.Started)
+	if err != nil {
+		return info, StateUnknown
+	}
+	created, known := processStart(info.PID)
+	if !known || created.After(time.Now().Add(registrationSkew)) {
+		// 查不到创建时间，或查到的时间在未来（取错字段、换算不对）。
+		return info, StateUnknown
+	}
+	if created.After(started.Add(registrationSkew)) {
+		return Info{}, StateNone
+	}
+	return info, StateRunning
+}
+
+// processGone/processHere/processUnverifiable 是「进程在不在」的三种答案。
+// 判不出来与确认不在必须分开：前者退回离线写文件，会踩到仍在运行的服务。
+type liveness int
+
+const (
+	processGone liveness = iota
+	processHere
+	processUnverifiable
+)
 
 // registrationSkew 是「进程创建」与「登记时间」之间允许的倒挂。两者都取自同一台
 // 机器的同一个时钟，正常只会差进程初始化那一下；留几秒是给 NTP 微调与平台取整。

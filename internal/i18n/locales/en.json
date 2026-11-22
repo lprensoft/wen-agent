@@ -106,6 +106,7 @@
   "cli.err.action_needs_server": "plugin actions need the service to be running; start wen first",
   "cli.err.bad_models": "the model configuration is invalid: %w",
   "cli.err.http": "the service returned %s",
+  "cli.err.instance_unknown": "the running-instance record in this configuration directory cannot be verified (the account may lack permission, or the instance runs under another account). Nothing was written, so an in-flight service cannot overwrite your changes; run this as the service's account, or check wen status first.",
   "cli.err.load_auth": "failed to load the access password: %w",
   "cli.err.load_config": "failed to load the configuration: %w",
   "cli.err.load_models": "failed to load the model configuration: %w",

@@ -2,26 +2,36 @@
 
 package runlock
 
-import "golang.org/x/sys/windows"
+import (
+	"errors"
 
-// processAlive 报告 pid 对应的进程是否还在。
+	"golang.org/x/sys/windows"
+)
+
+// processAlive 报告 pid 现在是不是还在。
 //
-// Windows 上 os.FindProcess 会真的 OpenProcess，进程不存在就报错；这里再读一次退出
-// 码，避免拿到一个已经结束但句柄还开着的进程。打开失败（不存在、没有权限）一律当
-// 作已退出：判不出来时退回离线模式，比连到别人的实例上安全。
-func processAlive(pid int) bool {
+// 打不开进程不等于它不在：另一个账号的进程、受保护进程都会返回 AccessDenied，
+// 那只能算「查不了」。把它当成已退出会让配置工具绕过正在运行的服务去写状态文件。
+func processAlive(pid int) liveness {
 	if pid <= 0 {
-		return false
+		return processGone
 	}
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
-		return false
+		// 没有这个 PID 时 OpenProcess 报的是「参数无效」。
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			return processGone
+		}
+		return processUnverifiable
 	}
 	defer windows.CloseHandle(h)
 	var code uint32
 	if err := windows.GetExitCodeProcess(h, &code); err != nil {
-		return false
+		return processUnverifiable
 	}
 	const stillActive = 259 // STILL_ACTIVE
-	return code == stillActive
+	if code == stillActive {
+		return processHere
+	}
+	return processGone
 }

@@ -134,7 +134,7 @@ func runServe(args []string) {
 	}
 	// 旧版服务只写 wen.lock、不持这把锁，取锁不会与它冲突：覆盖登记之前按地址确认
 	// 一次，别把它的登记改成自己的。
-	if prev, ok := runlock.Read(cfg.BaseDir); ok && prev.PID != os.Getpid() && reachable(prev.Addr) {
+	if prev, state := runlock.ReadState(cfg.BaseDir); state != runlock.StateNone && prev.PID != os.Getpid() && reachable(prev.Addr) {
 		inst.Release()
 		_ = ln.Close()
 		log.Fatal(anotherInstanceRunning(cfg.BaseDir))
@@ -252,7 +252,7 @@ func runServe(args []string) {
 // anotherInstanceRunning 说明另一个实例正占着这个配置目录。登记文件里有地址时
 // 把它带上，用户才知道该去关哪一个。
 func anotherInstanceRunning(baseDir string) error {
-	if prev, ok := runlock.Read(baseDir); ok && prev.Addr != "" {
+	if prev, state := runlock.ReadState(baseDir); state != runlock.StateNone && prev.Addr != "" {
 		return fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
 	}
 	return fmt.Errorf("%s", tr("log.serve.another_instance_unknown", "同一配置目录下已有实例在运行，本次没有启动；待更新包也未改动"))
@@ -264,7 +264,7 @@ func anotherInstanceRunning(baseDir string) error {
 func applyPendingForServe(baseDir string) ([]string, error) {
 	// 登记文件此刻可能就是我们自己刚写下的：那时监听已经 bind、但 HTTP 还没有开始
 	// 服务，探活只会白等一个超时。只把「另有其人的登记」当证据。
-	if prev, ok := runlock.Read(baseDir); ok && prev.PID != os.Getpid() && reachable(prev.Addr) {
+	if prev, state := runlock.ReadState(baseDir); state != runlock.StateNone && prev.PID != os.Getpid() && reachable(prev.Addr) {
 		return nil, fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
 	}
 	return agentplugin.NewStore(uiLang, baseDir).ApplyPending(), nil
