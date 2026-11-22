@@ -2,6 +2,7 @@ package agentplugin
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ const (
 // 存放目录里落下半个残骸，下次列表时它又会作为「装了但读不出来」被报出来，用户
 // 得自己去删。校验放前面，失败时存放目录一个字节都没动过。
 func (s *Store) Install(src string) (*Bundle, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	lang := s.lang
 	if s.dir == "" {
 		return nil, fmt.Errorf("%s", i18n.T(lang, "plugin.bundle.err.no_store", "没有可用的插件包目录"))
@@ -61,6 +64,11 @@ func (s *Store) Install(src string) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	name := b.Manifest.Name
 	dst := s.Path(name)
 	if _, err := os.Stat(dst); err == nil {
@@ -92,8 +100,12 @@ func (s *Store) Install(src string) (*Bundle, error) {
 // GitHub 下载的 zip 解出来是 <仓库名>-<分支>/，清单在那一层里面。
 // 只在顶层恰好是一个目录且顶层没有清单时才下沉一级，多于一层不猜。
 func descend(lang, dir string) (string, error) {
-	if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err == nil {
-		return dir, nil
+	// 根层不只认 Agent Plugins 的 plugin.json：Claude / Codex / Cursor 的
+	// 隐藏清单目录与 skills 同层时，也是合法包，不能再往下猜一层。
+	if root, err := NewRoot(lang, dir); err == nil {
+		if _, _, err := detect(lang, root); err == nil {
+			return dir, nil
+		}
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -102,7 +114,7 @@ func descend(lang, dir string) (string, error) {
 	if len(entries) == 1 && entries[0].IsDir() {
 		return filepath.Join(dir, entries[0].Name()), nil
 	}
-	return "", fmt.Errorf(i18n.T(lang, "plugin.bundle.err.zip_no_manifest", "压缩包里找不到 %s"), ManifestFile)
+	return "", fmt.Errorf("%s", i18n.T(lang, "plugin.bundle.err.zip_no_manifest", "压缩包里找不到受支持的插件包清单"))
 }
 
 // unzip 解压到 dst。

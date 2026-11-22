@@ -48,7 +48,7 @@
 | | `slack_bot` | Slack（Socket Mode） | 关 |
 | | `reaction` | 在对方的消息上加表情回应（赞、笑、惊讶等） | 开 |
 | [程序维护](self-update.md) | `self_update` | 查新版、一键下载校验替换并重启 | 开 |
-| [外源插件](external.md) | `bundles` | 装 Agent Plugins 格式的插件包 | 开 |
+| [外源插件](external.md) | `bundles` | 安装 Agent Plugins 包，绑定签名更新来源并检查新版本 | 开 |
 | | `ext_*` | 装进来的每个插件包各占一张卡片 | 开 |
 
 要自己写一个插件，见[项目结构与插件开发](../architecture.md)。

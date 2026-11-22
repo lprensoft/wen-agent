@@ -9,6 +9,7 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/agentplugin"
 	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
@@ -62,6 +64,8 @@ type Options struct {
 	ExtraDirs []string
 	// Overwrite 允许覆盖已存在的输出文件。
 	Overwrite bool
+	// Context 取消等待插件包更新锁；为零值时用 background。
+	Context context.Context
 }
 
 // Stats 是一次导出或导入的统计。
@@ -76,6 +80,14 @@ type fileEntry struct {
 	abs string
 	rel string
 }
+
+// exportAttempts 是「读取期间目录开始被写入」时最多重来的次数。第二次一定持锁，
+// 所以正常情况下两遍就结束。
+const exportAttempts = 3
+
+// afterCollect 在枚举完文件、开始读内容之前调用，只给测试用来模拟「第一次写操作
+// 正好在读取期间开始」。
+var afterCollect = func() {}
 
 // Export 把 baseDir 里程序维护的数据写成 out。
 func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
@@ -95,13 +107,55 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 		}
 	}
 
+	for attempt := 0; attempt < exportAttempts; attempt++ {
+		manifest, stats, retry, err := exportArchive(baseDir, absOut, opt)
+		if err != nil {
+			return Manifest{}, Stats{}, err
+		}
+		if !retry {
+			return manifest, stats, nil
+		}
+	}
+	return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.T(lang, "backup.err.bundle_busy", "插件包目录正在被写入，没能取到一致的快照；请稍后重试"))
+}
+
+// exportArchive 在更新锁下收集并写出归档。retry 为 true 表示读完之后才发现更新锁
+// 文件出现（此前这份目录没有写操作），临时文件已经丢弃，需要持锁重来。
+//
+// 从预检到包文件读完都要与启动时的目录切换互斥：否则归档可能在「旧包已移进 work、
+// 新包还没顶上」的瞬间枚举 bundles，漏掉那个包却仍报告成功。
+func exportArchive(baseDir, absOut string, opt Options) (Manifest, Stats, bool, error) {
+	lang := opt.Lang
+	ctx := opt.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock, locked, err := agentplugin.LockUpdates(ctx, lang, baseDir)
+	if err != nil {
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "无法取得插件包目录的更新锁，备份没有开始：%v", err))
+	}
+	defer unlock()
+
+	// 没取锁时，任何读取失败都要先看一眼是不是写操作开始了：它会把文件挪走或删掉，
+	// 我们读到的失败正是它造成的。那种情况下重来时持锁，比把竞争错误报给用户好。
+	retryIfWriting := func(cause error) (Manifest, Stats, bool, error) {
+		if !locked {
+			if active, err := agentplugin.UpdatesActive(baseDir); err == nil && active {
+				return Manifest{}, Stats{}, true, nil
+			}
+		}
+		return Manifest{}, Stats{}, false, cause
+	}
+
 	entries, stats, err := collect(baseDir, opt, absOut)
 	if err != nil {
-		return Manifest{}, Stats{}, err
+		return retryIfWriting(err)
 	}
 	if len(entries) == 0 {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容"))
+		return retryIfWriting(fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容")))
 	}
+
+	afterCollect()
 
 	manifest := Manifest{
 		Format:     FormatVersion,
@@ -114,11 +168,11 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.output_dir", "创建备份目录失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.output_dir", "创建备份目录失败：%v", err))
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(absOut), ".wen-export-*")
 	if err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.temp", "创建临时文件失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.temp", "创建临时文件失败：%v", err))
 	}
 	tmpName := tmp.Name()
 	committed := false
@@ -130,31 +184,47 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	}()
 
 	if err := writeArchive(tmp, entries, manifest, lang); err != nil {
-		return Manifest{}, Stats{}, err
+		return retryIfWriting(err)
 	}
 	if err := tmp.Sync(); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
 	if err := tmp.Close(); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
 	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
+
+	// 没有取锁时，锁文件可能出现——第一次写操作刚在这份目录上开始，读到的包可能
+	// 只复制了一半。丢掉这一份，重来时就会持锁。
+	if !locked {
+		active, err := agentplugin.UpdatesActive(baseDir)
+		if err != nil {
+			return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_state", "无法确认插件包目录是否正在更新：%v", err))
+		}
+		if active {
+			return Manifest{}, Stats{}, true, nil
+		}
+	}
+
 	if opt.Overwrite {
 		_ = os.Remove(absOut)
 	}
 	if err := atomicfile.Rename(tmpName, absOut); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.rename", "保存备份文件失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.rename", "保存备份文件失败：%v", err))
 	}
 	committed = true
-	return manifest, stats, nil
+	return manifest, stats, false, nil
 }
 
 // collect 枚举要备份的文件。它只认程序已知的路径，不遍历整个配置目录。
 func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats, error) {
 	lang := opt.Lang
 	var stats Stats
+	if err := checkBundleUpdateRecovery(baseDir, lang); err != nil {
+		return nil, stats, err
+	}
 	seen := map[string]bool{}
 	var entries []fileEntry
 
@@ -226,6 +296,55 @@ func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats
 	return entries, stats, nil
 }
 
+// checkBundleUpdateRecovery 拒绝在目录切换尚未完成时导出。正常暂存（正式旧包
+// 仍在、没有回滚目录）可以备份；一旦旧包只存在于 work，或新旧目录状态未定，
+// 静默跳过 work 就会生成缺包归档。
+func checkBundleUpdateRecovery(baseDir, lang string) error {
+	updates := filepath.Join(baseDir, "bundles", ".updates")
+	entries, err := os.ReadDir(updates)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "pending-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		bundle := strings.TrimSuffix(strings.TrimPrefix(name, "pending-"), ".json")
+		_, formalErr := os.Stat(filepath.Join(baseDir, "bundles", bundle))
+		_, rollbackErr := os.Stat(filepath.Join(updates, "work", bundle+".old"))
+		if os.IsNotExist(formalErr) || rollbackErr == nil {
+			return fmt.Errorf(i18n.Tf(lang, "backup.err.bundle_update_interrupted", "外源插件包 %s 的更新切换尚未完成，请先启动服务完成恢复，再导出备份"), bundle)
+		}
+		if formalErr != nil {
+			return formalErr
+		}
+		if rollbackErr != nil && !os.IsNotExist(rollbackErr) {
+			return rollbackErr
+		}
+	}
+	return nil
+}
+
+// skippedBundleTransientPath 判断要跳过的插件包目录内容：更新用的暂存、回滚、
+// pending 与操作锁（只迁移来源，不恢复半完成更新），以及 ZIP 安装的解包临时目录——
+// 那是还没装好的东西，恢复到另一台机器上只是一堆散文件。
+func skippedBundleTransientPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if rel == "bundles/.updates/work" || strings.HasPrefix(rel, "bundles/.updates/work/") ||
+		rel == "bundles/.updates/.op.lock" || strings.HasPrefix(rel, "bundles/.updates/pending-") {
+		return true
+	}
+	if !strings.HasPrefix(rel, "bundles/") {
+		return false
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(rel, "bundles/"), "/")
+	return strings.HasPrefix(name, ".unpack-")
+}
+
 func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry, stats *Stats, lang, excludeAbs string) error {
 	root := filepath.Join(baseDir, rel)
 	info, err := os.Lstat(root)
@@ -246,12 +365,20 @@ func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry,
 		if err != nil {
 			return fmt.Errorf("%s", i18n.Tf(lang, "backup.err.read", "读取文件失败：%v", err))
 		}
-		if d.IsDir() {
-			return nil
-		}
 		fullRel, err := filepath.Rel(baseDir, p)
 		if err != nil {
 			return fmt.Errorf("%s", i18n.Tf(lang, "backup.err.read", "读取文件失败：%v", err))
+		}
+		// 更新来源要随备份迁走；尚未提交的暂存、回滚与 pending 不带过去，
+		// 否则恢复到另一台机器后可能把半完成更新当成可应用状态。
+		if skippedBundleTransientPath(fullRel) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
 		}
 		if fullRel == "wen.lock" {
 			return nil

@@ -88,14 +88,18 @@ func TestServiceRunning(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	release, err := runlock.Acquire(dir, runlock.Info{Addr: srv.Listener.Addr().String()})
+	inst, err := runlock.Lock(dir)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Register(runlock.Info{PID: os.Getpid(), Addr: srv.Listener.Addr().String()}); err != nil {
+		inst.Release()
 		t.Fatal(err)
 	}
 	if addr, ok := serviceRunning(dir); !ok || addr != srv.Listener.Addr().String() {
 		t.Fatalf("serviceRunning = %q %v", addr, ok)
 	}
-	release()
+	inst.Release()
 	srv.Close()
 	if _, ok := serviceRunning(dir); ok {
 		t.Fatal("closed service should not be reported as running")
@@ -161,11 +165,14 @@ func TestExportRefusesWhileRunning(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	release, err := runlock.Acquire(base, runlock.Info{Addr: srv.Listener.Addr().String()})
+	inst, err := runlock.Lock(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	if err := inst.Register(runlock.Info{PID: os.Getpid(), Addr: srv.Listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Release()
 
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if err := runExport([]string{"-c", filepath.Join(base, "config.yaml"), "-o", out}); err == nil {

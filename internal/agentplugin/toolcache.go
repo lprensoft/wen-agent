@@ -1,6 +1,7 @@
 package agentplugin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -31,8 +32,9 @@ type ToolInfo struct {
 
 // toolCache 是一次握手的产物。
 type toolCache struct {
-	Bundle string     `json:"bundle"`
-	Tools  []ToolInfo `json:"tools"`
+	Bundle  string     `json:"bundle"`
+	Version string     `json:"version,omitempty"`
+	Tools   []ToolInfo `json:"tools"`
 }
 
 // 工具名必须过得了模型接口那一关：Anthropic 侧限定 [a-zA-Z0-9_-]{1,64}。
@@ -72,7 +74,7 @@ func (s *Store) cachePath(bundle string) string {
 //
 // 缓存不存在不是错误，只是「还没握过手」：M1 装的包没有缓存，手工拷进来的包也没有。
 // 调用方据此提示用户刷新一次，而不是当成故障。
-func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
+func (s *Store) LoadTools(bundle, version string) ([]ToolInfo, error) {
 	path := s.cachePath(bundle)
 	if path == "" {
 		return nil, nil
@@ -88,6 +90,19 @@ func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("工具清单缓存已损坏：%w", err)
 	}
+	// 没有版本的旧缓存来自更新机制引入之前，只有「没有同版本待应用更新」时
+	// 才能兼容读取。pending 没清掉就说明更新可能已切换，绝不能把旧工具交给新版。
+	if c.Version == "" {
+		pending, err := s.Pending(bundle)
+		if err != nil {
+			return nil, err
+		}
+		if pending != nil && pending.Version == version {
+			return nil, nil
+		}
+	} else if c.Version != version {
+		return nil, nil
+	}
 	return c.Tools, nil
 }
 
@@ -96,24 +111,63 @@ func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
 // 之所以要落盘而不是每次启动现问：插件系统在注册插件时就要拿到工具清单（它得查
 // 全局重名），而那一步在 Init 之前、且握着写锁。在那里拉起子进程做一次握手，等于
 // 让整个服务在启动时为每台 server 停上几秒——装了十台就是十次。
-func (s *Store) SaveTools(bundle string, tools []ToolInfo) error {
+func (s *Store) SaveTools(bundle, version string, tools []ToolInfo) error {
 	path := s.cachePath(bundle)
 	if path == "" {
 		return fmt.Errorf("没有可用的缓存位置")
 	}
+	// 写入必须与「按版本检查、再删除」互斥（finishApply 里的那条清理）。否则清理
+	// 可能读到旧缓存、在这里写完之后把新文件删掉，而握手已经报告成功。
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(toolCache{Bundle: bundle, Tools: tools}, "", "  ")
+	data, err := json.MarshalIndent(toolCache{Bundle: bundle, Version: version, Tools: tools}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return atomicfile.WriteFile(path, data, 0o644)
 }
 
-// DropTools 删掉某个插件包的缓存，卸载时用。
-func (s *Store) DropTools(bundle string) {
-	if path := s.cachePath(bundle); path != "" {
-		_ = os.Remove(path)
+var removeToolCache = os.Remove
+
+// DropToolsExceptVersion 删掉某个插件包的缓存，但保留已经属于 version 的那一份。
+//
+// 更新应用后的清理可能失败（回滚目录或 pending 暂时删不掉），并在用户重新握手之后
+// 才重试。那时缓存已经标着新版本——用户正是照着提示握完手的——再删掉它，重启之后
+// 工具又会消失。
+//
+// 调用方必须已经持有更新锁（finishApply 在 ApplyPending 的锁内调用），这样「读版本、
+// 再删除」相对于 SaveTools 才是原子的。
+func (s *Store) DropToolsExceptVersion(bundle, version string) error {
+	path := s.cachePath(bundle)
+	if path == "" {
+		return nil
 	}
+	if version != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var c toolCache
+			if json.Unmarshal(data, &c) == nil && c.Version == version {
+				return nil
+			}
+		}
+	}
+	return s.DropTools(bundle)
+}
+
+// DropTools 删掉某个插件包的缓存。删除失败必须显式返回：调用方要保留
+// pending 或其它证据，避免新版插件静默沿用旧版工具清单。
+func (s *Store) DropTools(bundle string) error {
+	path := s.cachePath(bundle)
+	if path == "" {
+		return nil
+	}
+	if err := removeToolCache(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

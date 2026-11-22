@@ -3,11 +3,14 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
+	"wen/internal/agentplugin"
 	"wen/internal/i18n"
 )
 
@@ -42,6 +45,148 @@ func baseFixture(t *testing.T) string {
 	write(t, filepath.Join(base, "bundles", "demo", "plugin.json"), `{"name":"demo"}`, 0o644)
 	write(t, filepath.Join(base, "wen.lock"), `{"addr":"127.0.0.1:1"}`, 0o644)
 	return base
+}
+
+// writeUpdateLock 造出更新操作留下的锁文件。有它存在，导出才会去取锁。
+func writeUpdateLock(t *testing.T, base string) {
+	t.Helper()
+	path := filepath.Join(base, "bundles", ".updates", ".op.lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExportWaitsForBundleUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	writeUpdateLock(t, base)
+	unlock, locked, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("有锁文件时应当真的取到锁")
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", Context: ctx}); err == nil {
+		t.Fatal("更新锁被占用时备份不该开始")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("等待失败仍写出了归档：%v", err)
+	}
+}
+
+// 从备份恢复出来的目录带着更新来源、却没有锁文件，还可能挂载成只读。导出不该往
+// 数据源里写任何东西。
+func TestExportFromSnapshotWithoutUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	sources := filepath.Join(base, "bundles", ".updates", "sources.json")
+	if err := os.MkdirAll(filepath.Dir(sources), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sources, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("没有锁文件的快照应能直接导出：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "bundles", ".updates", ".op.lock")); !os.IsNotExist(err) {
+		t.Fatalf("导出在数据源里建了锁文件：%v", err)
+	}
+}
+
+func TestExportReleasesBundleUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	writeUpdateLock(t, base)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, locked, err := agentplugin.LockUpdates(ctx, i18n.LangZH, base)
+	if err != nil {
+		t.Fatalf("备份没有释放更新锁：%v", err)
+	}
+	if !locked {
+		t.Fatal("锁文件在，应当真的取到锁")
+	}
+	unlock()
+}
+
+// 读的过程中第一次写操作开始了（锁文件出现）：这一份归档不可信，应当丢掉重来。
+func TestExportRetriesWhenWriteStartsMidRead(t *testing.T) {
+	base := baseFixture(t)
+	original := afterCollect
+	attempts := 0
+	afterCollect = func() {
+		attempts++
+		if attempts == 1 {
+			writeUpdateLock(t, base)
+		}
+	}
+	defer func() { afterCollect = original }()
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("写操作出现后没有重试：%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("读取次数 = %d，想要 2", attempts)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("重试后没有归档：%v", err)
+	}
+}
+
+// 读取过程中写操作把文件拿走、读失败：也要复查锁，确认是竞争造成的就持锁重来，
+// 而不是把这个错误报给用户。
+func TestExportRetriesWhenWriteBreaksRead(t *testing.T) {
+	base := baseFixture(t)
+	original := afterCollect
+	attempts := 0
+	afterCollect = func() {
+		attempts++
+		if attempts == 1 {
+			writeUpdateLock(t, base)
+			if err := os.RemoveAll(filepath.Join(base, "bundles", "demo")); err != nil {
+				t.Errorf("删除测试包失败：%v", err)
+			}
+		}
+	}
+	defer func() { afterCollect = original }()
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("竞争造成的读取失败没有重试：%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("读取次数 = %d，想要 2", attempts)
+	}
+}
+
+// ZIP 安装的解包目录还不是插件包，备份不该把它带过去。
+func TestExportSkipsInstallTempDir(t *testing.T) {
+	base := baseFixture(t)
+	unpack := filepath.Join(base, "bundles", ".unpack-12345")
+	write(t, filepath.Join(unpack, "pkg", "plugin.json"), `{"name":"half"}`, 0o644)
+	write(t, filepath.Join(unpack, "pkg", "skills", "a.md"), "x", 0o644)
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	manifest, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FileCount != 7 {
+		t.Fatalf("解包目录混进了归档：文件数 %d，想要 7", manifest.FileCount)
+	}
 }
 
 func TestExportImportRoundTrip(t *testing.T) {
@@ -101,6 +246,49 @@ func TestExportImportRoundTrip(t *testing.T) {
 				t.Errorf("%s mode = %o, want 600", name, info.Mode().Perm())
 			}
 		}
+	}
+}
+
+func TestExportBundleUpdateSourcesWithoutPending(t *testing.T) {
+	base := baseFixture(t)
+	write(t, filepath.Join(base, "bundles", ".updates", "sources.json"), `{"demo":{"manifest_url":"https://example.com/update.json"}}`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", "pending-demo.json"), `{"name":"demo"}`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", ".op.lock"), `locked`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", "work", "demo.new", "plugin.json"), `{"name":"demo"}`, 0o644)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", SessionDir: filepath.Join(base, "sessions")}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restored")
+	if _, _, err := Import(out, target, i18n.LangZH); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(target, "bundles", ".updates", "sources.json")) == "" {
+		t.Fatal("更新来源没有随备份恢复")
+	}
+	for _, rel := range []string{filepath.Join("bundles", ".updates", "pending-demo.json"), filepath.Join("bundles", ".updates", "work"), filepath.Join("bundles", ".updates", ".op.lock")} {
+		if _, err := os.Stat(filepath.Join(target, rel)); !os.IsNotExist(err) {
+			t.Fatalf("半完成更新不该恢复：%s, %v", rel, err)
+		}
+	}
+}
+
+func TestExportRefusesInterruptedBundleSwap(t *testing.T) {
+	base := baseFixture(t)
+	work := filepath.Join(base, "bundles", ".updates", "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(base, "bundles", "demo"), filepath.Join(work, "demo.old")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(base, "bundles", ".updates", "pending-demo.json"), `{"name":"demo"}`, 0o600)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", SessionDir: filepath.Join(base, "sessions")}); err == nil {
+		t.Fatal("切换中断、旧包只在 work 时不该生成缺包备份")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("失败的备份不该留下归档：%v", err)
 	}
 }
 

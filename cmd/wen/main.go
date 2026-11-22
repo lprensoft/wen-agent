@@ -100,6 +100,63 @@ func runServe(args []string) {
 	}
 	adoptLang(cfg)
 
+	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
+	if err != nil {
+		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
+	}
+	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
+	exposed := !server.IsLoopbackHost(cfg.Server.Host)
+	if exposed && !auth.HasPassword() {
+		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
+		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
+		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。", cfg.Server.Port, cfg.Server.Port)
+		cfg.Server.Host = "127.0.0.1"
+		exposed = false
+	}
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+
+	// 先取得监听端口，再取出配置目录的运行权，然后才允许应用待更新包。端口只挡得住
+	// 同端口的第二个实例；换了端口的那个仍会共用状态文件，还会在启动时替换这里正在
+	// 读取的插件目录。运行权持有到进程退出（重启交棒时显式释放）。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
+	}
+	inst, lockErr := runlock.Lock(cfg.BaseDir)
+	if lockErr != nil {
+		_ = ln.Close()
+		if errors.Is(lockErr, runlock.ErrBusy) {
+			log.Fatal(anotherInstanceRunning(cfg.BaseDir))
+		}
+		// 没有运行权就既不能应用待更新包（那会改动插件目录），也不能和别的实例共用
+		// 状态，所以直接退出，而不是带着半个启动流程继续跑。
+		fatalf("log.serve.runlock_unavailable", "无法取得配置目录的运行权（%v），本次没有启动；待更新包也未改动", lockErr)
+	}
+	// 旧版服务只写 wen.lock、不持这把锁，取锁不会与它冲突：覆盖登记之前按地址确认
+	// 一次，别把它的登记改成自己的。
+	if prev, state := runlock.ReadState(cfg.BaseDir); state != runlock.StateNone && prev.PID != os.Getpid() && reachable(prev.Addr) {
+		inst.Release()
+		_ = ln.Close()
+		log.Fatal(anotherInstanceRunning(cfg.BaseDir))
+	}
+	if err := inst.Register(runlock.Info{
+		PID: os.Getpid(), Addr: addr, Version: version.Version,
+		Started: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		// 登记失败只是让配置工具退回离线模式，运行权仍在手里。
+		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
+	}
+	defer inst.Release()
+
+	problems, err := applyPendingForServe(cfg.BaseDir)
+	if err != nil {
+		_ = ln.Close()
+		log.Fatal(err)
+	}
+	for _, problem := range problems {
+		logf("log.serve.bundle_update_warning", "警告: 外源插件包更新：%s", problem)
+	}
+
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
@@ -127,31 +184,12 @@ func runServe(args []string) {
 	}
 	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
-	auth, err := server.NewAuthStore(uiLang, cfg.BaseDir)
-	if err != nil {
-		fatalf("log.serve.auth_failed", "加载访问口令失败: %v", err)
-	}
-
-	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
-	// 拒绝启动在新装的远程机器上是个死局——口令要在界面里设，而界面起不来。
-	// 降级同样一次都没暴露过，且 SSH 隧道进来就能把口令补上。
-	exposed := !server.IsLoopbackHost(cfg.Server.Host)
-	if exposed && !auth.HasPassword() {
-		logf("log.serve.exposed_no_password", "⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
-		logf("log.serve.exposed_hint1", "  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
-		logf("log.serve.exposed_hint2", "  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
-			cfg.Server.Port, cfg.Server.Port)
-		cfg.Server.Host = "127.0.0.1"
-		exposed = false
-	}
-
 	srv := server.New(ag, store, plugins, models, server.Options{
 		Auth:          auth,
 		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
 		Exposed:       exposed,
 		Lang:          uiLang,
 	})
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	if _, err := os.Stat(path); err == nil {
 		logf("log.serve.config_file", "配置文件: %s", path)
@@ -170,28 +208,7 @@ func runServe(args []string) {
 	}
 	logf("log.serve.access", "访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
 
-	// 先把端口拿到手再宣布「已启动」：此前监听放在 goroutine 里，端口被占用时
-	// 日志先说启动成功、紧接着进程退出，读的人得自己把两行拼起来。
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		plugins.StopAll()
-		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
-	}
 	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
-
-	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
-	// 失败只是让配置工具退回离线模式，不该拦住服务启动。
-	if prev, ok := runlock.Read(cfg.BaseDir); ok && reachable(prev.Addr) {
-		logf("log.serve.another_instance", "警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
-	}
-	releaseLock, err := runlock.Acquire(cfg.BaseDir, runlock.Info{
-		PID: os.Getpid(), Addr: addr, Version: version.Version,
-		Started: time.Now().Format(time.RFC3339),
-	})
-	if err != nil {
-		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
-	}
-	defer releaseLock()
 
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -225,11 +242,32 @@ func runServe(args []string) {
 
 	if restartReason != "" {
 		// 交棒之前必须先松开这两样：端口（Windows 上新进程要重新 bind 它）与
-		// 登记文件（新进程起来会重新登记）。顺序是硬的——Shutdown 已经关掉监听，
-		// 这里补上登记文件，然后才轮到新进程。
-		releaseLock()
+		// 配置目录的运行权（新进程起来第一件事就是重新取得它）。顺序是硬的——
+		// Shutdown 已经关掉监听，这里放开运行权，然后才轮到新进程。
+		inst.Release()
 		relaunch(exePath)
 	}
+}
+
+// anotherInstanceRunning 说明另一个实例正占着这个配置目录。登记文件里有地址时
+// 把它带上，用户才知道该去关哪一个。
+func anotherInstanceRunning(baseDir string) error {
+	if prev, state := runlock.ReadState(baseDir); state != runlock.StateNone && prev.Addr != "" {
+		return fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
+	}
+	return fmt.Errorf("%s", tr("log.serve.another_instance_unknown", "同一配置目录的运行权已被占用（可能是正在运行的实例，或一个还开着的 wen config），本次没有启动；待更新包也未改动"))
+}
+
+// applyPendingForServe 只允许持有运行权的一方应用外源更新。调用方必须先取得该配置
+// 目录的运行权（runlock.Lock）；这里再按登记地址复核一次，把「另一实例仍在运行」
+// 挡在目录切换之前。
+func applyPendingForServe(baseDir string) ([]string, error) {
+	// 登记文件此刻可能就是我们自己刚写下的：那时监听已经 bind、但 HTTP 还没有开始
+	// 服务，探活只会白等一个超时。只把「另有其人的登记」当证据。
+	if prev, state := runlock.ReadState(baseDir); state != runlock.StateNone && prev.PID != os.Getpid() && reachable(prev.Addr) {
+		return nil, fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
+	}
+	return agentplugin.NewStore(uiLang, baseDir).ApplyPending(), nil
 }
 
 // relaunch 用（已经被换成新版的）可执行文件接替当前进程。
@@ -317,7 +355,8 @@ var defaultOffPlugins = map[string]bool{
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdate.RestartFunc, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
-	builtins := builtinPlugins(ictx.Lang, cfg, restart)
+	bundleStore := agentplugin.NewStore(ictx.Lang, cfg.BaseDir)
+	builtins := builtinPlugins(ictx.Lang, cfg, restart, bundleStore)
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
 		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
@@ -325,7 +364,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 			logf("log.serve.register_failed", "警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
-	registerBundles(m, ictx.Lang, cfg.BaseDir)
+	registerBundles(m, ictx.Lang, bundleStore)
 	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
 	m.Resolve()
 	return m
@@ -338,8 +377,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 // 或在设置页上关掉（关掉的状态记在 plugins.state.json 里，与内置插件同一套）。
 //
 // 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
-func registerBundles(m *plugin.Manager, lang, baseDir string) {
-	store := agentplugin.NewStore(lang, baseDir)
+func registerBundles(m *plugin.Manager, lang string, store *agentplugin.Store) {
 	bundles, problems := store.List()
 	for _, p := range problems {
 		logf("log.serve.bundle_warning", "警告: 插件包 %s", p)
@@ -360,7 +398,7 @@ func registerBundles(m *plugin.Manager, lang, baseDir string) {
 // 与 buildPlugins 分开，是为了让检查工具能拿到插件实例本身而不只是注册后的状态：
 // 操作（Actions）只在插件启用且初始化之后才经 Manager 暴露出来，而漏译的检查不该
 // 要求把消息通道、心跳与定时任务真的跑起来。
-func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
+func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc, bundleStores ...*agentplugin.Store) []plugin.Plugin {
 	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
@@ -409,6 +447,6 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// bundles 排在 self_update 旁边，理由相同：它不注入任何提示词，注册顺序对它
 		// 只剩展示含义。它得排在下面 registerBundles 注册的那些包**之前**，设置页上
 		// 「外源插件」这一节才会以「装一个新的」开头，而不是把入口埋在一堆卡片后面。
-		bundles.New(lang, cfg.BaseDir),
+		bundles.New(lang, cfg.BaseDir, bundleStores...),
 	}
 }

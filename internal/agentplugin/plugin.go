@@ -82,7 +82,7 @@ type Plugin struct {
 func NewPlugin(lang string, b *Bundle, store *Store) *Plugin {
 	p := &Plugin{name: PluginName(b.Manifest.Name), lang: lang, bundle: b, maxBytes: defaultMaxResultBytes, store: store}
 	if store != nil {
-		tools, err := store.LoadTools(b.Manifest.Name)
+		tools, err := store.LoadTools(b.Manifest.Name, b.Manifest.Version)
 		if err != nil {
 			b.Problems = append(b.Problems, i18n.Tf(lang, "plugin.bundle.problem.rehandshake", "%s，请重新握手一次", err.Error()))
 		}
@@ -252,6 +252,17 @@ func (p *Plugin) StatusLines(lang string) []string {
 		parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.pending", "%d 台 server 尚未握手（工具清单为空）", live))
 	case b.HasMCP:
 		parts = append(parts, i18n.T(lang, "plugin.bundle.status.no_server", "带 MCP 声明但没有可用的 server"))
+	}
+	if p.store != nil {
+		if pending, _ := p.store.Pending(b.Manifest.Name); pending != nil {
+			parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.update_pending", "版本 %s 已暂存，重启后应用", pending.Version))
+		} else if src, _ := p.store.Source(b.Manifest.Name); src != nil {
+			if src.Candidate != nil {
+				parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.update_available", "可更新到 %s（已验签）", src.Candidate.Version))
+			} else if src.LastError != "" {
+				parts = append(parts, i18n.T(lang, "plugin.bundle.status.update_failed", "上次更新检查失败"))
+			}
+		}
 	}
 	if n := len(b.Problems); n > 0 {
 		parts = append(parts, i18n.Tf(lang, "plugin.bundle.status.problems", "%d 处需要留意", n))

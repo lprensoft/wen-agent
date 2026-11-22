@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -247,14 +248,49 @@ func (b *offlineBackend) changePassword(current, next string) error {
 	return b.auth.Change(current, next, b.exposed)
 }
 
-// openBackend 选择模式：有实例在跑就走在线，否则离线。
+// openBackend 选择模式：有实例在跑就走在线，否则离线。用于只读的入口（状态、
+// 插件清单）。
 func openBackend(cfg *config.Config) (backend, error) {
-	if c, ok := dial(cfg.BaseDir); ok {
-		addr := c.base
-		if info, ok := runlock.Read(cfg.BaseDir); ok {
-			addr = info.Addr
+	// 只有核实过身份才读在线数据：判不出身份时连上去，拿到的可能是另一份配置目录的
+	// 状态。
+	info, state := runlock.ReadState(cfg.BaseDir)
+	if state == runlock.StateRunning {
+		if c, ok := dialInfo(info); ok {
+			return &onlineBackend{c: c, addr: info.Addr}, nil
 		}
-		return &onlineBackend{c: c, addr: addr}, nil
 	}
 	return newOfflineBackend(cfg)
+}
+
+// openBackendForWrite 返回可写的后端，以及一个调用方必须在退出前调用的收尾函数。
+//
+// 离线时收尾函数放开运行权：整段编辑期间锁都握在本进程手里，服务不会在用户填表的
+// 中途启动、再把改动盖回去。运行权取不到就说明服务在跑（它在开始提供 HTTP 之前就
+// 已经登记并持锁），或者根本查不了锁文件——两种都不该离线写。
+func openBackendForWrite(cfg *config.Config) (backend, func(), error) {
+	info, state := runlock.ReadState(cfg.BaseDir)
+	if state == runlock.StateUnknown {
+		return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_unknown", "配置目录里的运行实例登记无法核实（可能是权限不足，或实例由另一个账号运行）。为避免改动被运行中的服务覆盖，本次没有写入；请用运行服务的账号执行，或先用 wen status 确认服务状态。"))
+	}
+	if state == runlock.StateRunning {
+		if c, ok := dialInfo(info); ok {
+			return &onlineBackend{c: c, addr: info.Addr}, func() {}, nil
+		}
+		// 登记核实过：那个进程还活着，只是接口暂时不应答（启动中、重启中、探活超时）。
+		// 旧版服务不持运行权，这里能取到锁，但离线写会被它覆盖。
+		return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
+	}
+	run, err := runlock.Lock(cfg.BaseDir)
+	if err != nil {
+		if errors.Is(err, runlock.ErrBusy) {
+			return nil, nil, fmt.Errorf("%s", tr("cli.err.instance_not_ready", "配置目录上还有服务在运行或正在启动，但它的接口暂时没有应答。为避免改动被覆盖，本次没有写入；请稍后重试。"))
+		}
+		return nil, nil, fmt.Errorf("%s", trf("cli.err.instance_check_failed", "无法确认配置目录的运行权（%v）。为避免改动被覆盖，本次没有写入。", err))
+	}
+	b, err := newOfflineBackend(cfg)
+	if err != nil {
+		run.Release()
+		return nil, nil, err
+	}
+	return b, run.Release, nil
 }

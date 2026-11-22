@@ -158,10 +158,10 @@ func TestLocalToolName(t *testing.T) {
 func TestToolCacheRoundTrip(t *testing.T) {
 	store := NewStore("", t.TempDir())
 	want := []ToolInfo{{Server: "fs", Remote: "read", Local: "demo_fs_read", Description: "d"}}
-	if err := store.SaveTools("demo", want); err != nil {
+	if err := store.SaveTools("demo", "1.0.0", want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.LoadTools("demo")
+	got, err := store.LoadTools("demo", "1.0.0")
 	if err != nil || len(got) != 1 || got[0].Local != "demo_fs_read" {
 		t.Fatalf("读回来不对: %v %+v", err, got)
 	}
@@ -169,8 +169,10 @@ func TestToolCacheRoundTrip(t *testing.T) {
 	if list, problems := store.List(); len(list) != 0 || len(problems) != 0 {
 		t.Fatalf("缓存目录被当成插件包了: %d %v", len(list), problems)
 	}
-	store.DropTools("demo")
-	if got, _ := store.LoadTools("demo"); len(got) != 0 {
+	if err := store.DropTools("demo"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.LoadTools("demo", "1.0.0"); len(got) != 0 {
 		t.Error("卸载之后缓存还在")
 	}
 }
@@ -178,7 +180,7 @@ func TestToolCacheRoundTrip(t *testing.T) {
 // 没握过手不是故障，只是清单还空着——M1 装的包、手工拷进来的包都是这样。
 func TestLoadToolsMissingIsNotAnError(t *testing.T) {
 	store := NewStore("", t.TempDir())
-	got, err := store.LoadTools("never-installed")
+	got, err := store.LoadTools("never-installed", "")
 	if err != nil || got != nil {
 		t.Fatalf("缺缓存该安静地返回空: %v %+v", err, got)
 	}
@@ -280,7 +282,7 @@ func TestEndToEndStdio(t *testing.T) {
 	if tools[0].Description == "" || len(tools[0].Schema) == 0 {
 		t.Errorf("描述与 schema 该原样带回来: %+v", tools[0])
 	}
-	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
+	if err := store.SaveTools(b.Manifest.Name, b.Manifest.Version, tools); err != nil {
 		t.Fatal(err)
 	}
 
@@ -378,7 +380,7 @@ func TestEndToEndStreamableHTTP(t *testing.T) {
 	if len(tools) != 1 || tools[0].Local != "demo_remote_ping" {
 		t.Fatalf("工具清单不对: %+v", tools)
 	}
-	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
+	if err := store.SaveTools(b.Manifest.Name, b.Manifest.Version, tools); err != nil {
 		t.Fatal(err)
 	}
 

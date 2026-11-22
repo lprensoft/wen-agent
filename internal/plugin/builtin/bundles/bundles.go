@@ -1,19 +1,16 @@
 // Package bundles 提供设置页上的外源插件包管理入口。
 //
-// 它是「不给模型任何东西的插件」的第二例（第一例是 self_update）：不注入提示词、
-// 不提供工具，只用可配置项、操作入口与状态行三样现成的契约。这么做的理由是那条界线
-// ——加进核心的必须是通用机制而非具体功能。给服务端开一个 /api/bundles/install，
-// 等于让核心知道「外源插件包」这回事；做成插件则核心什么都不必知道，用户还能把它
-// 整个关掉。
-//
-// 附带的好处是终端里的 wen config 也一起有了：插件声明的操作在那边同样会渲染出来，
-// 远程机器上不必为装一个插件包打开浏览器。
+// 它不注入提示词、不提供工具，只用可配置项、操作入口与状态行三样现成契约。
+// 更新检查也归这里：它是系统维护工作，不是模型创建的对话任务。
 package bundles
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"wen/internal/agentplugin"
 	"wen/internal/i18n"
@@ -22,62 +19,127 @@ import (
 
 // Plugin 是外源插件包的管理入口。
 type Plugin struct {
-	lang  string // 进程语言。本插件不给模型任何东西，文案一律走界面语言包
-	store *agentplugin.Store
-	// baseDir 用来推算每个包的 PLUGIN_DATA，握手要用与真正运行时同一份参数。
+	lang    string
+	store   *agentplugin.Store
 	baseDir string
 
-	// mu 保护操作状态。Init 可重入，而 StartAction 与 ActionState 由 HTTP 并发调用。
-	mu       sync.Mutex
-	actSeq   uint64
-	actState plugin.ActionState
+	mu         sync.Mutex
+	actSeq     uint64
+	actState   plugin.ActionState
+	actRunning bool
+	saved      map[string]any
+
+	autoCheck bool
+	interval  time.Duration
+	started   time.Time
+	lastTry   time.Time
+	now       func() time.Time
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	wake      chan struct{}
 }
 
-// New 由 main.go 在建插件时给出配置目录——这与 self_update 拿 Restart 回调是同一种
-// 形状：插件需要一样核心不该替它准备的东西，经构造函数交给它。
-func New(lang, baseDir string) *Plugin {
-	return &Plugin{lang: lang, store: agentplugin.NewStore(lang, baseDir), baseDir: baseDir}
+// New 由 main.go 给出配置目录；可选 store 用来让中央管理卡与各 ext_* 共享操作锁。
+func New(lang, baseDir string, stores ...*agentplugin.Store) *Plugin {
+	store := agentplugin.NewStore(lang, baseDir)
+	if len(stores) > 0 && stores[0] != nil {
+		store = stores[0]
+	}
+	return &Plugin{lang: lang, store: store, baseDir: baseDir, now: time.Now, wake: make(chan struct{}, 1)}
 }
 
 func (p *Plugin) Name() string     { return "bundles" }
 func (p *Plugin) Category() string { return plugin.CategoryExternal }
 
 func (p *Plugin) Description() string {
-	return "外源插件包：装 Agent Plugins 格式的插件包，把它带的技能与 MCP 工具接进来"
+	return "外源插件包：安装 Agent Plugins 包，绑定签名更新来源并检查新版本"
 }
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
-	return []plugin.ConfigField{{
-		Key:   "source",
-		Label: "要安装的插件包",
-		Type:  plugin.FieldString,
-		Description: "本机上的一个目录或 .zip 文件的路径。填好之后点下面的「安装」——" +
-			"这里只认服务所在机器上的路径，浏览器里的文件传不过去。卸载用命令行：wen plugins uninstall <名称>。",
-		Default: "",
-	}}
+	return []plugin.ConfigField{
+		{
+			Key: "source", Label: "要安装的插件包", Type: plugin.FieldString,
+			Description: "本机上的一个目录或 .zip 文件的路径。填好之后点下面的「安装」——" +
+				"这里只认服务所在机器上的路径，浏览器里的文件传不过去。卸载用命令行：wen plugins uninstall <名称>。",
+			Default: "",
+		},
+		{Key: "update_name", Label: "要绑定更新的包名", Type: plugin.FieldString,
+			Description: "一个已经安装的插件包名称；换来源或公钥时先解除绑定。", Default: ""},
+		{Key: "update_url", Label: "更新清单 URL", Type: plugin.FieldString,
+			Description: "发布者提供的 HTTPS update.json；同路径的 update.json.sig 是签名。", Default: ""},
+		{Key: "update_key", Label: "发布者 Ed25519 公钥", Type: plugin.FieldString,
+			Description: "Base64 编码的 32 字节公钥，应从发布者的独立可信渠道取得。", Default: ""},
+		{Key: "auto_check", Label: "自动检查更新", Type: plugin.FieldBool,
+			Description: "只下载并验签更新清单，不下载 ZIP、不安装、不握手、不重启。", Default: true},
+		{Key: "check_hours", Label: "检查间隔（小时）", Type: plugin.FieldInt,
+			Description: "每个已绑定来源按各自上次成功检查的时间安排；失败后至少一小时再试。",
+			Default:     24, Min: plugin.IntPtr(1), Max: plugin.IntPtr(720)},
+	}
 }
 
-// Init 只校验有没有可用的存放位置。这个插件不起任何后台活动。
-func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
+// Init 可重入：先停旧检查循环，再应用新配置。
+func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
+	p.Stop()
+	if p.store == nil || p.store.Dir() == "" {
+		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.bundles.no_base_dir", "没有可用的配置目录，无法管理插件包"))
+	}
+	hours := plugin.CfgInt(cfg, "check_hours", 24)
+	if hours < 1 {
+		hours = 1
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	saved := make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		saved[k] = v
+	}
 	p.mu.Lock()
 	p.lang = ictx.Lang
+	p.saved = saved
+	p.autoCheck = plugin.CfgBool(cfg, "auto_check", true)
+	p.interval = time.Duration(hours) * time.Hour
+	p.started = p.now()
+	p.lastTry = time.Time{}
+	auto := p.autoCheck
 	p.mu.Unlock()
-	if p.store == nil || p.store.Dir() == "" {
-		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.bundles.no_base_dir",
-			"没有可用的配置目录，无法管理插件包"))
+
+	if auto && !ictx.ManualTime {
+		ctx, cancel := context.WithCancel(context.Background())
+		p.mu.Lock()
+		p.cancel = cancel
+		p.wg.Add(1)
+		p.mu.Unlock()
+		go p.loop(ctx)
 	}
 	return nil
 }
 
-// SystemPrompt 与 Tools 都为空：它是给人用的，不给模型任何东西。
+// Stop 停止后台检查；已在进行的 HTTP 请求经 context 取消，不等待安装或握手操作。
+func (p *Plugin) Stop() {
+	p.mu.Lock()
+	cancel := p.cancel
+	p.cancel = nil
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	p.wg.Wait()
+}
+
 func (p *Plugin) SystemPrompt() string { return "" }
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
-// langOf 取进程语言。
 func (p *Plugin) langOf() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lang
+}
+
+func (p *Plugin) savedString(key string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return plugin.CfgString(p.saved, key, "")
 }
 
 func (p *Plugin) StatusLines(lang string) []string {
@@ -87,18 +149,34 @@ func (p *Plugin) StatusLines(lang string) []string {
 	}
 	var tools int
 	for _, b := range bundles {
-		ts, _ := p.store.LoadTools(b.Manifest.Name)
+		ts, _ := p.store.LoadTools(b.Manifest.Name, b.Manifest.Version)
 		tools += len(ts)
 	}
-	line := i18n.Tf(lang, "plugin.bundles.status.line", "🧩 外源插件包：%d 个，%d 件工具",
-		len(bundles), tools)
+	line := i18n.Tf(lang, "plugin.bundles.status.line", "🧩 外源插件包：%d 个，%d 件工具", len(bundles), tools)
 	if n := len(problems); n > 0 {
 		line += i18n.Tf(lang, "plugin.bundles.status.broken", "，%d 个读不出来", n)
+	}
+	if sources, err := p.store.Sources(); err == nil && len(sources) > 0 {
+		var candidates, pending int
+		for name, src := range sources {
+			if src.Candidate != nil {
+				candidates++
+			}
+			if p, _ := p.store.Pending(name); p != nil {
+				pending++
+			}
+		}
+		line += i18n.Tf(lang, "plugin.bundles.status.tracked", "，%d 个签名来源", len(sources))
+		if candidates > 0 {
+			line += i18n.Tf(lang, "plugin.bundles.status.updates", "，%d 个已验签更新", candidates)
+		}
+		if pending > 0 {
+			line += i18n.Tf(lang, "plugin.bundles.status.pending", "，%d 个等待重启", pending)
+		}
 	}
 	return []string{line}
 }
 
-// names 返回已装插件包的名字，供操作说明里列出来。
 func (p *Plugin) names() []string {
 	bundles, _ := p.store.List()
 	out := make([]string, 0, len(bundles))
@@ -108,14 +186,23 @@ func (p *Plugin) names() []string {
 	return out
 }
 
-// installedSummary 是给操作说明用的运行时事实：已经装了哪几个。
-//
-// 只列名字，不成句：它接在译好的说明后面而本身不翻译（见 plugin.ActionDef.Detail），
-// 掺进中文的句子，英文界面上就会冒出一行中文。
 func (p *Plugin) installedSummary() string {
 	names := p.names()
 	if len(names) == 0 {
 		return ""
 	}
+	return "· " + strings.Join(names, " · ")
+}
+
+func (p *Plugin) trackedSummary() string {
+	sources, err := p.store.Sources()
+	if err != nil || len(sources) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	return "· " + strings.Join(names, " · ")
 }

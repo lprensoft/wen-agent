@@ -26,17 +26,18 @@ It includes:
 | `auth.json` | The PBKDF2-derived access password |
 | `sessions/` | Every conversation |
 | `plugins/` | Memories, archives, heartbeat state, channel tokens and so on |
-| `bundles/` | External plugin bundles |
+| `bundles/` | External plugin bundles, signed update sources and publisher public keys |
 
 It does not include:
 
-- `wen.lock` (the running-instance record);
+- `wen.lock` (the running-instance record) and `wen.runlock` (the run-right lock file);
+- pending, staging and rollback directories and operation locks for external bundle updates (sources migrate, half-finished updates and process locks do not). If a swap has started and the live bundle is missing or a rollback directory exists, export refuses to run; start the service to finish recovery first rather than producing an incomplete archive;
 - symbolic links and special files;
 - a session directory outside the configuration directory (`session.dir` pointing elsewhere prints a note);
 - project memories outside the configuration directory: when the `memory` plugin uses `scope=project` and the working directory is elsewhere, it prints a note and skips them; when the working directory is inside the configuration directory, the per-domain `memories-<tag>` libraries are included as well.
 - logs, build outputs and empty directories.
 
-**The backup contains sensitive data.** `models.json` holds plaintext API keys, plugin state holds channel credentials, `auth.json` holds the derived password, and the sessions hold every conversation. The file mode is 0600, but encrypt it or store it somewhere safe anyway; do not commit it to a repository.
+**The backup contains sensitive data.** `models.json` holds plaintext API keys, plugin state holds channel credentials, `auth.json` holds the derived password, and the sessions hold every conversation. External update source URLs may also reveal private deployment addresses (the public keys themselves are not secret). The file mode is 0600, but encrypt it or store it somewhere safe anyway; do not commit it to a repository.
 
 ## Restoring
 

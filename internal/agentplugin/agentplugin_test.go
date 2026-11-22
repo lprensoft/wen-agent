@@ -196,6 +196,31 @@ func TestInstallBadBundleLeavesNothing(t *testing.T) {
 	if list, problems := store.List(); len(list) != 0 || len(problems) != 0 {
 		t.Fatalf("失败的安装留下了残骸: %d 个包，%v", len(list), problems)
 	}
+	if _, err := os.Stat(store.updatesDir()); !os.IsNotExist(err) {
+		t.Fatalf("校验失败的安装不该创建更新状态目录：%v", err)
+	}
+}
+
+func TestDescendRecognizesForeignFormatsAtRoot(t *testing.T) {
+	for _, f := range formats[1:] {
+		t.Run(f.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(f.Manifest)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manifest := []byte(`{"name":"demo","version":"1.0.0"}`)
+			if err := os.WriteFile(filepath.Join(dir, f.Manifest), manifest, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := descend("", dir)
+			if err != nil || got != dir {
+				t.Fatalf("根层 %s 清单没有被识别：%q, %v", f.Name, got, err)
+			}
+		})
+	}
 }
 
 func TestInstallFromZip(t *testing.T) {

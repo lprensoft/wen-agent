@@ -37,8 +37,8 @@ internal/prompt/         the locale pack for model-side prompts and tool text
 internal/oslocale/       the operating system's locale setting
 internal/pathsafe/       path containment checks (symbolic links and directory junctions)
 internal/skillroots/     the process-wide registry of skill directories (user skills and bundle skills share one list)
-internal/runlock/        running-instance registration (wen.lock), which wen config uses to decide
-                         online vs offline
+internal/runlock/        the run right for a config directory (wen.runlock, an exclusive lock) and
+                         the instance record (wen.lock) that wen config uses to decide online vs offline
 internal/updater/        self-update: find releases, download and verify, replace the executable,
                          restart (each platform its own way)
 internal/session/        JSONL session storage

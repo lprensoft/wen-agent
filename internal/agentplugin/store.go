@@ -1,11 +1,14 @@
 package agentplugin
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // StoreDirName 是已安装插件包的存放目录名，位于配置目录之下。
@@ -21,14 +24,20 @@ const StoreDirName = "bundles"
 type Store struct {
 	lang string
 	dir  string
+
+	// opMu 串行化安装、来源绑定、检查与暂存。网络请求期间不持插件 Manager 的锁；
+	// 同进程中的 bundles 与 ext_* 必须共享同一个 Store，才能共享这把锁。
+	opMu   sync.Mutex
+	client updateDoer
 }
 
 // NewStore 按配置目录定位存放处。目录可能不存在，由写入方按需创建。
 func NewStore(lang, baseDir string) *Store {
-	if baseDir == "" {
-		return &Store{lang: lang}
+	s := &Store{lang: lang, client: newUpdateClient(lang)}
+	if baseDir != "" {
+		s.dir = filepath.Join(baseDir, StoreDirName)
 	}
-	return &Store{lang: lang, dir: filepath.Join(baseDir, StoreDirName)}
+	return s
 }
 
 // Dir 返回存放目录；为空表示当前没有可用的位置（没有配置目录）。
@@ -86,15 +95,72 @@ func (s *Store) Remove(name string) error {
 	if err := checkName(s.lang, name); err != nil {
 		return err
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path := s.Path(name)
 	if path == "" {
 		return fmt.Errorf("没有可用的插件包目录")
 	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("没有装过名为 %q 的插件包", name)
-		}
-		return err
+	_, statErr := os.Stat(path)
+	missing := os.IsNotExist(statErr)
+	if statErr != nil && !missing {
+		return statErr
 	}
-	return os.RemoveAll(path)
+	// 正式目录没了不代表卸载已经完成：上一次可能就是删完目录、在清缓存时失败的。
+	// 先记下还有哪些残留，再逐项清理，重试才能把这件事做完。
+	sources, sourcesErr := s.readSources()
+	_, tracked := sources[name]
+	residue := !missing || (sourcesErr == nil && tracked)
+	for _, leftover := range []string{
+		s.cachePath(name), s.pendingPath(name), s.stagedPath(name),
+		s.rollbackPath(name), filepath.Join(s.updateWorkDir(), name+".zip"),
+	} {
+		if leftover == "" {
+			continue
+		}
+		if _, err := os.Stat(leftover); err == nil {
+			residue = true
+		}
+	}
+	if !missing {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+
+	// 缓存清理与正式目录删除在同一把锁内。卸载同时清掉更新来源与尚未应用的暂存；
+	// PLUGIN_DATA 仍在包外，照旧保留。各项都尽量清理完再汇总错误，尤其不能让一份
+	// 坏 sources.json 把 pending 留下来。
+	var errs []error
+	if err := s.DropTools(name); err != nil {
+		errs = append(errs, err)
+	}
+	if err := os.Remove(s.pendingPath(name)); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+	for _, path := range []string{s.stagedPath(name), s.rollbackPath(name), filepath.Join(s.updateWorkDir(), name+".zip")} {
+		if err := os.RemoveAll(path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if sourcesErr != nil {
+		errs = append(errs, sourcesErr)
+	} else if tracked {
+		delete(sources, name)
+		if err := s.writeSources(sources); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if !residue {
+		return fmt.Errorf("没有装过名为 %q 的插件包", name)
+	}
+	return nil
 }

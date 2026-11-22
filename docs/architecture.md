@@ -28,7 +28,8 @@ internal/prompt/         模型侧提示词与工具文案的语言包
 internal/oslocale/       操作系统区域设置
 internal/pathsafe/       路径越界检查（符号链接与目录联接）
 internal/skillroots/     技能目录的进程级登记处（用户技能与外源插件包技能共用一份清单）
-internal/runlock/        运行实例登记（wen.lock），wen config 据此判定在线 / 离线
+internal/runlock/        配置目录的运行权（wen.runlock，独占锁）与实例登记（wen.lock），
+                         wen config 据登记判定在线 / 离线
 internal/updater/        自更新：查发布、下载校验、替换可执行文件、重启（三平台各自的做法）
 internal/session/        JSONL 会话存储
 internal/server/         HTTP API + SSE + 内嵌 Web UI
