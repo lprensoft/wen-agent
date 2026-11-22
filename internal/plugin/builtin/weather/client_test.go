@@ -228,3 +228,41 @@ func TestFirstInstantOfDateHandlesCrossMidnightFallback(t *testing.T) {
 		t.Fatalf("firstInstantOfDate = %v (%v), %v，期望 %v", got, got.UTC(), ok, want)
 	}
 }
+
+// 闰年末 ZoneBounds 会返回不前进的边界；不能因此把 12 月 31 日与 1 月 1 日
+// 判成不存在，导致前一晚的降雨提醒漏发。
+func TestFirstInstantOfDateAcrossLeapYearEnd(t *testing.T) {
+	cases := []struct {
+		zone, date string
+		want       time.Time
+	}{
+		{"Europe/London", "2028-12-31", time.Date(2028, 12, 31, 0, 0, 0, 0, time.UTC)},
+		{"Europe/London", "2029-01-01", time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"America/New_York", "2028-12-31", time.Date(2028, 12, 31, 5, 0, 0, 0, time.UTC)},
+		{"America/New_York", "2029-01-01", time.Date(2029, 1, 1, 5, 0, 0, 0, time.UTC)},
+	}
+	for _, c := range cases {
+		loc, err := time.LoadLocation(c.zone)
+		if err != nil {
+			t.Skipf("没有时区数据: %v", err)
+		}
+		got, ok := firstInstantOfDate(c.date, loc)
+		if !ok || !got.Equal(c.want) {
+			t.Errorf("%s %s = %v, %v，期望 %v", c.zone, c.date, got, ok, c.want)
+		}
+	}
+}
+
+// 区间不前进时兜底扫描偏移变化；伦敦 2029-03-25 01:00 UTC 进入 BST。
+func TestNextOffsetChangeFindsTransition(t *testing.T) {
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	from := time.Date(2029, 3, 25, 0, 0, 0, 0, time.UTC)
+	got := nextOffsetChange(from, from.Add(48*time.Hour), london)
+	want := time.Date(2029, 3, 25, 1, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("nextOffsetChange = %v，期望 %v", got.UTC(), want)
+	}
+}
