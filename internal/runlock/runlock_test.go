@@ -66,7 +66,8 @@ func TestReleaseKeepsRegistrationItNeverWrote(t *testing.T) {
 func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
 	dir := t.TempDir()
 	me := os.Getpid()
-	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:8090"}`, me)
+	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:8090","started":%q}`,
+		me, time.Now().Format(time.RFC3339))
 	if err := os.WriteFile(releasingPath(Path(dir)), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +80,23 @@ func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
 	}
 	if info, ok := Read(dir); !ok || info.PID != 456 {
 		t.Fatalf("有正式登记时不该回落到 .releasing：%+v %v", info, ok)
+	}
+}
+
+// PID 被复用的情形：登记里的 PID 现在确实活着，但它比这个进程还老，说明写登记的
+// 那个进程早已退出，活着的是后来占了同一个号的新进程。
+func TestReadRejectsRegistrationOlderThanProcess(t *testing.T) {
+	if _, known := processStart(os.Getpid()); !known {
+		t.Skip("这个平台查不到进程创建时间")
+	}
+	dir := t.TempDir()
+	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:8090","started":%q}`,
+		os.Getpid(), time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	if err := os.WriteFile(releasingPath(Path(dir)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, ok := Read(dir); ok {
+		t.Fatalf("采纳了 PID 复用之后的旧登记：%+v", info)
 	}
 }
 

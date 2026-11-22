@@ -2,13 +2,24 @@
 
 package runlock
 
-import "syscall"
+import (
+	"errors"
+	"syscall"
+)
 
-// processAlive 报告 pid 对应的进程是否还在。没有权限给它发信号也算「活着」之外的
-// 情况：这里只需要一个保守的答案，判不出来就当它已经退出，调用方会退回离线模式。
+// processAlive 报告 pid 现在是否「可能还在运行」。
+//
+// 发 0 号信号只看进程在不在：成功 = 在；ESRCH = 不在了；EPERM = 在，但不归当前
+// 账号。后一种必须算活着——把它当成已退出会让配置工具绕过正在运行的服务去直接写
+// 状态文件，而服务端下次全量重写会把那些改动抹掉。身份确认交给 processStart。
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil
+	return aliveFromSignalError(syscall.Kill(pid, 0))
+}
+
+// aliveFromSignalError 是上面那条判据本身，单独拆出来以便在任意平台测。
+func aliveFromSignalError(err error) bool {
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

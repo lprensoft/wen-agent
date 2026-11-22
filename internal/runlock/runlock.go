@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const (
@@ -140,6 +141,10 @@ func dropRegistration(path string, pid int) {
 // 但备用登记只在它记录的那个进程还活着时才可信：旧实例退出时只清 wen.lock，这个
 // 文件会留下；端口后来可能被另一份配置目录的服务复用，那个地址应答的已经不是这边
 // 的实例，连上去改的就是别人的配置。
+//
+// 「活着」还要再加上一层：那个 PID 得是写下这份登记的进程，而不是被系统复用了的
+// 另一个进程。判据是进程的创建时间不早于登记时间——登记由父进程在启动时写下，创建
+// 只可能更早；晚于它的只可能是后来占了同一个 PID 的进程。
 func Read(dir string) (Info, bool) {
 	if info, ok := readInfo(Path(dir)); ok {
 		return info, true
@@ -148,8 +153,21 @@ func Read(dir string) (Info, bool) {
 	if !ok || !processAlive(info.PID) {
 		return Info{}, false
 	}
+	if started, err := time.Parse(time.RFC3339, info.Started); err == nil {
+		// 创建时间在未来只可能是取错了字段或平台换算不对：这种「判不出来」不能拿来
+		// 否决一份可能有效的登记。
+		if created, known := processStart(info.PID); known &&
+			created.After(started.Add(registrationSkew)) &&
+			created.Before(time.Now().Add(registrationSkew)) {
+			return Info{}, false
+		}
+	}
 	return info, true
 }
+
+// registrationSkew 是「进程创建」与「登记时间」之间允许的倒挂。两者都取自同一台
+// 机器的同一个时钟，正常只会差进程初始化那一下；留几秒是给 NTP 微调与平台取整。
+const registrationSkew = 2 * time.Second
 
 // releasingPath 是交接中被临时改名的登记文件。
 func releasingPath(path string) string {
