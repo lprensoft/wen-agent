@@ -396,3 +396,14 @@ func TestLoopStops(t *testing.T) {
 		t.Fatal("Stop 卡住了")
 	}
 }
+
+// 同一个地址写两遍只算一个源：抓取、错误记录与状态页都用去重后的同一份列表。
+func TestParseFeedsDedupes(t *testing.T) {
+	feeds, err := parseFeeds("", "https://a.example/feed\nhttps://b.example/feed\nhttps://a.example/feed\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feeds) != 2 || feeds[0] != "https://a.example/feed" || feeds[1] != "https://b.example/feed" {
+		t.Errorf("feeds = %v，期望按首次出现去重", feeds)
+	}
+}

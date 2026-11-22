@@ -582,6 +582,9 @@ func renderConditions(lang string, r Report) string {
 // 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这几项时同样整段为空。
 func renderDays(lang string, r Report, now time.Time, showTomorrow bool) string {
 	const layout = "2006-01-02"
+	// daily 的日期按观测地点当地时区给，和状态页一样先换算到同一时区，
+	// 否则服务器刚过午夜时，远端城市的「今天」会被当成对不上而整段丢掉。
+	now = r.localNow(now)
 	var parts []string
 	if r.Yesterday.known() && r.Yesterday.Date == now.AddDate(0, 0, -1).Format(layout) {
 		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.yesterday", "昨天%s，%.0f~%.0f℃",

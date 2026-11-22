@@ -60,13 +60,18 @@ type Report struct {
 	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
 }
 
-// localDate 返回这份观测所在城市的当地日期。
+// localNow 把查询时刻换算到观测地点时区。
 // 没有偏移的旧缓存退回查询侧；新缓存按取数时记下的偏移换算。
-func (r Report) localDate(now time.Time) string {
+func (r Report) localNow(now time.Time) time.Time {
 	if r.UTCOffsetSet {
-		now = now.In(time.FixedZone("", r.UTCOffsetSeconds))
+		return now.In(time.FixedZone("", r.UTCOffsetSeconds))
 	}
-	return now.Format("2006-01-02")
+	return now
+}
+
+// localDate 返回这份观测所在城市的当地日期。
+func (r Report) localDate(now time.Time) string {
+	return r.localNow(now).Format("2006-01-02")
 }
 
 // DayInfo 是一天的天气概要。Date 是当地日期（如 2026-08-21）：「明天」会在午夜
