@@ -673,6 +673,7 @@
   "log.serve.relaunching": "restarting with the new program: %s",
   "log.serve.restarting": "%s: closing this instance…",
   "log.serve.runlock_failed": "note: could not register the running instance (%v); wen config will only be able to edit the configuration offline",
+  "log.serve.runlock_unavailable": "could not take the right to run this configuration directory: %v; this instance was not started and pending bundles were not changed",
   "log.serve.shutdown_signal": "shutdown signal received, closing…",
   "log.serve.started": "Wen Agent %s is up: http://%s",
   "log.slack.auth_failed": "slack_bot: Socket Mode connection failed (%v)",

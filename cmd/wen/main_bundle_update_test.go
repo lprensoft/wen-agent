@@ -21,11 +21,14 @@ func TestApplyPendingForServeRefusesLiveInstance(t *testing.T) {
 	}))
 	defer ts.Close()
 	base := t.TempDir()
-	release, err := runlock.Acquire(base, runlock.Info{PID: 123, Addr: strings.TrimPrefix(ts.URL, "http://")})
+	inst, err := runlock.Lock(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	if err := inst.Register(runlock.Info{PID: 123, Addr: strings.TrimPrefix(ts.URL, "http://")}); err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Release()
 
 	formal := filepath.Join(base, "bundles", "demo")
 	if err := os.MkdirAll(formal, 0o755); err != nil {

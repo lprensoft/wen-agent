@@ -44,51 +44,62 @@ func Path(dir string) string {
 // ErrBusy 表示配置目录已被另一个存活的服务实例占用。
 var ErrBusy = errors.New("同一配置目录已有实例在运行")
 
-// Acquire 取得该配置目录的运行权并写入登记信息，返回释放函数。
+// Run 是一个进程对某个配置目录的运行权。
+type Run struct {
+	dir    string
+	f      *os.File
+	unlock func() error
+	once   sync.Once
+}
+
+// Lock 取得配置目录的运行权。同一目录已有存活实例（握着这把锁）时返回 ErrBusy，
+// 调用方应当退出：两个实例会互相覆盖状态文件，后来的那个还会在启动时替换前者正在
+// 读取的插件目录。
 //
-// 已有存活实例时返回 ErrBusy，调用方应当退出：两个实例会互相覆盖状态文件，后来的
-// 那个还会在启动时替换前者正在读取的插件目录。其它错误（目录不可写等）意味着没能
-// 登记，配置工具会退回离线模式，服务本身仍可照常运行。
-//
-// 返回的释放函数可以重复调用。
-func Acquire(dir string, info Info) (release func(), err error) {
-	raw, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return func() {}, err
-	}
+// 取锁与写登记分开，是因为**旧版服务只写 wen.lock、不持这把锁**。升级之后从另一个
+// 端口启动的新版能顺利拿到锁，若这时直接覆盖登记，旧实例就没人知道了。调用方要在
+// Lock 之后先核对已有登记（地址能应答就别启动），确认之后再 Register。
+func Lock(dir string) (*Run, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return func() {}, err
+		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(dir, lockFileName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		if lockOpenBusy(err) {
-			return func() {}, ErrBusy
+			return nil, ErrBusy
 		}
-		return func() {}, err
+		return nil, err
 	}
 	unlock, err := lockExclusive(f)
 	if err != nil {
 		_ = f.Close()
 		if errors.Is(err, errLockBusy) {
-			return func() {}, ErrBusy
+			return nil, ErrBusy
 		}
-		return func() {}, err
+		return nil, err
 	}
-	if err := os.WriteFile(Path(dir), raw, 0o644); err != nil {
-		_ = unlock()
-		_ = f.Close()
-		return func() {}, err
+	return &Run{dir: dir, f: f, unlock: unlock}, nil
+}
+
+// Register 写下登记信息，供配置工具判断该走在线还是离线模式。
+// 写入失败不影响运行权本身：调用方仍握着锁，只是配置工具会退回离线模式。
+func (r *Run) Register(info Info) error {
+	raw, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
 	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			// 先删登记文件、再放开运行权：反过来的话，新实例可能已经取得运行权并
-			// 写下自己的登记，这里再删就把它的删掉了。
-			_ = os.Remove(Path(dir))
-			_ = unlock()
-			_ = f.Close()
-		})
-	}, nil
+	return os.WriteFile(Path(r.dir), raw, 0o644)
+}
+
+// Release 放开运行权。可以重复调用。
+func (r *Run) Release() {
+	r.once.Do(func() {
+		// 先删登记文件、再放开运行权：反过来的话，新实例可能已经取得运行权并写下
+		// 自己的登记，这里再删就把它的删掉了。
+		_ = os.Remove(Path(r.dir))
+		_ = r.unlock()
+		_ = r.f.Close()
+	})
 }
 
 // Read 读取登记文件。第二个返回值为 false 表示没有登记（文件缺失或内容损坏）。

@@ -66,6 +66,18 @@ func TestExportWaitsForBundleUpdateLock(t *testing.T) {
 	}
 }
 
+// 只读快照上建不出锁文件（这里用一个占住 .updates 名字的文件模拟），导出仍应成功。
+func TestExportToleratesUnavailableUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	if err := os.WriteFile(filepath.Join(base, "bundles", ".updates"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("取不到更新锁时应按只读数据继续导出：%v", err)
+	}
+}
+
 func TestExportReleasesBundleUpdateLock(t *testing.T) {
 	base := baseFixture(t)
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")

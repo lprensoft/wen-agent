@@ -6,13 +6,16 @@ import (
 	"testing"
 )
 
-func TestAcquireIsExclusivePerDirectory(t *testing.T) {
+func TestLockIsExclusivePerDirectory(t *testing.T) {
 	dir := t.TempDir()
-	release, err := Acquire(dir, Info{PID: 1, Addr: "127.0.0.1:8090"})
+	inst, err := Lock(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Acquire(dir, Info{PID: 2, Addr: "127.0.0.1:8091"}); !errors.Is(err, ErrBusy) {
+	if err := inst.Register(Info{PID: 1, Addr: "127.0.0.1:8090"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lock(dir); !errors.Is(err, ErrBusy) {
 		t.Fatalf("第二个实例没有被拦住：%v", err)
 	}
 	info, ok := Read(dir)
@@ -20,14 +23,37 @@ func TestAcquireIsExclusivePerDirectory(t *testing.T) {
 		t.Fatalf("第二个实例改写了登记：%+v %v", info, ok)
 	}
 
-	release()
-	release() // 重复调用不该出问题
+	inst.Release()
+	inst.Release() // 重复调用不该出问题
 	if _, err := os.Stat(Path(dir)); !os.IsNotExist(err) {
 		t.Fatalf("释放后登记文件还在：%v", err)
 	}
-	again, err := Acquire(dir, Info{PID: 3, Addr: "127.0.0.1:8091"})
+	again, err := Lock(dir)
 	if err != nil {
 		t.Fatalf("前一个实例退出后仍取不到运行权：%v", err)
 	}
-	defer again()
+	defer again.Release()
+}
+
+// 旧版服务只写登记、不持运行权：新版取到锁之后、Register 之前，必须还能读到它的
+// 地址，否则 startup 无法发现它仍在运行。
+func TestLockKeepsExistingRegistrationUntilRegister(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte(`{"pid":123,"addr":"127.0.0.1:8090"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Release()
+	if info, ok := Read(dir); !ok || info.Addr != "127.0.0.1:8090" {
+		t.Fatalf("取锁时覆盖了已有登记：%+v %v", info, ok)
+	}
+	if err := inst.Register(Info{PID: 4, Addr: "127.0.0.1:8091"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := Read(dir); info.PID != 4 {
+		t.Fatalf("登记没有写进去：%+v", info)
+	}
 }

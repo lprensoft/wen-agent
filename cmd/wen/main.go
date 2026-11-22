@@ -122,19 +122,31 @@ func runServe(args []string) {
 	if err != nil {
 		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
 	}
-	releaseLock, lockErr := runlock.Acquire(cfg.BaseDir, runlock.Info{
-		PID: os.Getpid(), Addr: addr, Version: version.Version,
-		Started: time.Now().Format(time.RFC3339),
-	})
+	inst, lockErr := runlock.Lock(cfg.BaseDir)
 	if lockErr != nil {
 		_ = ln.Close()
 		if errors.Is(lockErr, runlock.ErrBusy) {
 			log.Fatal(anotherInstanceRunning(cfg.BaseDir))
 		}
-		// 拿不到运行权只是登记不上，配置工具会退回离线模式，不该拦住服务启动。
-		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", lockErr)
+		// 没有运行权就既不能应用待更新包（那会改动插件目录），也不能和别的实例共用
+		// 状态，所以直接退出，而不是带着半个启动流程继续跑。
+		fatalf("log.serve.runlock_unavailable", "无法取得配置目录的运行权（%v），本次没有启动；待更新包也未改动", lockErr)
 	}
-	defer releaseLock()
+	// 旧版服务只写 wen.lock、不持这把锁，取锁不会与它冲突：覆盖登记之前按地址确认
+	// 一次，别把它的登记改成自己的。
+	if prev, ok := runlock.Read(cfg.BaseDir); ok && prev.PID != os.Getpid() && reachable(prev.Addr) {
+		inst.Release()
+		_ = ln.Close()
+		log.Fatal(anotherInstanceRunning(cfg.BaseDir))
+	}
+	if err := inst.Register(runlock.Info{
+		PID: os.Getpid(), Addr: addr, Version: version.Version,
+		Started: time.Now().Format(time.RFC3339),
+	}); err != nil {
+		// 登记失败只是让配置工具退回离线模式，运行权仍在手里。
+		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
+	}
+	defer inst.Release()
 
 	problems, err := applyPendingForServe(cfg.BaseDir)
 	if err != nil {
@@ -232,7 +244,7 @@ func runServe(args []string) {
 		// 交棒之前必须先松开这两样：端口（Windows 上新进程要重新 bind 它）与
 		// 配置目录的运行权（新进程起来第一件事就是重新取得它）。顺序是硬的——
 		// Shutdown 已经关掉监听，这里放开运行权，然后才轮到新进程。
-		releaseLock()
+		inst.Release()
 		relaunch(exePath)
 	}
 }
@@ -247,7 +259,7 @@ func anotherInstanceRunning(baseDir string) error {
 }
 
 // applyPendingForServe 只允许持有运行权的一方应用外源更新。调用方必须先取得该配置
-// 目录的运行权（runlock.Acquire）；这里再按登记地址复核一次，把「另一实例仍在运行」
+// 目录的运行权（runlock.Lock）；这里再按登记地址复核一次，把「另一实例仍在运行」
 // 挡在目录切换之前。
 func applyPendingForServe(baseDir string) ([]string, error) {
 	// 登记文件此刻可能就是我们自己刚写下的：那时监听已经 bind、但 HTTP 还没有开始

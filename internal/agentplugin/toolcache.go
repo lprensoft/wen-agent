@@ -1,6 +1,7 @@
 package agentplugin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -115,6 +116,13 @@ func (s *Store) SaveTools(bundle, version string, tools []ToolInfo) error {
 	if path == "" {
 		return fmt.Errorf("没有可用的缓存位置")
 	}
+	// 写入必须与「按版本检查、再删除」互斥（finishApply 里的那条清理）。否则清理
+	// 可能读到旧缓存、在这里写完之后把新文件删掉，而握手已经报告成功。
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -132,6 +140,9 @@ var removeToolCache = os.Remove
 // 更新应用后的清理可能失败（回滚目录或 pending 暂时删不掉），并在用户重新握手之后
 // 才重试。那时缓存已经标着新版本——用户正是照着提示握完手的——再删掉它，重启之后
 // 工具又会消失。
+//
+// 调用方必须已经持有更新锁（finishApply 在 ApplyPending 的锁内调用），这样「读版本、
+// 再删除」相对于 SaveTools 才是原子的。
 func (s *Store) DropToolsExceptVersion(bundle, version string) error {
 	path := s.cachePath(bundle)
 	if path == "" {

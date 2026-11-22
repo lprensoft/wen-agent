@@ -27,8 +27,35 @@ var (
 // 备份这类要整体读取 bundles 目录的操作必须从头持有它：启动时的目录切换（先把旧包
 // 移进 work，再把新包顶上）如果正好发生在预检与遍历之间，归档会漏掉那个包，却仍然
 // 报告成功。
+//
+// 取不到锁而目录又写不进去时（从只读快照导出），按只读数据放行：更新操作同样改不动
+// 它，不存在需要互斥的并发切换。
 func LockUpdates(ctx context.Context, lang, baseDir string) (func(), error) {
-	return NewStore(lang, baseDir).acquireUpdateLock(ctx)
+	unlock, err := NewStore(lang, baseDir).acquireUpdateLock(ctx)
+	if err == nil {
+		return unlock, nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		// 等锁超时：另一个更新操作确实在跑。
+		return nil, err
+	}
+	if dirWritable(filepath.Join(baseDir, StoreDirName, updateDirName)) {
+		return nil, err
+	}
+	return func() {}, nil
+}
+
+// dirWritable 探一下目录能不能写。只在取锁失败时调用：写不进去说明是只读快照，
+// 而不是有别人持着锁。
+func dirWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".probe-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 // acquireUpdateLock 跨进程串行化「读状态—修改—写回」。opMu 只管一个 Store
