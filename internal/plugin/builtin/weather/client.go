@@ -97,9 +97,44 @@ func (r Report) localNow(now time.Time) time.Time {
 	return now
 }
 
+const dateLayout = "2006-01-02"
+
 // localDate 返回这份观测所在城市的当地日期。
 func (r Report) localDate(now time.Time) string {
-	return r.localNow(now).Format("2006-01-02")
+	return r.localNow(now).Format(dateLayout)
+}
+
+// firstInstantOfDate 返回 date 在 loc 中实际开始的第一个瞬间。
+//
+// 有些城市在夏令时切换时直接跳过午夜（如圣地亚哥 2026-09-06 00:00 → 01:00），
+// 用 ParseInLocation 解析 00:00 会落到前一天 23:00。这里按 UTC 轴二分，
+// 找当地日期第一次到达 date 的时刻；整日被跳过的日期返回 false。
+func firstInstantOfDate(date string, loc *time.Location) (time.Time, bool) {
+	base, err := time.Parse(dateLayout, date) // UTC 的日历日，不带当地 DST
+	if err != nil {
+		return time.Time{}, false
+	}
+	lo := base.Add(-36 * time.Hour).Unix()
+	hi := base.Add(36 * time.Hour).Unix()
+	if time.Unix(lo, 0).In(loc).Format(dateLayout) >= date {
+		return time.Time{}, false
+	}
+	if time.Unix(hi, 0).In(loc).Format(dateLayout) < date {
+		return time.Time{}, false
+	}
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if time.Unix(mid, 0).In(loc).Format(dateLayout) >= date {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	t := time.Unix(hi, 0).In(loc)
+	if t.Format(dateLayout) != date {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // DayInfo 是一天的天气概要。Date 是当地日期（如 2026-08-21）：「明天」会在午夜

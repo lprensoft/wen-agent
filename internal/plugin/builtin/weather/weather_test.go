@@ -456,3 +456,21 @@ func TestTurnPromptTomorrowUsesPersonaClock(t *testing.T) {
 		t.Errorf("问起明天应注入: %q", out)
 	}
 }
+
+// 当地凌晨调用 AddDate 会撞上不存在的午夜；前后一天要按日历算。
+func TestRenderDaysAtSkippedMidnight(t *testing.T) {
+	santiago, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	now := time.Date(2026, 9, 5, 0, 30, 0, 0, santiago)
+	r := Report{
+		Timezone: "America/Santiago",
+		Today:    DayInfo{Date: "2026-09-05", Condition: "多云", MinC: 5, MaxC: 10},
+		Tomorrow: DayInfo{Date: "2026-09-06", Condition: "小雨", MinC: 6, MaxC: 11},
+	}
+	got := renderDays("", r, now, true)
+	if !strings.Contains(got, "今天预计多云") || !strings.Contains(got, "明天预计小雨") {
+		t.Errorf("renderDays = %q，期望跨过不存在的午夜仍能认出明天", got)
+	}
+}

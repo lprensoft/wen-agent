@@ -593,26 +593,33 @@ func renderConditions(lang string, r Report) string {
 	return b.String()
 }
 
+// dateShift 返回 now 所在日历日偏移 days 天后的日期（YYYY-MM-DD）。
+// 纯日历计算，不复用 now 的钟点：夏令时跳过午夜时，AddDate 会把 00:30
+// 归一化回前一天 23:30，前后一天的日期就会算错。
+func dateShift(now time.Time, days int) string {
+	y, m, d := now.Date()
+	return time.Date(y, m, d+days, 0, 0, 0, 0, time.UTC).Format(dateLayout)
+}
+
 // renderDays 渲染昨天、今天与明天的概要，接在现况之后。今天的概要全天都在——
 // 白天真正影响行为的是「今天下午会不会下雨」；明天的只在 showTomorrow 时出现。
 //
 // 按日期核对而不是信字段名：观测是缓存的，跨过午夜后缓存里的「明天」其实是今天，
 // 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这几项时同样整段为空。
 func renderDays(lang string, r Report, now time.Time, showTomorrow bool) string {
-	const layout = "2006-01-02"
 	// daily 的日期按观测地点当地时区给，和状态页一样先换算到同一时区，
 	// 否则服务器刚过午夜时，远端城市的「今天」会被当成对不上而整段丢掉。
 	now = r.localNow(now)
 	var parts []string
-	if r.Yesterday.known() && r.Yesterday.Date == now.AddDate(0, 0, -1).Format(layout) {
+	if r.Yesterday.known() && r.Yesterday.Date == dateShift(now, -1) {
 		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.yesterday", "昨天%s，%.0f~%.0f℃",
 			conditions.For(lang, r.Yesterday.Condition), r.Yesterday.MinC, r.Yesterday.MaxC))
 	}
-	if r.Today.known() && r.Today.Date == now.Format(layout) {
+	if r.Today.known() && r.Today.Date == dateShift(now, 0) {
 		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.today", "今天预计%s，%.0f~%.0f℃",
 			conditions.For(lang, r.Today.Condition), r.Today.MinC, r.Today.MaxC))
 	}
-	if showTomorrow && r.Tomorrow.known() && r.Tomorrow.Date == now.AddDate(0, 0, 1).Format(layout) {
+	if showTomorrow && r.Tomorrow.known() && r.Tomorrow.Date == dateShift(now, 1) {
 		parts = append(parts, prompt.Tf(lang, "prompt.weather.day.tomorrow", "明天预计%s，%.0f~%.0f℃%s",
 			conditions.For(lang, r.Tomorrow.Condition), r.Tomorrow.MinC, r.Tomorrow.MaxC,
 			seenNote(lang, r.Tomorrow.Seen, now)))
