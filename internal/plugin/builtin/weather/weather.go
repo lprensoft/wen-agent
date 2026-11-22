@@ -319,6 +319,18 @@ func (p *Plugin) snapshot() settings {
 	}
 }
 
+// localNowFor 返回某处地点此刻的当地时间；没有可用观测时退回 now。
+func (p *Plugin) localNowFor(loc string, now time.Time) time.Time {
+	if loc == "" {
+		return now
+	}
+	rep, ok, _ := p.lastReport(loc)
+	if !ok {
+		return now
+	}
+	return rep.localNow(now)
+}
+
 // langOf 取进程语言。
 func (p *Plugin) langOf() string {
 	p.mu.RLock()
@@ -345,7 +357,13 @@ func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, err
 		return "", nil
 	}
 	now := p.now()
-	showTomorrow := s.tomorrowVisible(now, ev.UserInput)
+	// 「几点算傍晚」按角色所在地的钟点算；角色侧没配地点时才退回用户侧，
+	// 其余没有可用观测的情况按服务器时间。用户主动问明天时仍然放行。
+	personaNow := p.localNowFor(s.personaLoc, now)
+	if s.personaLoc == "" {
+		personaNow = p.localNowFor(s.userLoc, now)
+	}
+	showTomorrow := s.tomorrowVisible(personaNow, ev.UserInput)
 
 	body := func(r Report) string {
 		return renderConditions(s.lang, r) + renderDays(s.lang, r, now, showTomorrow)

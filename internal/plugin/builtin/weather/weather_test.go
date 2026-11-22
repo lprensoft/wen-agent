@@ -421,3 +421,38 @@ func TestTurnPromptShowsTomorrowOnlyInWindow(t *testing.T) {
 		t.Errorf("Seen 不该被覆盖，得到 %v", seen)
 	}
 }
+
+// 「几点算傍晚」要看角色所在地的钟点，而不是服务器时钟。
+func TestTurnPromptTomorrowUsesPersonaClock(t *testing.T) {
+	p := New()
+	defer p.Stop()
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
+		"persona_location": "台北", "same_city": true,
+		"stale_minutes": 1440, "tomorrow_from_hour": 18,
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	p.Stop()
+
+	serverNow := time.Date(2026, 3, 4, 20, 0, 0, 0, time.FixedZone("server", -5*3600))
+	local := serverNow.In(time.FixedZone("Taipei", 8*3600)) // 当地 3 月 5 日上午 9 点
+	p.now = func() time.Time { return serverNow }
+
+	const layout = "2006-01-02"
+	r := report("台北 · 台湾", "多云", 24, 0)
+	r.Fetched = serverNow.Add(-5 * time.Minute)
+	r.UTCOffsetSeconds = 8 * 3600
+	r.UTCOffsetSet = true
+	r.Today = DayInfo{Date: local.Format(layout), Condition: "多云", MinC: 20, MaxC: 28}
+	r.Tomorrow = DayInfo{Date: local.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 17, MaxC: 22}
+	setObs(p, "台北", r)
+
+	out, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{UserInput: "早"})
+	if !strings.Contains(out, "今天预计多云") || strings.Contains(out, "明天") {
+		t.Errorf("角色当地上午不该有明天: %q", out)
+	}
+	out, _ = p.TurnPrompt(context.Background(), plugin.TurnEvent{UserInput: "明天会下雨吗"})
+	if !strings.Contains(out, "明天预计中雨") {
+		t.Errorf("问起明天应注入: %q", out)
+	}
+}

@@ -48,6 +48,7 @@ type Plugin struct {
 	lang      string
 	dir       string
 	feeds     []string
+	feedPos   map[string]int // 地址 → 在配置里的原始序号（去重前）
 	interests []string
 	interval  time.Duration
 	sessions  plugin.SessionQuery
@@ -109,7 +110,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		return fmt.Errorf("%s", i18n.T(ictx.Lang, "plugin.phone.no_state_dir",
 			"没有可用的持久化目录，无法保存刷到的消息"))
 	}
-	feeds, err := parseFeeds(ictx.Lang, plugin.CfgString(cfg, "feeds", ""))
+	feeds, feedPos, err := parseFeedsWithPositions(ictx.Lang, plugin.CfgString(cfg, "feeds", ""))
 	if err != nil {
 		return err
 	}
@@ -132,6 +133,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	p.dir = ictx.StateDir
 	p.feeds = feeds
+	p.feedPos = feedPos
 	p.interests = parseInterests(plugin.CfgString(cfg, "interests", ""))
 	p.interval = time.Duration(plugin.CfgInt(cfg, "refresh_hours", defRefreshHours)) * time.Hour
 	p.sessions = ictx.Sessions
@@ -188,6 +190,7 @@ type settings struct {
 	lang      string
 	dir       string
 	feeds     []string
+	feedPos   map[string]int
 	interests []string
 	interval  time.Duration
 	sessions  plugin.SessionQuery
@@ -198,37 +201,51 @@ type settings struct {
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{p.lang, p.dir, p.feeds, p.interests, p.interval, p.sessions, p.client, p.started}
+	return settings{
+		lang: p.lang, dir: p.dir, feeds: p.feeds, feedPos: p.feedPos,
+		interests: p.interests, interval: p.interval, sessions: p.sessions,
+		client: p.client, started: p.started,
+	}
 }
 
-// parseFeeds 一行一个地址，# 开头的是注释。地址不对就报错拒绝保存，而不是悄悄跳过——
-// 跳过的话那个源永远没有动静，没人知道为什么。
+// parseFeeds 是 parseFeedsWithPositions 的包装：只关心地址列表的调用方用它。
 func parseFeeds(lang, raw string) ([]string, error) {
+	feeds, _, err := parseFeedsWithPositions(lang, raw)
+	return feeds, err
+}
+
+// parseFeedsWithPositions 一行一个地址，# 开头的是注释。地址不对就报错拒绝保存，
+// 而不是悄悄跳过——跳过的话那个源永远没有动静，没人知道为什么。
+//
+// 同一个地址写两遍只抓一次：抓取、错误记录与状态页必须用同一份源列表，
+// 否则一次失败一次成功会在页面上同时出现。返回的 map 保留每个地址在
+// 用户配置里首次出现的序号（只数订阅源那几行），供状态页区分同主机的源。
+func parseFeedsWithPositions(lang, raw string) ([]string, map[string]int, error) {
 	var out []string
-	seen := make(map[string]bool)
+	positions := make(map[string]int)
+	ordinal := 0
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		ordinal++
 		u, err := url.Parse(line)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf(i18n.T(lang, "plugin.phone.err.bad_feed",
+			return nil, nil, fmt.Errorf(i18n.T(lang, "plugin.phone.err.bad_feed",
 				"订阅源「%s」不是 http 或 https 地址"), line)
 		}
-		// 同一个地址写两遍只抓一次：抓取、错误记录与状态页必须用同一份
-		// 源列表，否则一次失败一次成功会在页面上同时出现。
-		if seen[line] {
+		if positions[line] != 0 {
 			continue
 		}
-		seen[line] = true
+		positions[line] = ordinal
 		out = append(out, line)
 	}
 	if len(out) > maxFeeds {
-		return nil, fmt.Errorf(i18n.T(lang, "plugin.phone.err.too_many_feeds",
+		return nil, nil, fmt.Errorf(i18n.T(lang, "plugin.phone.err.too_many_feeds",
 			"订阅源最多 %d 个，现在填了 %d 个"), maxFeeds, len(out))
 	}
-	return out, nil
+	return out, positions, nil
 }
 
 func parseInterests(raw string) []string {

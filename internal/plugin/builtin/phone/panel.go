@@ -68,8 +68,12 @@ func (p *Plugin) State(q plugin.StateQuery) []plugin.StateSection {
 			continue
 		}
 		failed++
+		pos := s.feedPos[feed]
+		if pos == 0 {
+			pos = i + 1 // 直接构造 settings 的调用方没有序号表时退回压缩后的位置
+		}
 		rows = append(rows, plugin.StateRow{
-			Meta:   "#" + strconv.Itoa(i+1), // 同主机的几个源靠序号区分
+			Meta:   "#" + strconv.Itoa(pos), // 同主机的几个源靠原始配置序号区分
 			Label:  i18n.T(q.Lang, "plugin.phone.state.failed", "未能取到"),
 			Value:  clipText(hostOf(feed), 80),
 			Detail: clipText(msg, 200),
