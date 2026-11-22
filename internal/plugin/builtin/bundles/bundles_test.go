@@ -13,17 +13,19 @@ import (
 
 // 契约检查：设置页上这张卡片全靠这几个可选接口。
 var (
-	_ plugin.Plugin         = (*Plugin)(nil)
-	_ plugin.Configurable   = (*Plugin)(nil)
-	_ plugin.Actionable     = (*Plugin)(nil)
-	_ plugin.StatusReporter = (*Plugin)(nil)
-	_ plugin.Categorized    = (*Plugin)(nil)
+	_ plugin.Plugin           = (*Plugin)(nil)
+	_ plugin.Configurable     = (*Plugin)(nil)
+	_ plugin.Actionable       = (*Plugin)(nil)
+	_ plugin.StatusReporter   = (*Plugin)(nil)
+	_ plugin.Categorized      = (*Plugin)(nil)
+	_ plugin.Stoppable        = (*Plugin)(nil)
+	_ plugin.BackgroundWorker = (*Plugin)(nil)
 )
 
 const manifest = `{
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "demo-pack",
-  "version": "1.0",
+  "version": "1.0.0",
   "description": "for tests"
 }`
 
@@ -47,9 +49,10 @@ func writeBundle(t *testing.T, dir string) string {
 func newAt(t *testing.T, baseDir string) *Plugin {
 	t.Helper()
 	p := New("", baseDir)
-	if err := p.Init(plugin.InitContext{}, nil); err != nil {
+	if err := p.Init(plugin.InitContext{ManualTime: true}, nil); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	t.Cleanup(p.Stop)
 	return p
 }
 
@@ -131,8 +134,8 @@ func TestInitWithoutBaseDir(t *testing.T) {
 func TestActionsAlwaysCheap(t *testing.T) {
 	p := newAt(t, t.TempDir())
 	acts := p.Actions()
-	if len(acts) != 2 {
-		t.Fatalf("该有安装与重新握手两个操作: %+v", acts)
+	if len(acts) != 4 {
+		t.Fatalf("该有安装、握手、绑定与解除绑定四个操作: %+v", acts)
 	}
 	if _, err := p.ActionState("nope"); err == nil {
 		t.Error("不认识的操作该报错")

@@ -2,6 +2,7 @@ package agentplugin
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ const (
 // 存放目录里落下半个残骸，下次列表时它又会作为「装了但读不出来」被报出来，用户
 // 得自己去删。校验放前面，失败时存放目录一个字节都没动过。
 func (s *Store) Install(src string) (*Bundle, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	lang := s.lang
 	if s.dir == "" {
 		return nil, fmt.Errorf("%s", i18n.T(lang, "plugin.bundle.err.no_store", "没有可用的插件包目录"))
@@ -61,6 +64,11 @@ func (s *Store) Install(src string) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	name := b.Manifest.Name
 	dst := s.Path(name)
 	if _, err := os.Stat(dst); err == nil {

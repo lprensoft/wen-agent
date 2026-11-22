@@ -84,13 +84,13 @@ func commands() []command {
 		},
 		{
 			name:    "plugins",
-			usage:   tr("cli.cmd.plugins.usage", "wen plugins [list|install|uninstall|info] [-c 配置文件]"),
+			usage:   tr("cli.cmd.plugins.usage", "wen plugins [list|install|uninstall|info|track|untrack|check|update] [-c 配置文件]"),
 			summary: tr("cli.cmd.plugins.summary", "管理外源插件包"),
 			detail: tr("cli.cmd.plugins.detail", "装的是 Agent Plugins 1.0 格式的插件包：一个目录，里面有 plugin.json，\n"+
-				"可带 skills/（技能）与 mcp.json（MCP server 声明）。\n"+
-				"install 认本地目录与 .zip；装好的包在设置页上各占一张卡片，标记为「外源」。\n"+
-				"插件在启动期注册，装完或卸完要重启服务才生效。\n"+
-				"本版只加载技能，包里的 MCP 声明尚未支持。"),
+				"可带 skills/（技能）与 mcp.json（MCP server 声明）。install 认本地目录与 .zip；\n"+
+				"装好的包在设置页上各占一张卡片，标记为「外源」。插件在启动期注册，装完或卸完要重启。\n"+
+				"track 绑定 HTTPS 签名清单与 Ed25519 公钥，check 只验签检查，update 暂存人工确认的更新；\n"+
+				"暂存后下一次启动服务时应用。MCP 更新不自动握手，需人工 refresh 后再重启。"),
 			run: runPlugins,
 		},
 		{

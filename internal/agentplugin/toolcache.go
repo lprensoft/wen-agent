@@ -31,8 +31,9 @@ type ToolInfo struct {
 
 // toolCache 是一次握手的产物。
 type toolCache struct {
-	Bundle string     `json:"bundle"`
-	Tools  []ToolInfo `json:"tools"`
+	Bundle  string     `json:"bundle"`
+	Version string     `json:"version,omitempty"`
+	Tools   []ToolInfo `json:"tools"`
 }
 
 // 工具名必须过得了模型接口那一关：Anthropic 侧限定 [a-zA-Z0-9_-]{1,64}。
@@ -72,7 +73,7 @@ func (s *Store) cachePath(bundle string) string {
 //
 // 缓存不存在不是错误，只是「还没握过手」：M1 装的包没有缓存，手工拷进来的包也没有。
 // 调用方据此提示用户刷新一次，而不是当成故障。
-func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
+func (s *Store) LoadTools(bundle, version string) ([]ToolInfo, error) {
 	path := s.cachePath(bundle)
 	if path == "" {
 		return nil, nil
@@ -88,6 +89,11 @@ func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("工具清单缓存已损坏：%w", err)
 	}
+	// 没有版本的旧缓存来自更新机制引入之前，仍属于当前已安装包，先兼容读取。
+	// 一旦包更新，启动应用 pending 时会先删掉旧缓存，因此它不会误供新版本。
+	if c.Version != "" && c.Version != version {
+		return nil, nil
+	}
 	return c.Tools, nil
 }
 
@@ -96,7 +102,7 @@ func (s *Store) LoadTools(bundle string) ([]ToolInfo, error) {
 // 之所以要落盘而不是每次启动现问：插件系统在注册插件时就要拿到工具清单（它得查
 // 全局重名），而那一步在 Init 之前、且握着写锁。在那里拉起子进程做一次握手，等于
 // 让整个服务在启动时为每台 server 停上几秒——装了十台就是十次。
-func (s *Store) SaveTools(bundle string, tools []ToolInfo) error {
+func (s *Store) SaveTools(bundle, version string, tools []ToolInfo) error {
 	path := s.cachePath(bundle)
 	if path == "" {
 		return fmt.Errorf("没有可用的缓存位置")
@@ -104,7 +110,7 @@ func (s *Store) SaveTools(bundle string, tools []ToolInfo) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(toolCache{Bundle: bundle, Tools: tools}, "", "  ")
+	data, err := json.MarshalIndent(toolCache{Bundle: bundle, Version: version, Tools: tools}, "", "  ")
 	if err != nil {
 		return err
 	}

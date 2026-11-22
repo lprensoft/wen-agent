@@ -1,11 +1,14 @@
 package agentplugin
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // StoreDirName 是已安装插件包的存放目录名，位于配置目录之下。
@@ -21,14 +24,20 @@ const StoreDirName = "bundles"
 type Store struct {
 	lang string
 	dir  string
+
+	// opMu 串行化安装、来源绑定、检查与暂存。网络请求期间不持插件 Manager 的锁；
+	// 同进程中的 bundles 与 ext_* 必须共享同一个 Store，才能共享这把锁。
+	opMu   sync.Mutex
+	client updateDoer
 }
 
 // NewStore 按配置目录定位存放处。目录可能不存在，由写入方按需创建。
 func NewStore(lang, baseDir string) *Store {
-	if baseDir == "" {
-		return &Store{lang: lang}
+	s := &Store{lang: lang, client: newUpdateClient(lang)}
+	if baseDir != "" {
+		s.dir = filepath.Join(baseDir, StoreDirName)
 	}
-	return &Store{lang: lang, dir: filepath.Join(baseDir, StoreDirName)}
+	return s
 }
 
 // Dir 返回存放目录；为空表示当前没有可用的位置（没有配置目录）。
@@ -86,6 +95,13 @@ func (s *Store) Remove(name string) error {
 	if err := checkName(s.lang, name); err != nil {
 		return err
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	unlock, err := s.acquireUpdateLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path := s.Path(name)
 	if path == "" {
 		return fmt.Errorf("没有可用的插件包目录")
@@ -96,5 +112,28 @@ func (s *Store) Remove(name string) error {
 		}
 		return err
 	}
-	return os.RemoveAll(path)
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	// 卸载同时清掉更新来源与尚未应用的暂存；PLUGIN_DATA 仍在包外，照旧保留。
+	// 各项都尽量清理完再汇总错误，尤其不能让一份坏 sources.json 把 pending 留下来。
+	var errs []error
+	if err := os.Remove(s.pendingPath(name)); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+	for _, path := range []string{s.stagedPath(name), s.rollbackPath(name), filepath.Join(s.updateWorkDir(), name+".zip")} {
+		if err := os.RemoveAll(path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	sources, err := s.readSources()
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		delete(sources, name)
+		if err := s.writeSources(sources); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

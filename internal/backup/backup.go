@@ -226,6 +226,12 @@ func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats
 	return entries, stats, nil
 }
 
+func skippedBundleUpdatePath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	return rel == "bundles/.updates/work" || strings.HasPrefix(rel, "bundles/.updates/work/") ||
+		rel == "bundles/.updates/.op.lock" || strings.HasPrefix(rel, "bundles/.updates/pending-")
+}
+
 func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry, stats *Stats, lang, excludeAbs string) error {
 	root := filepath.Join(baseDir, rel)
 	info, err := os.Lstat(root)
@@ -246,12 +252,20 @@ func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry,
 		if err != nil {
 			return fmt.Errorf("%s", i18n.Tf(lang, "backup.err.read", "读取文件失败：%v", err))
 		}
-		if d.IsDir() {
-			return nil
-		}
 		fullRel, err := filepath.Rel(baseDir, p)
 		if err != nil {
 			return fmt.Errorf("%s", i18n.Tf(lang, "backup.err.read", "读取文件失败：%v", err))
+		}
+		// 更新来源要随备份迁走；尚未提交的暂存、回滚与 pending 不带过去，
+		// 否则恢复到另一台机器后可能把半完成更新当成可应用状态。
+		if skippedBundleUpdatePath(fullRel) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
 		}
 		if fullRel == "wen.lock" {
 			return nil

@@ -48,7 +48,7 @@ Everything a plugin sends to the model — the prompts it injects, the block nam
 | | `slack_bot` | Slack (Socket Mode) | off |
 | | `reaction` | Adds an emoji reaction to the other person's message (like, laugh, surprise and so on) | on |
 | [Maintenance](self-update.md) | `self_update` | Checks for a new release, then downloads, verifies, replaces and restarts in one click | on |
-| [External plugins](external.md) | `bundles` | Install Agent Plugins bundles | on |
+| [External plugins](external.md) | `bundles` | Install Agent Plugins bundles, bind signed update sources and check for new versions | on |
 | | `ext_*` | One card per installed bundle | on |
 
 To write one yourself, see [Project layout and writing plugins](../architecture.md).

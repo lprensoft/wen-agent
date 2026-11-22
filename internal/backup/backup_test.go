@@ -104,6 +104,30 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 }
 
+func TestExportBundleUpdateSourcesWithoutPending(t *testing.T) {
+	base := baseFixture(t)
+	write(t, filepath.Join(base, "bundles", ".updates", "sources.json"), `{"demo":{"manifest_url":"https://example.com/update.json"}}`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", "pending-demo.json"), `{"name":"demo"}`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", ".op.lock"), `locked`, 0o600)
+	write(t, filepath.Join(base, "bundles", ".updates", "work", "demo.new", "plugin.json"), `{"name":"demo"}`, 0o644)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", SessionDir: filepath.Join(base, "sessions")}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restored")
+	if _, _, err := Import(out, target, i18n.LangZH); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(target, "bundles", ".updates", "sources.json")) == "" {
+		t.Fatal("更新来源没有随备份恢复")
+	}
+	for _, rel := range []string{filepath.Join("bundles", ".updates", "pending-demo.json"), filepath.Join("bundles", ".updates", "work"), filepath.Join("bundles", ".updates", ".op.lock")} {
+		if _, err := os.Stat(filepath.Join(target, rel)); !os.IsNotExist(err) {
+			t.Fatalf("半完成更新不该恢复：%s, %v", rel, err)
+		}
+	}
+}
+
 func TestExportRefusesExistingOutput(t *testing.T) {
 	base := baseFixture(t)
 	out := filepath.Join(t.TempDir(), "backup.tar.gz")

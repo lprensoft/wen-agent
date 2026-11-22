@@ -11,7 +11,7 @@ wen onboard [-c 配置]          重走首次运行向导：新增一家提供�
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
 wen export [-o 备份文件] [-c 配置]  把配置目录备份成归档
 wen import <备份文件> [-c 配置]    从备份恢复到一个空目录
-wen plugins [子命令] [-c 配置]  管理外源插件包（list / install / uninstall / info）
+wen plugins [子命令] [-c 配置]  管理外源插件包（安装 / 卸载 / 签名更新等）
 wen status [-c 配置]           打印当前配置与运行状态
 wen eval <脚本.json> [-o 文件]  回放一段脚本对话，生成文风与角色一致性报告
 wen update [--check] [-y]  检查并安装新版本
@@ -68,9 +68,20 @@ wen plugins install ./x --no-connect   # 装但先不连接里面的 MCP server
 wen plugins refresh pdf-tools      # 重连一次，把工具清单重取一遍
 wen plugins info pdf-tools
 wen plugins uninstall pdf-tools
+wen plugins track pdf-tools https://example.com/update.json <Base64-公钥>
+wen plugins check pdf-tools          # 省略包名则检查全部来源
+wen plugins update pdf-tools         # 暂存已验签候选，下一次启动时应用
+wen plugins update pdf-tools --cancel
+wen plugins untrack pdf-tools
 ```
 
 装好的包放在配置目录的 `bundles/<插件包名>/`，在设置页上各占一张卡片、归入[外源插件](plugins/external.md)一节，可以单独开关。设置页上也能装：那一节的 `bundles` 卡片里填路径、点「安装」，与这里的命令等价（只认服务所在机器上的路径）。插件名前面加了 `ext_` 前缀：插件名全局唯一且会被拼成持久化目录，一个叫 `memory` 的包否则会与内置的记忆插件撞名。
+
+### 签名更新
+
+`track` 给已安装包绑定 HTTPS `update.json` 与发布者 Ed25519 公钥；`check` 只下载清单和签名、验签并记录候选，`update` 才把候选 ZIP 下载并完整暂存。暂存时旧包不动，下一次启动服务才切换；`--cancel` 取消尚未应用的暂存。服务运行时这些写状态的命令请改到设置页操作。
+
+更新不会自动执行新包里的 MCP 命令。技能包重启一次即可；MCP 包更新后需人工 `refresh`，再重启一次注册新工具。清单格式、公钥绑定、版本限制与回滚规则见[外源插件 · 签名更新](plugins/external.md#签名更新)。
 
 ### 技能
 

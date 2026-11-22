@@ -11,7 +11,7 @@ wen onboard [-c config]          run the setup wizard again: add a provider and 
 wen config [section] [-c config] guided configuration (sections: plugins / models / server)
 wen export [-o backup file] [-c config]  back up the configuration directory
 wen import <backup file> [-c config]  restore a backup into an empty directory
-wen plugins [subcommand] [-c config]  manage external plugin bundles (list / install / uninstall / info)
+wen plugins [subcommand] [-c config]  manage external plugin bundles (install / uninstall / signed updates)
 wen status [-c config]           print the current configuration and runtime state
 wen eval <script.json> [-o file] replay a scripted conversation and report on style and consistency
 wen update [--check] [-y]    check for and install a new version
@@ -67,9 +67,20 @@ wen plugins install ./x --no-connect   # install without connecting to its MCP s
 wen plugins refresh pdf-tools      # reconnect and fetch the tool list again
 wen plugins info pdf-tools
 wen plugins uninstall pdf-tools
+wen plugins track pdf-tools https://example.com/update.json <Base64-public-key>
+wen plugins check pdf-tools          # omit the name to check every source
+wen plugins update pdf-tools         # stage a verified candidate for the next start
+wen plugins update pdf-tools --cancel
+wen plugins untrack pdf-tools
 ```
 
 Installed bundles live in `bundles/<bundle-name>/` under the configuration directory. Each gets its own card in the settings page under [External plugins](plugins/external.md) and its own on/off switch. You can install from there too: fill in a path on the `bundles` card and press Install — same thing as the command below, and it likewise only accepts paths on the machine running the server. Plugin names are prefixed with `ext_`: a plugin name is globally unique and becomes a directory name, so a bundle called `memory` would otherwise collide with the built-in memory plugin.
+
+### Signed updates
+
+`track` binds an installed bundle to an HTTPS `update.json` and a publisher Ed25519 public key. `check` downloads only the manifest and signature, verifies them and records a candidate; `update` then downloads and fully stages that candidate ZIP. The old bundle stays in place until the next service start, and `--cancel` removes an unapplied staged update. While the service is running, use the settings page for these state-writing operations.
+
+An update never runs MCP commands from the new bundle automatically. Skill-only bundles need one restart; after an MCP update, `refresh` manually and restart once more to register the new tools. See [External plugins · Signed updates](plugins/external.md#signed-updates) for the manifest format, key binding, version limits and rollback rules.
 
 ### Skills
 

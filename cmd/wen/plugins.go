@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ func runPlugins(args []string) error {
 	fs := flag.NewFlagSet("plugins "+sub, flag.ExitOnError)
 	configPath := fs.String("c", "", tr("cli.flag.config", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）"))
 	noConnect := fs.Bool("no-connect", false, tr("cli.plugins.flag.no_connect", "装完不连接包里的 MCP server（不取工具清单）"))
+	cancelPending := fs.Bool("cancel", false, tr("cli.plugins.flag.cancel", "取消等待重启应用的暂存更新"))
 	rest := parseMixed(fs, args)
 
 	path := config.ResolvePath(*configPath)
@@ -40,6 +43,12 @@ func runPlugins(args []string) error {
 	store := agentplugin.NewStore(uiLang, cfg.BaseDir)
 	if store.Dir() == "" {
 		return fmt.Errorf("%s", tr("cli.plugins.no_base_dir", "没有可用的配置目录，无法管理插件包"))
+	}
+
+	if sub == "track" || sub == "untrack" || sub == "check" || sub == "update" {
+		if info, ok := runlock.Read(cfg.BaseDir); ok && reachable(info.Addr) {
+			return fmt.Errorf("%s", tr("cli.plugins.err.online_write", "服务正在运行；请在设置页管理更新来源与候选，避免两个进程同时写更新状态"))
+		}
 	}
 
 	switch sub {
@@ -65,8 +74,32 @@ func runPlugins(args []string) error {
 			return fmt.Errorf("%s", tr("cli.plugins.usage.info", "用法: wen plugins info <插件包名称>"))
 		}
 		return bundleInfo(store, rest[0])
+	case "track":
+		if len(rest) != 3 {
+			return fmt.Errorf("%s", tr("cli.plugins.usage.track", "用法: wen plugins track <插件包名称> <update.json URL> <Base64 公钥>"))
+		}
+		return trackBundle(store, rest[0], rest[1], rest[2])
+	case "untrack":
+		if len(rest) != 1 {
+			return fmt.Errorf("%s", tr("cli.plugins.usage.untrack", "用法: wen plugins untrack <插件包名称>"))
+		}
+		return untrackBundle(store, rest[0])
+	case "check":
+		if len(rest) > 1 {
+			return fmt.Errorf("%s", tr("cli.plugins.usage.check", "用法: wen plugins check [插件包名称]"))
+		}
+		name := ""
+		if len(rest) == 1 {
+			name = rest[0]
+		}
+		return checkBundles(store, name)
+	case "update":
+		if len(rest) != 1 {
+			return fmt.Errorf("%s", tr("cli.plugins.usage.update", "用法: wen plugins update <插件包名称> [--cancel]"))
+		}
+		return updateBundle(store, rest[0], *cancelPending)
 	default:
-		return fmt.Errorf(tr("cli.plugins.unknown_sub", "未知的子命令 %q（可用：list / install / refresh / uninstall / info）"), sub)
+		return fmt.Errorf(tr("cli.plugins.unknown_sub", "未知的子命令 %q（可用：list / install / refresh / uninstall / info / track / untrack / check / update）"), sub)
 	}
 }
 
@@ -100,7 +133,7 @@ func listBundles(store *agentplugin.Store) error {
 		nameW, verW, kindW := 4, 4, 4
 		kinds := make([]string, len(bundles))
 		for i, b := range bundles {
-			tools, _ := store.LoadTools(b.Manifest.Name)
+			tools, _ := store.LoadTools(b.Manifest.Name, b.Manifest.Version)
 			kinds[i] = strings.Join(components(b, len(tools)), "+")
 			nameW = max(nameW, runewidth.StringWidth(b.Manifest.Name))
 			verW = max(verW, runewidth.StringWidth(dash(b.Manifest.Version)))
@@ -193,7 +226,7 @@ func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Conf
 	if err != nil {
 		return err
 	}
-	if err := store.SaveTools(b.Manifest.Name, tools); err != nil {
+	if err := store.SaveTools(b.Manifest.Name, b.Manifest.Version, tools); err != nil {
 		return fmt.Errorf(tr("cli.plugins.save_tools_failed", "工具清单没能存下来：%w"), err)
 	}
 
@@ -208,13 +241,93 @@ func handshake(store *agentplugin.Store, b *agentplugin.Bundle, cfg *config.Conf
 }
 
 func uninstallBundle(store *agentplugin.Store, name, baseDir string) error {
+	defer store.DropTools(name)
 	if err := store.Remove(name); err != nil {
 		return err
 	}
-	store.DropTools(name)
 	fmt.Print(trf("cli.plugins.uninstalled", "已卸载 %s\n", name))
 	fmt.Print(tr("cli.plugins.state_kept", "提示：它在设置页上的开关状态还留在 plugins.state.json 里，重新装回来时会沿用。\n"))
 	noteRestart(baseDir)
+	return nil
+}
+
+func trackBundle(store *agentplugin.Store, name, manifestURL, publicKey string) error {
+	if err := store.Track(name, manifestURL, publicKey); err != nil {
+		return err
+	}
+	fingerprint, _ := agentplugin.PublicKeyFingerprint(uiLang, publicKey)
+	fmt.Print(trf("cli.plugins.tracked", "已为 %s 绑定签名更新来源\n  清单    %s\n  指纹    %s\n", name, manifestURL, fingerprint))
+	fmt.Print(tr("cli.plugins.track_note", "绑定只认证之后的更新，不反向证明此前手工安装的包来自这个发布者。\n"))
+	return nil
+}
+
+func untrackBundle(store *agentplugin.Store, name string) error {
+	if err := store.Untrack(name); err != nil {
+		return err
+	}
+	fmt.Print(trf("cli.plugins.untracked", "已解除 %s 的更新来源；插件包本身仍保留。\n", name))
+	return nil
+}
+
+func checkBundles(store *agentplugin.Store, name string) error {
+	names := []string{name}
+	if name == "" {
+		sources, err := store.Sources()
+		if err != nil {
+			return err
+		}
+		names = names[:0]
+		for n := range sources {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		if len(names) == 0 {
+			fmt.Print(tr("cli.plugins.no_sources", "还没有绑定更新来源。先用 wen plugins track 绑定。\n"))
+			return nil
+		}
+	}
+	var errs []error
+	for _, n := range names {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		candidate, err := store.CheckUpdate(ctx, n)
+		cancel()
+		if err != nil {
+			fmt.Print(trf("cli.plugins.check_failed", "%s：检查失败：%v\n", n, err))
+			errs = append(errs, err)
+			continue
+		}
+		if candidate == nil {
+			fmt.Print(trf("cli.plugins.latest", "%s：签名验证通过，当前已经是最新版。\n", n))
+			continue
+		}
+		fmt.Print(trf("cli.plugins.available", "%s：发现已验签版本 %s\n  下载  %s\n  SHA256  %s\n", n, candidate.Version, candidate.ArchiveURL, candidate.SHA256))
+	}
+	return errors.Join(errs...)
+}
+
+func updateBundle(store *agentplugin.Store, name string, cancel bool) error {
+	if cancel {
+		if err := store.CancelUpdate(name); err != nil {
+			return err
+		}
+		fmt.Print(trf("cli.plugins.update_cancelled", "已取消 %s 的待更新，当前包保持不变。\n", name))
+		return nil
+	}
+	src, err := store.Source(name)
+	if err != nil {
+		return err
+	}
+	if src == nil || src.Candidate == nil {
+		return fmt.Errorf(tr("cli.plugins.no_candidate", "%s 没有已验签候选；先运行 wen plugins check %s"), name, name)
+	}
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Minute)
+	pending, err := store.StageUpdate(ctx, name, src.Candidate.Token)
+	cancelCtx()
+	if err != nil {
+		return err
+	}
+	fmt.Print(trf("cli.plugins.update_staged", "%s 已从 %s 暂存到 %s；当前包尚未改动，下一次启动服务时应用。\n", name, pending.FromVersion, pending.Version))
+	fmt.Print(tr("cli.plugins.update_mcp_note", "带 MCP 的包在更新后需人工 refresh 重新握手，再重启一次注册新工具；更新过程没有执行新包命令。\n"))
 	return nil
 }
 
@@ -243,7 +356,25 @@ func bundleInfo(store *agentplugin.Store, name string) error {
 		fmt.Print(trf("cli.plugins.info.homepage", "主页      %s\n", m.Homepage))
 	}
 	fmt.Print(trf("cli.plugins.info.path", "位置      %s\n", b.Root.Path()))
-	tools, _ := store.LoadTools(name)
+	if src, _ := store.Source(name); src != nil {
+		fmt.Print(trf("cli.plugins.info.update_url", "更新清单  %s\n", src.ManifestURL))
+		if fingerprint, _ := agentplugin.PublicKeyFingerprint(uiLang, src.PublicKey); fingerprint != "" {
+			fmt.Print(trf("cli.plugins.info.update_key", "公钥指纹  %s\n", fingerprint))
+		}
+		if !src.LastCheck.IsZero() {
+			fmt.Print(trf("cli.plugins.info.last_check", "上次检查  %s\n", src.LastCheck.Local().Format("2006-01-02 15:04:05")))
+		}
+		if src.LastError != "" {
+			fmt.Print(trf("cli.plugins.info.update_error", "检查错误  %s\n", src.LastError))
+		}
+		if src.Candidate != nil {
+			fmt.Print(trf("cli.plugins.info.candidate", "已验签候选  %s\n", src.Candidate.Version))
+		}
+	}
+	if pending, _ := store.Pending(name); pending != nil {
+		fmt.Print(trf("cli.plugins.info.pending", "待重启更新  %s → %s\n", pending.FromVersion, pending.Version))
+	}
+	tools, _ := store.LoadTools(name, m.Version)
 	fmt.Print(trf("cli.plugins.info.content", "内容      %s\n", joinList(components(b, len(tools)))))
 	if b.SkillsDir != "" {
 		fmt.Print(trf("cli.plugins.info.skills_dir", "技能目录  %s\n", b.SkillsDir))

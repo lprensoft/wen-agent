@@ -177,6 +177,12 @@ var derivedElsewhere = map[string]bool{
 	plugin.FieldDescKey(ext, "max_result_bytes"):       true,
 	plugin.ActionLabelKey(ext, "refresh"):              true,
 	plugin.ActionDescKey(ext, "refresh"):               true,
+	plugin.ActionLabelKey(ext, "check"):                true,
+	plugin.ActionDescKey(ext, "check"):                 true,
+	plugin.ActionLabelKey(ext, "update"):               true,
+	plugin.ActionDescKey(ext, "update"):                true,
+	plugin.ActionLabelKey(ext, "cancel_update"):        true,
+	plugin.ActionDescKey(ext, "cancel_update"):         true,
 }
 
 // ext 是外源插件在语言包里共用的名字，见 plugin.ExternalKeyName。

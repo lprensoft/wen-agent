@@ -124,7 +124,3 @@ go vet ./...     # vet
 ## License
 
 Released under the [MIT License](LICENSE).
-
-## Roadmap
-
-- Auto-updating external plugin bundles, and verifying where they came from

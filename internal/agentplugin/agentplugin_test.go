@@ -196,6 +196,9 @@ func TestInstallBadBundleLeavesNothing(t *testing.T) {
 	if list, problems := store.List(); len(list) != 0 || len(problems) != 0 {
 		t.Fatalf("失败的安装留下了残骸: %d 个包，%v", len(list), problems)
 	}
+	if _, err := os.Stat(store.updatesDir()); !os.IsNotExist(err) {
+		t.Fatalf("校验失败的安装不该创建更新状态目录：%v", err)
+	}
 }
 
 func TestInstallFromZip(t *testing.T) {

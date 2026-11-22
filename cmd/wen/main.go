@@ -100,6 +100,11 @@ func runServe(args []string) {
 	}
 	adoptLang(cfg)
 
+	// 外源更新在运行期只暂存；只有真正启动服务时才切换，config/eval 不会动包目录。
+	for _, problem := range agentplugin.NewStore(uiLang, cfg.BaseDir).ApplyPending() {
+		logf("log.serve.bundle_update_warning", "警告: 外源插件包更新：%s", problem)
+	}
+
 	// 可执行文件的位置在这里就取好，不等到要重启时再问。
 	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
 	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
@@ -317,7 +322,8 @@ var defaultOffPlugins = map[string]bool{
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdate.RestartFunc, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
-	builtins := builtinPlugins(ictx.Lang, cfg, restart)
+	bundleStore := agentplugin.NewStore(ictx.Lang, cfg.BaseDir)
+	builtins := builtinPlugins(ictx.Lang, cfg, restart, bundleStore)
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
 		init := plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
@@ -325,7 +331,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 			logf("log.serve.register_failed", "警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
-	registerBundles(m, ictx.Lang, cfg.BaseDir)
+	registerBundles(m, ictx.Lang, bundleStore)
 	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
 	m.Resolve()
 	return m
@@ -338,8 +344,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdat
 // 或在设置页上关掉（关掉的状态记在 plugins.state.json 里，与内置插件同一套）。
 //
 // 读不出来的包只记一行日志，不拦启动：一个坏掉的插件包不该让整个服务起不来。
-func registerBundles(m *plugin.Manager, lang, baseDir string) {
-	store := agentplugin.NewStore(lang, baseDir)
+func registerBundles(m *plugin.Manager, lang string, store *agentplugin.Store) {
 	bundles, problems := store.List()
 	for _, p := range problems {
 		logf("log.serve.bundle_warning", "警告: 插件包 %s", p)
@@ -360,7 +365,7 @@ func registerBundles(m *plugin.Manager, lang, baseDir string) {
 // 与 buildPlugins 分开，是为了让检查工具能拿到插件实例本身而不只是注册后的状态：
 // 操作（Actions）只在插件启用且初始化之后才经 Manager 暴露出来，而漏译的检查不该
 // 要求把消息通道、心跳与定时任务真的跑起来。
-func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc) []plugin.Plugin {
+func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartFunc, bundleStores ...*agentplugin.Store) []plugin.Plugin {
 	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
 	pp := people.New()
@@ -409,6 +414,6 @@ func builtinPlugins(lang string, cfg *config.Config, restart selfupdate.RestartF
 		// bundles 排在 self_update 旁边，理由相同：它不注入任何提示词，注册顺序对它
 		// 只剩展示含义。它得排在下面 registerBundles 注册的那些包**之前**，设置页上
 		// 「外源插件」这一节才会以「装一个新的」开头，而不是把入口埋在一堆卡片后面。
-		bundles.New(lang, cfg.BaseDir),
+		bundles.New(lang, cfg.BaseDir, bundleStores...),
 	}
 }
