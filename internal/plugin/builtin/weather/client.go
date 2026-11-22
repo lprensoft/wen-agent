@@ -107,34 +107,50 @@ func (r Report) localDate(now time.Time) string {
 // firstInstantOfDate 返回 date 在 loc 中实际开始的第一个瞬间。
 //
 // 有些城市在夏令时切换时直接跳过午夜（如圣地亚哥 2026-09-06 00:00 → 01:00），
-// 用 ParseInLocation 解析 00:00 会落到前一天 23:00。这里按 UTC 轴二分，
-// 找当地日期第一次到达 date 的时刻；整日被跳过的日期返回 false。
+// 用 ParseInLocation 解析 00:00 会落到前一天 23:00。这里按 ZoneBounds 把
+// 时间轴切成固定偏移的区间，在每个区间里求目标日期的起点，取最早的那个；
+// 跨日回拨也不会取到第二个午夜。整日被跳过的日期返回 false。
 func firstInstantOfDate(date string, loc *time.Location) (time.Time, bool) {
 	base, err := time.Parse(dateLayout, date) // UTC 的日历日，不带当地 DST
 	if err != nil {
 		return time.Time{}, false
 	}
-	lo := base.Add(-36 * time.Hour).Unix()
-	hi := base.Add(36 * time.Hour).Unix()
-	if time.Unix(lo, 0).In(loc).Format(dateLayout) >= date {
-		return time.Time{}, false
-	}
-	if time.Unix(hi, 0).In(loc).Format(dateLayout) < date {
-		return time.Time{}, false
-	}
-	for hi-lo > 1 {
-		mid := lo + (hi-lo)/2
-		if time.Unix(mid, 0).In(loc).Format(dateLayout) >= date {
-			hi = mid
-		} else {
-			lo = mid
+	// 按 ZoneBounds 把时间轴切成固定偏移的区间，在每个区间里求目标日期的
+	// 起点，取最早的那个。不能直接二分：跨日回拨会让当地日期先到达目标日、
+	// 又退回前一天、再到达一次（如 America/Goose_Bay 2010-11-07）。
+	limit := base.Add(48 * time.Hour)
+	var (
+		best  time.Time
+		found bool
+	)
+	for t := base.Add(-48 * time.Hour); t.Before(limit); {
+		_, end := t.In(loc).ZoneBounds()
+		if end.IsZero() || end.After(limit) {
+			end = limit
 		}
+		if !end.After(t) {
+			break
+		}
+		_, offset := t.In(loc).Zone()
+		dayStart := base.Add(-time.Duration(offset) * time.Second)
+		dayEnd := dayStart.Add(24 * time.Hour)
+		cand := t
+		if cand.Before(dayStart) {
+			cand = dayStart
+		}
+		stop := end
+		if stop.After(dayEnd) {
+			stop = dayEnd
+		}
+		if cand.Before(stop) && cand.In(loc).Format(dateLayout) == date && (!found || cand.Before(best)) {
+			best, found = cand, true
+		}
+		t = end
 	}
-	t := time.Unix(hi, 0).In(loc)
-	if t.Format(dateLayout) != date {
+	if !found {
 		return time.Time{}, false
 	}
-	return t, true
+	return best.In(loc), true
 }
 
 // DayInfo 是一天的天气概要。Date 是当地日期（如 2026-08-21）：「明天」会在午夜
