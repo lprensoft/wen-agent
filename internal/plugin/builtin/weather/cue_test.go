@@ -260,3 +260,20 @@ func TestForecastCueWaitsForEveningWindow(t *testing.T) {
 		t.Error("已投过的预报不该重投")
 	}
 }
+
+// 对话注入也要按观测城市的日期核对：服务器已经过了午夜、观测地还在前一天时，
+// 不能把观测地的「今天」当成日期对不上而丢掉。
+func TestRenderDaysUsesLocationDate(t *testing.T) {
+	now := time.Date(2026, 3, 5, 2, 0, 0, 0, time.FixedZone("server", 8*3600))
+	r := Report{
+		UTCOffsetSeconds: -5 * 3600,
+		UTCOffsetSet:     true,
+		Yesterday:        DayInfo{Date: "2026-03-03", Condition: "阴", MinC: 1, MaxC: 5},
+		Today:            DayInfo{Date: "2026-03-04", Condition: "多云", MinC: 1, MaxC: 8},
+		Tomorrow:         DayInfo{Date: "2026-03-05", Condition: "小雨", MinC: 2, MaxC: 6},
+	}
+	got := renderDays("", r, now, true)
+	if !strings.Contains(got, "昨天阴，1~5℃") || !strings.Contains(got, "今天预计多云，1~8℃") || !strings.Contains(got, "明天预计小雨，2~6℃") {
+		t.Errorf("renderDays = %q", got)
+	}
+}

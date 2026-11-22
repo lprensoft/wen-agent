@@ -89,7 +89,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
 			Key: "feeds", Label: "订阅源", Type: plugin.FieldText, Default: "",
-			Description: "一行一个 RSS 或 Atom 地址，以 # 开头的行忽略。最多 20 个",
+			Description: "一行一个 RSS 或 Atom 地址，以 # 开头的行忽略；重复地址只抓一次。最多 20 个",
 		},
 		{
 			Key: "interests", Label: "兴趣关键词", Type: plugin.FieldString, Default: "",
@@ -205,6 +205,7 @@ func (p *Plugin) snapshot() settings {
 // 跳过的话那个源永远没有动静，没人知道为什么。
 func parseFeeds(lang, raw string) ([]string, error) {
 	var out []string
+	seen := make(map[string]bool)
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -215,6 +216,12 @@ func parseFeeds(lang, raw string) ([]string, error) {
 			return nil, fmt.Errorf(i18n.T(lang, "plugin.phone.err.bad_feed",
 				"订阅源「%s」不是 http 或 https 地址"), line)
 		}
+		// 同一个地址写两遍只抓一次：抓取、错误记录与状态页必须用同一份
+		// 源列表，否则一次失败一次成功会在页面上同时出现。
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
 		out = append(out, line)
 	}
 	if len(out) > maxFeeds {

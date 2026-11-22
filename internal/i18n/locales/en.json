@@ -1640,7 +1640,7 @@
   "plugin.phone.desc": "Phone: when the character is free, she scrolls through the feeds you set up, keeps the few things she saw in mind, and brings up the ones she cares about",
   "plugin.phone.err.bad_feed": "feed %q is not an http or https address",
   "plugin.phone.err.too_many_feeds": "at most %d feeds are allowed; %d are listed",
-  "plugin.phone.field.feeds.desc": "One RSS or Atom address per line. Lines starting with # are ignored. Up to 20",
+  "plugin.phone.field.feeds.desc": "One RSS or Atom address per line. Lines starting with # are ignored; duplicates are fetched once. Up to 20",
   "plugin.phone.field.feeds.label": "Feeds",
   "plugin.phone.field.interests.desc": "Separated by commas or spaces. A headline that matches becomes a reason for her to speak first. Leave empty and news never prompts her, though what she saw still stays with her",
   "plugin.phone.field.interests.label": "Interest keywords",

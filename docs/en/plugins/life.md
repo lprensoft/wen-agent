@@ -159,7 +159,7 @@ Not everything a person talks about comes from the other side of the conversatio
 
 | Setting | Default | Description |
 |---|---|---|
-| `feeds` | empty | One RSS or Atom address per line; lines starting with `#` are ignored; up to 20 |
+| `feeds` | empty | One RSS or Atom address per line; lines starting with `#` are ignored; duplicates are fetched once; up to 20 |
 | `interests` | empty | Interest keywords, separated by commas or spaces; a matching headline becomes a reason to speak |
 | `refresh_hours` | 3 | Minimum hours between checks (1-24); if she is not free when the time comes, it waits |
 
