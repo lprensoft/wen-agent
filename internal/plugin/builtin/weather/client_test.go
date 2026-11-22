@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stubServer 起一个假的 open-meteo，并把两个接口地址指过去（测试结束还原）。
@@ -59,7 +60,7 @@ const geoOK = `{"results":[{"name":"杭州","latitude":30.2936,"longitude":120.1
 const fcOK = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3}}`
 
 // fcOKDaily 带昨天/今天/明天三天的概要（past_days=1 + forecast_days=2 的形状）。
-const fcOKDaily = `{"utc_offset_seconds":-18000,"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3},` +
+const fcOKDaily = `{"utc_offset_seconds":-18000,"timezone":"America/New_York","current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3},` +
 	`"daily":{"time":["2026-08-19","2026-08-20","2026-08-21"],"weather_code":[3,61,63],` +
 	`"temperature_2m_max":[24.2,20.1,17.8],"temperature_2m_min":[16.5,15.3,12.1]}}`
 
@@ -80,6 +81,9 @@ func TestFetchCurrentParsesDays(t *testing.T) {
 	}
 	if !rep.UTCOffsetSet || rep.UTCOffsetSeconds != -18000 {
 		t.Errorf("时区偏移 = (%v, %d)，期望记录 -18000", rep.UTCOffsetSet, rep.UTCOffsetSeconds)
+	}
+	if rep.Timezone != "America/New_York" {
+		t.Errorf("时区名 = %q", rep.Timezone)
 	}
 }
 
@@ -195,5 +199,18 @@ func TestFetchCurrentKeepsZeroOffset(t *testing.T) {
 	}
 	if !rep.UTCOffsetSet || rep.UTCOffsetSeconds != 0 {
 		t.Errorf("偏移 = (%v, %d)，期望记录 0 且标记为已知", rep.UTCOffsetSet, rep.UTCOffsetSeconds)
+	}
+}
+
+// 日期换算要看 IANA 时区，而不是抓取时的固定偏移。
+func TestLocalDateUsesIanaZoneAcrossDst(t *testing.T) {
+	if _, err := time.LoadLocation("Europe/London"); err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	r := Report{Timezone: "Europe/London", UTCOffsetSeconds: 0, UTCOffsetSet: true}
+	// 2026-03-29 23:30 UTC 已是 3 月 30 日 00:30 BST。
+	now := time.Date(2026, 3, 29, 23, 30, 0, 0, time.UTC)
+	if got := r.localDate(now); got != "2026-03-30" {
+		t.Errorf("localDate = %q，期望按 BST 得到 2026-03-30", got)
 	}
 }

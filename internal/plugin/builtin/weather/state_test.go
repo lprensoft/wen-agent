@@ -136,6 +136,7 @@ func TestObservationKeepsOffsetAcrossRestart(t *testing.T) {
 	rep := p.obs["纽约"].cur
 	rep.UTCOffsetSeconds = -5 * 3600
 	rep.UTCOffsetSet = true
+	rep.Timezone = "America/New_York"
 	p.obs["纽约"].cur = rep
 	p.dataMu.Unlock()
 	p.save(dir)
@@ -143,7 +144,7 @@ func TestObservationKeepsOffsetAcrossRestart(t *testing.T) {
 	p2 := New()
 	p2.loadInto(dir, []string{"纽约"})
 	rep, ok := p2.fresh("纽约", time.Hour, time.Now())
-	if !ok || !rep.UTCOffsetSet || rep.UTCOffsetSeconds != -5*3600 {
-		t.Fatalf("重启后偏移 = (%v, %d)，ok=%v", rep.UTCOffsetSet, rep.UTCOffsetSeconds, ok)
+	if !ok || !rep.UTCOffsetSet || rep.UTCOffsetSeconds != -5*3600 || rep.Timezone != "America/New_York" {
+		t.Fatalf("重启后时区 = (%v, %d, %q)，ok=%v", rep.UTCOffsetSet, rep.UTCOffsetSeconds, rep.Timezone, ok)
 	}
 }

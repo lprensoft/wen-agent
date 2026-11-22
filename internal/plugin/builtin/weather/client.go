@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	// 嵌入 IANA 时区库：提醒与「今天」要按预报地点的时区算，跨夏令时尤其
+	// 需要真实时区规则；Windows 与精简容器里未必有系统 zoneinfo。
+	_ "time/tzdata"
 
 	"wen/internal/prompt"
 )
@@ -53,6 +56,9 @@ type Report struct {
 	// UTCOffsetSet 区分「偏移为 0（UTC）」与「旧缓存没有存过偏移」。
 	// 旧缓存退回查询侧的日期，与修复前一致。
 	UTCOffsetSet bool `json:"UTCOffsetSet,omitempty"`
+	// Timezone 是观测地点的 IANA 时区名（如 Europe/London）。它比固定偏移
+	// 更能处理跨夏令时的日期边界；旧缓存没有这一项时退回偏移。
+	Timezone string `json:"Timezone,omitempty"`
 	// Yesterday / Today / Tomorrow 是昨天、今天与明天的概要，与现况同一次请求带回
 	// （零额外调用）。旧缓存没有这几项，零值表示未知、不注入，下次刷新自动补上。
 	Yesterday DayInfo `json:"Yesterday,omitzero"`
@@ -60,19 +66,33 @@ type Report struct {
 	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
 }
 
-// localZone 返回观测地点的时区；没有偏移的旧缓存退回服务器本地时区。
-func (r Report) localZone() *time.Location {
+// knownZone 返回观测地点已知的时区：优先 IANA 名称，其次抓取时的固定偏移。
+// 两者都没有时返回 nil，由调用方决定怎么回退。
+func (r Report) knownZone() *time.Location {
+	if r.Timezone != "" {
+		if loc, err := time.LoadLocation(r.Timezone); err == nil {
+			return loc
+		}
+	}
 	if r.UTCOffsetSet {
 		return time.FixedZone("", r.UTCOffsetSeconds)
+	}
+	return nil
+}
+
+// localZone 返回用于解析日期/时刻的时区；未知时退回服务器本地时区。
+func (r Report) localZone() *time.Location {
+	if loc := r.knownZone(); loc != nil {
+		return loc
 	}
 	return time.Local
 }
 
 // localNow 把查询时刻换算到观测地点时区。
-// 没有偏移时原样返回，保留调用方传入的时区（与修复前一致）。
+// 时区未知时原样返回，保留调用方传入的时区（与修复前一致）。
 func (r Report) localNow(now time.Time) time.Time {
-	if r.UTCOffsetSet {
-		return now.In(time.FixedZone("", r.UTCOffsetSeconds))
+	if loc := r.knownZone(); loc != nil {
+		return now.In(loc)
 	}
 	return now
 }
@@ -162,7 +182,8 @@ func fetchCurrent(ctx context.Context, lang string, client *http.Client, p Place
 	q.Set("timezone", "auto")
 
 	var body struct {
-		UtcOffsetSeconds *int `json:"utc_offset_seconds"`
+		UtcOffsetSeconds *int   `json:"utc_offset_seconds"`
+		Timezone         string `json:"timezone"`
 		Current          struct {
 			Temperature float64 `json:"temperature_2m"`
 			Humidity    float64 `json:"relative_humidity_2m"`
@@ -190,6 +211,7 @@ func fetchCurrent(ctx context.Context, lang string, client *http.Client, p Place
 		WindKmh:   c.Wind,
 		Fetched:   time.Now(),
 	}
+	rep.Timezone = body.Timezone
 	if body.UtcOffsetSeconds != nil {
 		rep.UTCOffsetSeconds = *body.UtcOffsetSeconds
 		rep.UTCOffsetSet = true
