@@ -136,11 +136,19 @@ func dropRegistration(path string, pid int) {
 //
 // 上一次交接如果被打断（wen.lock 已经改名成 .releasing，还没来得及判断或放回），
 // 登记就停在那里；这时也要读它，否则仍在运行的旧实例会从所有调用方眼前消失。
+//
+// 但备用登记只在它记录的那个进程还活着时才可信：旧实例退出时只清 wen.lock，这个
+// 文件会留下；端口后来可能被另一份配置目录的服务复用，那个地址应答的已经不是这边
+// 的实例，连上去改的就是别人的配置。
 func Read(dir string) (Info, bool) {
 	if info, ok := readInfo(Path(dir)); ok {
 		return info, true
 	}
-	return readInfo(releasingPath(Path(dir)))
+	info, ok := readInfo(releasingPath(Path(dir)))
+	if !ok || !processAlive(info.PID) {
+		return Info{}, false
+	}
+	return info, true
 }
 
 // releasingPath 是交接中被临时改名的登记文件。

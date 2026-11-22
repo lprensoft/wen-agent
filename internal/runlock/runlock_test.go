@@ -2,7 +2,11 @@ package runlock
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,10 +65,12 @@ func TestReleaseKeepsRegistrationItNeverWrote(t *testing.T) {
 // 找得到仍在运行的那个实例。
 func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(releasingPath(Path(dir)), []byte(`{"pid":123,"addr":"127.0.0.1:8090"}`), 0o644); err != nil {
+	me := os.Getpid()
+	body := fmt.Sprintf(`{"pid":%d,"addr":"127.0.0.1:8090"}`, me)
+	if err := os.WriteFile(releasingPath(Path(dir)), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if info, ok := Read(dir); !ok || info.PID != 123 {
+	if info, ok := Read(dir); !ok || info.PID != me {
 		t.Fatalf("被打断的交接没有留下可发现的登记：%+v %v", info, ok)
 	}
 	// 新的登记写回来之后，以它为准。
@@ -73,6 +79,25 @@ func TestReadFindsRegistrationLeftByInterruptedRelease(t *testing.T) {
 	}
 	if info, ok := Read(dir); !ok || info.PID != 456 {
 		t.Fatalf("有正式登记时不该回落到 .releasing：%+v %v", info, ok)
+	}
+}
+
+// 旧实例已经退出、交接留下的登记还在，而端口被另一份配置目录的服务复用：那个
+// 地址即使应答，也不能当成这边的实例——否则 wen config 改的是别人的配置。
+func TestReadIgnoresStaleReleasingRegistration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	// 1<<30 不可能是活着的 PID：这就是「旧实例已经退出」。
+	body := fmt.Sprintf(`{"pid":%d,"addr":%q}`, 1<<30, strings.TrimPrefix(srv.URL, "http://"))
+	if err := os.WriteFile(releasingPath(Path(dir)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, ok := Read(dir); ok {
+		t.Fatalf("采纳了已退出实例的备用登记（地址属于另一实例）：%+v", info)
 	}
 }
 
