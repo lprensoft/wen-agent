@@ -9,6 +9,7 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/agentplugin"
 	"wen/internal/atomicfile"
 	"wen/internal/i18n"
 )
@@ -62,6 +64,8 @@ type Options struct {
 	ExtraDirs []string
 	// Overwrite 允许覆盖已存在的输出文件。
 	Overwrite bool
+	// Context 取消等待插件包更新锁；为零值时用 background。
+	Context context.Context
 }
 
 // Stats 是一次导出或导入的统计。
@@ -94,6 +98,18 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 			return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.output_exists", "备份文件已存在：%s（加 --force 覆盖）", out))
 		}
 	}
+
+	// 从预检到包文件读完都要与启动时的目录切换互斥：否则归档可能在「旧包已移进
+	// work、新包还没顶上」的瞬间枚举 bundles，漏掉那个包却仍报告成功。
+	ctx := opt.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock, err := agentplugin.LockUpdates(ctx, lang, baseDir)
+	if err != nil {
+		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "插件包目录正被更新操作占用，备份没有开始：%v", err))
+	}
+	defer unlock()
 
 	entries, stats, err := collect(baseDir, opt, absOut)
 	if err != nil {

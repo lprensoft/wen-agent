@@ -3,11 +3,14 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
+	"wen/internal/agentplugin"
 	"wen/internal/i18n"
 )
 
@@ -42,6 +45,38 @@ func baseFixture(t *testing.T) string {
 	write(t, filepath.Join(base, "bundles", "demo", "plugin.json"), `{"name":"demo"}`, 0o644)
 	write(t, filepath.Join(base, "wen.lock"), `{"addr":"127.0.0.1:1"}`, 0o644)
 	return base
+}
+
+func TestExportWaitsForBundleUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	unlock, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml", Context: ctx}); err == nil {
+		t.Fatal("更新锁被占用时备份不该开始")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("等待失败仍写出了归档：%v", err)
+	}
+}
+
+func TestExportReleasesBundleUpdateLock(t *testing.T) {
+	base := baseFixture(t)
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
+	if err != nil {
+		t.Fatalf("备份没有释放更新锁：%v", err)
+	}
+	unlock()
 }
 
 func TestExportImportRoundTrip(t *testing.T) {

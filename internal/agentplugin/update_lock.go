@@ -22,6 +22,15 @@ var (
 	updateLockOpenBusyTimeout = 5 * time.Minute
 )
 
+// LockUpdates 取得插件包更新目录的跨进程锁，返回释放函数。
+//
+// 备份这类要整体读取 bundles 目录的操作必须从头持有它：启动时的目录切换（先把旧包
+// 移进 work，再把新包顶上）如果正好发生在预检与遍历之间，归档会漏掉那个包，却仍然
+// 报告成功。
+func LockUpdates(ctx context.Context, lang, baseDir string) (func(), error) {
+	return NewStore(lang, baseDir).acquireUpdateLock(ctx)
+}
+
 // acquireUpdateLock 跨进程串行化「读状态—修改—写回」。opMu 只管一个 Store
 // 实例；两个 CLI 或 CLI 与服务同时写 sources.json 时，只有文件锁能防止丢更新。
 // 锁由操作系统持有，进程退出或崩溃会自然释放；锁文件本身长期保留，不能靠删文件解锁。

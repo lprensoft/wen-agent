@@ -30,7 +30,7 @@ It includes:
 
 It does not include:
 
-- `wen.lock` (the running-instance record);
+- `wen.lock` (the running-instance record) and `wen.runlock` (the run-right lock file);
 - pending, staging and rollback directories and operation locks for external bundle updates (sources migrate, half-finished updates and process locks do not). If a swap has started and the live bundle is missing or a rollback directory exists, export refuses to run; start the service to finish recovery first rather than producing an incomplete archive;
 - symbolic links and special files;
 - a session directory outside the configuration directory (`session.dir` pointing elsewhere prints a note);

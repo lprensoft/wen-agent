@@ -109,6 +109,11 @@ func (p *Plugin) StartAction(ctx context.Context, key string) error {
 		dataDir = filepath.Join(dataDir, DataDirName)
 	}
 	token := plugin.ActionTokenFrom(ctx)
+	// 取消按钮绑定的是展示时那一份 pending。旧窗口没有凭据，不能让它按名字取消
+	// 「当前」那一份——那可能已经是另一个窗口换过的版本。
+	if key == actionCancelUpdate && token == "" {
+		return fmt.Errorf("%s", i18n.T(lang, "plugin.external.action.cancel_no_token", "这个页面没有取消凭据，刷新后再试。"))
+	}
 
 	pendingMessage := i18n.T(lang, "plugin.external.action.started", "操作已开始 …")
 	if key == actionRefresh {

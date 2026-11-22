@@ -127,6 +127,27 @@ func (s *Store) SaveTools(bundle, version string, tools []ToolInfo) error {
 
 var removeToolCache = os.Remove
 
+// DropToolsExceptVersion 删掉某个插件包的缓存，但保留已经属于 version 的那一份。
+//
+// 更新应用后的清理可能失败（回滚目录或 pending 暂时删不掉），并在用户重新握手之后
+// 才重试。那时缓存已经标着新版本——用户正是照着提示握完手的——再删掉它，重启之后
+// 工具又会消失。
+func (s *Store) DropToolsExceptVersion(bundle, version string) error {
+	path := s.cachePath(bundle)
+	if path == "" {
+		return nil
+	}
+	if version != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var c toolCache
+			if json.Unmarshal(data, &c) == nil && c.Version == version {
+				return nil
+			}
+		}
+	}
+	return s.DropTools(bundle)
+}
+
 // DropTools 删掉某个插件包的缓存。删除失败必须显式返回：调用方要保留
 // pending 或其它证据，避免新版插件静默沿用旧版工具清单。
 func (s *Store) DropTools(bundle string) error {

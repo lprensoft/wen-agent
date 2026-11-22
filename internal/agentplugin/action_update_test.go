@@ -83,8 +83,14 @@ func TestCancelActionReturnsImmediatelyWhileUpdateLockHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	pending, err := f.store.Pending("pdf-tools")
+	if err != nil || pending == nil {
+		t.Fatalf("读取 pending 失败：%+v, %v", pending, err)
+	}
 	returned := make(chan error, 1)
-	go func() { returned <- p.StartAction(context.Background(), actionCancelUpdate) }()
+	go func() {
+		returned <- p.StartAction(plugin.WithActionToken(context.Background(), pending.actionToken()), actionCancelUpdate)
+	}()
 	select {
 	case err := <-returned:
 		if err != nil {
@@ -103,6 +109,21 @@ func TestCancelActionReturnsImmediatelyWhileUpdateLockHeld(t *testing.T) {
 	release()
 	if st := waitExternalAction(t, p, actionCancelUpdate); st.Status != plugin.ActionDone {
 		t.Fatalf("释放锁后取消没有完成：%+v", st)
+	}
+}
+
+func TestCancelActionRequiresTokenFromDisplayedPending(t *testing.T) {
+	f := newStageFixture(t)
+	if _, err := f.store.StageUpdate(context.Background(), "pdf-tools", f.candidate.Token); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Load("", f.store.Path("pdf-tools"))
+	p := NewPlugin("", b, f.store)
+	if err := p.StartAction(context.Background(), actionCancelUpdate); err == nil {
+		t.Fatal("没有取消凭据的界面操作不该被接受")
+	}
+	if pending, _ := f.store.Pending("pdf-tools"); pending == nil {
+		t.Fatal("被拒绝的取消删掉了 pending")
 	}
 }
 

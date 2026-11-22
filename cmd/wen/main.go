@@ -115,12 +115,27 @@ func runServe(args []string) {
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	// 先取得监听端口，再确认没有存活实例；第二实例即使随后退出，也不能提前
-	// 替换第一个进程正在读取的插件目录。
+	// 先取得监听端口，再取出配置目录的运行权，然后才允许应用待更新包。端口只挡得住
+	// 同端口的第二个实例；换了端口的那个仍会共用状态文件，还会在启动时替换这里正在
+	// 读取的插件目录。运行权持有到进程退出（重启交棒时显式释放）。
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fatalf("log.serve.listen_failed", "无法监听 %s：%v\n端口可能被别的程序占用了。换一个端口：wen -p <端口>，或在 config.yaml 里写 server.port。", addr, err)
 	}
+	releaseLock, lockErr := runlock.Acquire(cfg.BaseDir, runlock.Info{
+		PID: os.Getpid(), Addr: addr, Version: version.Version,
+		Started: time.Now().Format(time.RFC3339),
+	})
+	if lockErr != nil {
+		_ = ln.Close()
+		if errors.Is(lockErr, runlock.ErrBusy) {
+			log.Fatal(anotherInstanceRunning(cfg.BaseDir))
+		}
+		// 拿不到运行权只是登记不上，配置工具会退回离线模式，不该拦住服务启动。
+		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", lockErr)
+	}
+	defer releaseLock()
+
 	problems, err := applyPendingForServe(cfg.BaseDir)
 	if err != nil {
 		_ = ln.Close()
@@ -183,20 +198,6 @@ func runServe(args []string) {
 
 	logf("log.serve.started", "Wen Agent %s 已启动: http://%s", version.Version, addr)
 
-	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
-	// 失败只是让配置工具退回离线模式，不该拦住服务启动。
-	if prev, ok := runlock.Read(cfg.BaseDir); ok && reachable(prev.Addr) {
-		logf("log.serve.another_instance", "警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
-	}
-	releaseLock, err := runlock.Acquire(cfg.BaseDir, runlock.Info{
-		PID: os.Getpid(), Addr: addr, Version: version.Version,
-		Started: time.Now().Format(time.RFC3339),
-	})
-	if err != nil {
-		logf("log.serve.runlock_failed", "提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
-	}
-	defer releaseLock()
-
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           srv.Handler(),
@@ -229,17 +230,29 @@ func runServe(args []string) {
 
 	if restartReason != "" {
 		// 交棒之前必须先松开这两样：端口（Windows 上新进程要重新 bind 它）与
-		// 登记文件（新进程起来会重新登记）。顺序是硬的——Shutdown 已经关掉监听，
-		// 这里补上登记文件，然后才轮到新进程。
+		// 配置目录的运行权（新进程起来第一件事就是重新取得它）。顺序是硬的——
+		// Shutdown 已经关掉监听，这里放开运行权，然后才轮到新进程。
 		releaseLock()
 		relaunch(exePath)
 	}
 }
 
-// applyPendingForServe 只允许没有存活实例的一方应用外源更新。调用方必须先
-// 绑定监听端口；这个函数再把「另一实例仍在运行」挡在目录切换之前。
+// anotherInstanceRunning 说明另一个实例正占着这个配置目录。登记文件里有地址时
+// 把它带上，用户才知道该去关哪一个。
+func anotherInstanceRunning(baseDir string) error {
+	if prev, ok := runlock.Read(baseDir); ok && prev.Addr != "" {
+		return fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
+	}
+	return fmt.Errorf("%s", tr("log.serve.another_instance_unknown", "同一配置目录下已有实例在运行，本次没有启动；待更新包也未改动"))
+}
+
+// applyPendingForServe 只允许持有运行权的一方应用外源更新。调用方必须先取得该配置
+// 目录的运行权（runlock.Acquire）；这里再按登记地址复核一次，把「另一实例仍在运行」
+// 挡在目录切换之前。
 func applyPendingForServe(baseDir string) ([]string, error) {
-	if prev, ok := runlock.Read(baseDir); ok && reachable(prev.Addr) {
+	// 登记文件此刻可能就是我们自己刚写下的：那时监听已经 bind、但 HTTP 还没有开始
+	// 服务，探活只会白等一个超时。只把「另有其人的登记」当证据。
+	if prev, ok := runlock.Read(baseDir); ok && prev.PID != os.Getpid() && reachable(prev.Addr) {
 		return nil, fmt.Errorf(tr("log.serve.another_instance_fatal", "同一配置目录下已有实例在 %s 运行，本次没有启动；待更新包也未改动"), prev.Addr)
 	}
 	return agentplugin.NewStore(uiLang, baseDir).ApplyPending(), nil

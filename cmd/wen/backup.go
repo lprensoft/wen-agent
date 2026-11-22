@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -59,6 +60,10 @@ func runExport(args []string) error {
 		}
 	}
 
+	// 插件包更新锁可能被服务或另一个命令行操作持有一阵子；给它一个上限，别让
+	// 用户在没有任何输出的情况下干等。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	manifest, stats, err := backup.Export(cfg.BaseDir, output, backup.Options{
 		Lang:       uiLang,
 		AppVersion: version.Version,
@@ -66,6 +71,7 @@ func runExport(args []string) error {
 		SessionDir: sessionDir,
 		ExtraDirs:  extra,
 		Overwrite:  *force,
+		Context:    ctx,
 	})
 	if err != nil {
 		return err

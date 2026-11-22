@@ -106,22 +106,40 @@ func (s *Store) Remove(name string) error {
 	if path == "" {
 		return fmt.Errorf("没有可用的插件包目录")
 	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("没有装过名为 %q 的插件包", name)
+	_, statErr := os.Stat(path)
+	missing := os.IsNotExist(statErr)
+	if statErr != nil && !missing {
+		return statErr
+	}
+	// 正式目录没了不代表卸载已经完成：上一次可能就是删完目录、在清缓存时失败的。
+	// 先记下还有哪些残留，再逐项清理，重试才能把这件事做完。
+	sources, sourcesErr := s.readSources()
+	_, tracked := sources[name]
+	residue := !missing || (sourcesErr == nil && tracked)
+	for _, leftover := range []string{
+		s.cachePath(name), s.pendingPath(name), s.stagedPath(name),
+		s.rollbackPath(name), filepath.Join(s.updateWorkDir(), name+".zip"),
+	} {
+		if leftover == "" {
+			continue
 		}
-		return err
+		if _, err := os.Stat(leftover); err == nil {
+			residue = true
+		}
 	}
-	if err := os.RemoveAll(path); err != nil {
-		return err
+	if !missing {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
 	}
-	// 缓存清理只能在包名校验与正式目录删除都成功之后进行，且仍在同一把锁内。
+
+	// 缓存清理与正式目录删除在同一把锁内。卸载同时清掉更新来源与尚未应用的暂存；
+	// PLUGIN_DATA 仍在包外，照旧保留。各项都尽量清理完再汇总错误，尤其不能让一份
+	// 坏 sources.json 把 pending 留下来。
 	var errs []error
 	if err := s.DropTools(name); err != nil {
 		errs = append(errs, err)
 	}
-	// 卸载同时清掉更新来源与尚未应用的暂存；PLUGIN_DATA 仍在包外，照旧保留。
-	// 各项都尽量清理完再汇总错误，尤其不能让一份坏 sources.json 把 pending 留下来。
 	if err := os.Remove(s.pendingPath(name)); err != nil && !os.IsNotExist(err) {
 		errs = append(errs, err)
 	}
@@ -130,14 +148,19 @@ func (s *Store) Remove(name string) error {
 			errs = append(errs, err)
 		}
 	}
-	sources, err := s.readSources()
-	if err != nil {
-		errs = append(errs, err)
-	} else {
+	if sourcesErr != nil {
+		errs = append(errs, sourcesErr)
+	} else if tracked {
 		delete(sources, name)
 		if err := s.writeSources(sources); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if !residue {
+		return fmt.Errorf("没有装过名为 %q 的插件包", name)
+	}
+	return nil
 }

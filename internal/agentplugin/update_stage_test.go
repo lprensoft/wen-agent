@@ -207,6 +207,19 @@ func TestCancelRejectsTokenFromOlderPending(t *testing.T) {
 	}
 }
 
+func TestCancelContextRejectsMissingToken(t *testing.T) {
+	store := NewStore("", t.TempDir())
+	if err := store.writePending(&PendingUpdate{Name: "demo", FromVersion: "1.0.0", Version: "1.1.0", Token: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CancelUpdateContext(context.Background(), "demo", ""); err == nil {
+		t.Fatal("空 token 不该取消界面上的 pending")
+	}
+	if pending, _ := store.Pending("demo"); pending == nil {
+		t.Fatal("空 token 删掉了 pending")
+	}
+}
+
 func TestApplyRefusesCurrentChangedAfterStaging(t *testing.T) {
 	f := newStageFixture(t)
 	if _, err := f.store.StageUpdate(context.Background(), "pdf-tools", f.candidate.Token); err != nil {
@@ -339,8 +352,39 @@ func TestApplyCacheDeleteFailureNeverRegistersLegacyTools(t *testing.T) {
 	if len(p.Tools()) != 0 {
 		t.Fatal("新版插件沿用了旧版 MCP 工具")
 	}
+	// 用户按提示重新握手，缓存已经改写成新版；重试清理不能把它删掉。
+	if err := f.store.SaveTools("pdf-tools", "1.3.0", []ToolInfo{{Local: "new_tool"}}); err != nil {
+		t.Fatal(err)
+	}
 	if problems := f.store.ApplyPending(); len(problems) != 0 {
 		t.Fatalf("恢复删除后重试失败：%v", problems)
+	}
+	tools, err := f.store.LoadTools("pdf-tools", "1.3.0")
+	if err != nil || len(tools) != 1 || tools[0].Local != "new_tool" {
+		t.Fatalf("重试清理删掉了刚写下的新版缓存：%+v, %v", tools, err)
+	}
+}
+
+func TestUninstallRetryFinishesCacheCleanup(t *testing.T) {
+	f := newStageFixture(t)
+	original := removeToolCache
+	removeToolCache = func(string) error { return fmt.Errorf("injected cache delete failure") }
+	err := f.store.Remove("pdf-tools")
+	removeToolCache = original
+	if err == nil {
+		t.Fatal("缓存删除失败没有报出来")
+	}
+	if _, statErr := os.Stat(f.store.Path("pdf-tools")); !os.IsNotExist(statErr) {
+		t.Fatal("正式目录应该已经删除")
+	}
+	if err := f.store.Remove("pdf-tools"); err != nil {
+		t.Fatalf("重试卸载没有完成残留清理：%v", err)
+	}
+	if _, statErr := os.Stat(f.store.cachePath("pdf-tools")); !os.IsNotExist(statErr) {
+		t.Fatalf("重试后缓存仍在：%v", statErr)
+	}
+	if err := f.store.Remove("never-installed"); err == nil {
+		t.Fatal("没装过的包应当报错")
 	}
 }
 

@@ -194,14 +194,22 @@ func (s *Store) StageUpdate(ctx context.Context, name, token string) (*PendingUp
 	return pending, nil
 }
 
-// CancelUpdate 取消尚未开始切换的暂存更新，正式包与工具缓存不变。
+// CancelUpdate 按包名取消尚未开始切换的暂存更新，正式包与工具缓存不变。
+// 这是命令行入口：没有界面，也就没有「看到的是哪一份」可核对。
 func (s *Store) CancelUpdate(name string) error {
-	return s.CancelUpdateContext(context.Background(), name, "")
+	return s.cancelUpdate(context.Background(), name, "", false)
 }
 
-// CancelUpdateContext 与 CancelUpdate 相同，但允许调用方取消文件锁等待。
-// expectedToken 非空时，只允许取消界面上实际看到的那一份 pending。
+// CancelUpdateContext 与 CancelUpdate 相同，但允许调用方取消文件锁等待，并要求
+// expectedToken 等于界面上实际看到的那一份 pending。空 token 属于升级前的旧窗口，
+// 不能拿它取消后来换过的记录。
 func (s *Store) CancelUpdateContext(ctx context.Context, name, expectedToken string) error {
+	return s.cancelUpdate(ctx, name, expectedToken, true)
+}
+
+// cancelUpdate 的 requireToken 只在界面入口为真：命令行按包名取消，没有「看到的
+// 是哪一份」可核对。
+func (s *Store) cancelUpdate(ctx context.Context, name, expectedToken string, requireToken bool) error {
 	if err := checkName(s.lang, name); err != nil {
 		return err
 	}
@@ -219,7 +227,7 @@ func (s *Store) CancelUpdateContext(ctx context.Context, name, expectedToken str
 	if pending == nil {
 		return nil
 	}
-	if expectedToken != "" && expectedToken != pending.actionToken() {
+	if (requireToken && expectedToken == "") || (expectedToken != "" && expectedToken != pending.actionToken()) {
 		return fmt.Errorf("%s", i18n.T(s.lang, "plugin.bundle.update.err.cancel_stale", "待更新记录已经变化，请刷新后再取消"))
 	}
 	if _, err := os.Stat(s.rollbackPath(name)); err == nil {
@@ -410,8 +418,9 @@ func (s *Store) applyOne(p *PendingUpdate) error {
 
 func (s *Store) finishApply(p *PendingUpdate) error {
 	// 缓存删除失败就保留 pending：LoadTools 会据此拒绝 legacy 缓存，
-	// 下次启动再重试清理，而不是让新版 MCP 拿到旧工具表。
-	if err := s.DropTools(p.Name); err != nil {
+	// 下次启动再重试清理，而不是让新版 MCP 拿到旧工具表。已经标着目标版本的
+	// 缓存要留下——那可能是用户在失败之后重新握手写下的。
+	if err := s.DropToolsExceptVersion(p.Name, p.Version); err != nil {
 		return err
 	}
 	if err := updateRemoveAll(s.rollbackPath(p.Name)); err != nil {
