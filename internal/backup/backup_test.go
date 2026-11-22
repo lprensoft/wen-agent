@@ -62,9 +62,12 @@ func writeUpdateLock(t *testing.T, base string) {
 func TestExportWaitsForBundleUpdateLock(t *testing.T) {
 	base := baseFixture(t)
 	writeUpdateLock(t, base)
-	unlock, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
+	unlock, locked, err := agentplugin.LockUpdates(context.Background(), i18n.LangZH, base)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("有锁文件时应当真的取到锁")
 	}
 	defer unlock()
 
@@ -108,11 +111,39 @@ func TestExportReleasesBundleUpdateLock(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	unlock, err := agentplugin.LockUpdates(ctx, i18n.LangZH, base)
+	unlock, locked, err := agentplugin.LockUpdates(ctx, i18n.LangZH, base)
 	if err != nil {
 		t.Fatalf("备份没有释放更新锁：%v", err)
 	}
+	if !locked {
+		t.Fatal("锁文件在，应当真的取到锁")
+	}
 	unlock()
+}
+
+// 读的过程中第一次写操作开始了（锁文件出现）：这一份归档不可信，应当丢掉重来。
+func TestExportRetriesWhenWriteStartsMidRead(t *testing.T) {
+	base := baseFixture(t)
+	original := afterArchiveWritten
+	attempts := 0
+	afterArchiveWritten = func() {
+		attempts++
+		if attempts == 1 {
+			writeUpdateLock(t, base)
+		}
+	}
+	defer func() { afterArchiveWritten = original }()
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{Lang: i18n.LangZH, ConfigFile: "config.yaml"}); err != nil {
+		t.Fatalf("写操作出现后没有重试：%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("读取次数 = %d，想要 2", attempts)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("重试后没有归档：%v", err)
+	}
 }
 
 func TestExportImportRoundTrip(t *testing.T) {

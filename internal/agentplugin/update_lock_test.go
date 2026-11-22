@@ -47,6 +47,35 @@ func TestUpdateLockBlocksAndIgnoresAbandonedFile(t *testing.T) {
 	release()
 }
 
+// 只读快照里的锁文件必须能按只读方式打开：Windows 上带 O_CREATE 打开会要求写
+// 权限，于是备份只能等到上下文超时。
+func TestLockUpdatesOpensReadOnlyLockFile(t *testing.T) {
+	base := t.TempDir()
+	store := NewStore("", base)
+	if err := os.MkdirAll(store.updatesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(store.updatesDir(), updateLockFile)
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockPath, 0o644) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	unlock, locked, err := LockUpdates(ctx, "", base)
+	if err != nil {
+		t.Fatalf("只读的锁文件打不开：%v", err)
+	}
+	if !locked {
+		t.Fatal("锁文件存在却没有取锁")
+	}
+	unlock()
+}
+
 func TestConcurrentTrackAcrossStoresDoesNotLoseSources(t *testing.T) {
 	base := t.TempDir()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)

@@ -106,19 +106,39 @@ func (r *Run) Release() {
 		// 先删登记、再放开运行权：反过来的话，新实例可能已经取得运行权并写下自己
 		// 的登记，这里再删就把它的删掉了。
 		if r.pid != 0 {
-			if info, ok := Read(r.dir); ok && info.PID == r.pid {
-				_ = os.Remove(Path(r.dir))
-			}
+			dropRegistration(Path(r.dir), r.pid)
 		}
 		_ = r.unlock()
 		_ = r.f.Close()
 	})
 }
 
+// dropRegistration 只删属于 pid 的那一份登记。
+//
+// 「读内容、再删文件」不是原子的：旧版实例不受运行权约束，它可能正好在这两步之间
+// 完成登记，于是删掉的是它刚写下的地址。这里先把文件整体改名拿走，再看手里这份是
+// 谁的——原路径在改名之后空出来，谁在这时写进去都不归我们删。若拿到的不是自己的
+// 登记，原样放回。
+func dropRegistration(path string, pid int) {
+	trash := path + ".releasing"
+	if err := os.Rename(path, trash); err != nil {
+		return
+	}
+	if info, ok := readInfo(trash); ok && info.PID == pid {
+		_ = os.Remove(trash)
+		return
+	}
+	_ = os.Rename(trash, path)
+}
+
 // Read 读取登记文件。第二个返回值为 false 表示没有登记（文件缺失或内容损坏）。
 // 文件存在不代表进程还活着，调用方需要自行探活。
 func Read(dir string) (Info, bool) {
-	raw, err := os.ReadFile(Path(dir))
+	return readInfo(Path(dir))
+}
+
+func readInfo(path string) (Info, bool) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Info{}, false
 	}

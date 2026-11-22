@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLockIsExclusivePerDirectory(t *testing.T) {
@@ -52,6 +53,41 @@ func TestReleaseKeepsRegistrationItNeverWrote(t *testing.T) {
 		info, ok := Read(dir)
 		if !ok || info.PID != 123 {
 			t.Fatalf("第 %d 次退出抹掉了旧实例的登记：%+v %v", attempt, info, ok)
+		}
+	}
+}
+
+// 新版退出时，旧版实例正好完成登记：不管它落在改名之前还是之后，那份登记都必须
+// 活下来。
+func TestReleaseDoesNotSwallowConcurrentRegistration(t *testing.T) {
+	old := []byte(`{"pid":123,"addr":"127.0.0.1:8091"}`)
+	for i := 0; i < 50; i++ {
+		dir := t.TempDir()
+		inst, err := Lock(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := inst.Register(Info{PID: 1, Addr: "127.0.0.1:8090"}); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				if err := os.WriteFile(Path(dir), old, 0o644); err == nil {
+					return
+				}
+				if time.Now().After(deadline) {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		inst.Release()
+		<-done
+		if info, ok := Read(dir); !ok || info.PID != 123 {
+			t.Fatalf("第 %d 次：旧实例的登记被删掉：%+v %v", i, info, ok)
 		}
 	}
 }

@@ -81,6 +81,14 @@ type fileEntry struct {
 	rel string
 }
 
+// exportAttempts 是「读取期间目录开始被写入」时最多重来的次数。第二次一定持锁，
+// 所以正常情况下两遍就结束。
+const exportAttempts = 3
+
+// afterArchiveWritten 在读完之后、复查更新锁之前调用，只给测试用来模拟「第一次
+// 写操作正好在读取期间开始」。
+var afterArchiveWritten = func() {}
+
 // Export 把 baseDir 里程序维护的数据写成 out。
 func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	lang := opt.Lang
@@ -99,24 +107,41 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 		}
 	}
 
-	// 从预检到包文件读完都要与启动时的目录切换互斥：否则归档可能在「旧包已移进
-	// work、新包还没顶上」的瞬间枚举 bundles，漏掉那个包却仍报告成功。
+	for attempt := 0; attempt < exportAttempts; attempt++ {
+		manifest, stats, retry, err := exportArchive(baseDir, absOut, opt)
+		if err != nil {
+			return Manifest{}, Stats{}, err
+		}
+		if !retry {
+			return manifest, stats, nil
+		}
+	}
+	return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.T(lang, "backup.err.bundle_busy", "插件包目录正在被写入，没能取到一致的快照；请稍后重试"))
+}
+
+// exportArchive 在更新锁下收集并写出归档。retry 为 true 表示读完之后才发现更新锁
+// 文件出现（此前这份目录没有写操作），临时文件已经丢弃，需要持锁重来。
+//
+// 从预检到包文件读完都要与启动时的目录切换互斥：否则归档可能在「旧包已移进 work、
+// 新包还没顶上」的瞬间枚举 bundles，漏掉那个包却仍报告成功。
+func exportArchive(baseDir, absOut string, opt Options) (Manifest, Stats, bool, error) {
+	lang := opt.Lang
 	ctx := opt.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	unlock, err := agentplugin.LockUpdates(ctx, lang, baseDir)
+	unlock, locked, err := agentplugin.LockUpdates(ctx, lang, baseDir)
 	if err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "插件包目录正被更新操作占用，备份没有开始：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.bundle_lock", "插件包目录正被更新操作占用，备份没有开始：%v", err))
 	}
 	defer unlock()
 
 	entries, stats, err := collect(baseDir, opt, absOut)
 	if err != nil {
-		return Manifest{}, Stats{}, err
+		return Manifest{}, Stats{}, false, err
 	}
 	if len(entries) == 0 {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容"))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.T(lang, "backup.err.nothing", "配置目录里没有可备份的内容"))
 	}
 
 	manifest := Manifest{
@@ -130,11 +155,11 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.output_dir", "创建备份目录失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.output_dir", "创建备份目录失败：%v", err))
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(absOut), ".wen-export-*")
 	if err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.temp", "创建临时文件失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.temp", "创建临时文件失败：%v", err))
 	}
 	tmpName := tmp.Name()
 	committed := false
@@ -146,25 +171,33 @@ func Export(baseDir, out string, opt Options) (Manifest, Stats, error) {
 	}()
 
 	if err := writeArchive(tmp, entries, manifest, lang); err != nil {
-		return Manifest{}, Stats{}, err
+		return Manifest{}, Stats{}, false, err
 	}
 	if err := tmp.Sync(); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
 	if err := tmp.Close(); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
 	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.write", "写入备份失败：%v", err))
 	}
+
+	// 没有取锁时，锁文件可能出现——第一次写操作刚在这份目录上开始，读到的包可能
+	// 只复制了一半。丢掉这一份，重来时就会持锁。
+	afterArchiveWritten()
+	if !locked && agentplugin.UpdatesActive(baseDir) {
+		return Manifest{}, Stats{}, true, nil
+	}
+
 	if opt.Overwrite {
 		_ = os.Remove(absOut)
 	}
 	if err := atomicfile.Rename(tmpName, absOut); err != nil {
-		return Manifest{}, Stats{}, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.rename", "保存备份文件失败：%v", err))
+		return Manifest{}, Stats{}, false, fmt.Errorf("%s", i18n.Tf(lang, "backup.err.rename", "保存备份文件失败：%v", err))
 	}
 	committed = true
-	return manifest, stats, nil
+	return manifest, stats, false, nil
 }
 
 // collect 枚举要备份的文件。它只认程序已知的路径，不遍历整个配置目录。
