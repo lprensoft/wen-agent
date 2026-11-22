@@ -357,3 +357,35 @@ func TestForecastCueExpiresAtDstMidnight(t *testing.T) {
 		t.Error("夏令时后的当地午夜应已过期")
 	}
 }
+
+// 圣地亚哥 2026-09-06 没有 00:00，当地从 9 月 5 日 23:59:59 直接到 9 月 6 日
+// 01:00；提醒必须在 01:00 才过期，不能提前到前一天 23:00。
+func TestForecastCueExpiresAtSkippedMidnight(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	santiago, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skipf("没有时区数据: %v", err)
+	}
+	start, ok := firstInstantOfDate("2026-09-06", santiago)
+	if !ok || start.Hour() != 1 || start.Minute() != 0 {
+		t.Fatalf("firstInstantOfDate = %v, %v，期望当地 01:00", start, ok)
+	}
+
+	p := New()
+	cur := Report{
+		Place: "圣地亚哥", Condition: "多云",
+		Fetched:  time.Date(2026, 9, 5, 23, 0, 0, 0, santiago),
+		Timezone: "America/Santiago",
+		Tomorrow: DayInfo{Date: "2026-09-06", Condition: "小雨", MinC: 5, MaxC: 10},
+	}
+	if !p.forecastCue("zh", "你所在的", "圣地亚哥", Report{}, cur, true) {
+		t.Fatal("应投递预报理由")
+	}
+	if !cue.Pending(time.Date(2026, 9, 5, 23, 30, 0, 0, santiago)) {
+		t.Error("当地午夜之前应仍可取")
+	}
+	if cue.Pending(start.Add(30 * time.Minute)) {
+		t.Error("当地日期开始后应过期")
+	}
+}
