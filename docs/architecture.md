@@ -10,6 +10,7 @@ internal/config/         配置加载（YAML + ${VAR} 环境变量替换）
 internal/llm/            Provider 接口 + OpenAI 兼容（Chat / Responses）/ Anthropic 实现
 internal/modelcfg/       模型与提供商配置（models.json 覆盖层，热切换）
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
+internal/usage/          用量账本（按日分片）与月度预算判定，日期按当地日历
 internal/backup/         配置目录的备份与恢复（wen export / wen import）
 internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者 / 可见域 / 依赖）+ Manager（开关与聚合）
 internal/plugin/builtin/ 内置插件（注册顺序见 cmd/wen/main.go 的 builtinPlugins）

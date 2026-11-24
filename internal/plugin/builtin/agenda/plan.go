@@ -179,6 +179,11 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid string) {
 		case errors.Is(err, plugin.ErrTurnNotStarted):
 			// 轮次没有开始：不记尝试，任务保持待处理（预算中止会终止整场评测）。
 			return
+		case errors.Is(err, plugin.ErrBudgetExceeded):
+			// 本月用量预算用尽：与「轮次没有开始」同一类，不记尝试。它不是「今天没排成」
+			// 的事实，只是此刻没钱可用；预算恢复（调高上限、跨月）后照常再排，而「今天
+			// 已经试过两次」的记账不该被它烧掉。
+			return
 		case errors.Is(err, plugin.ErrSessionBusy):
 			if p.isManual() || attempt+1 >= defBusyRetryMax {
 				i18n.Logf(p.langOf(), "log.agenda.plan_session_busy", "agenda: 会话 %s 持续繁忙，本次规划放弃", sid)

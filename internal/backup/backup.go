@@ -267,13 +267,16 @@ func collect(baseDir string, opt Options, excludeAbs string) ([]fileEntry, Stats
 			return nil, stats, err
 		}
 	}
-	for _, name := range []string{"models.json", "plugins.state.json", "auth.json"} {
+	// usage.json 是用量账本的预算设置（人写的），usage/ 是按天分片的账本本身
+	// （机器写的）。两者都不在下面的目录列表里另有归属，且迁移机器时历史用量与
+	// 预算都是要继续用的东西——丢了就等于「这个月花了多少」从头开始。
+	for _, name := range []string{"models.json", "plugins.state.json", "auth.json", "usage.json"} {
 		if err := add(filepath.Join(baseDir, name), name); err != nil {
 			return nil, stats, err
 		}
 	}
 
-	dirs := []string{"plugins", "bundles"}
+	dirs := []string{"plugins", "bundles", "usage"}
 	if rel, ok := relTo(baseDir, opt.SessionDir); ok && rel != "." {
 		dirs = append(dirs, rel)
 	} else if !ok && opt.SessionDir == "" {
@@ -381,6 +384,14 @@ func collectDir(baseDir, rel string, seen map[string]bool, entries *[]fileEntry,
 			return nil
 		}
 		if fullRel == "wen.lock" {
+			return nil
+		}
+		// 用量账本的试写文件（usage.Probe 造的 .probe-*）：它可能正好在导出时
+		// 存在，内容是空的或半截的，恢复过去只是垃圾。排除范围只限 usage 的直属
+		// 文件：别的目录下同名文件可能是插件的真数据（plugins/sample/.probe-state），
+		// 按名字一概跳过就会把它们丢掉。也不跳过全部点号开头的文件——
+		// bundles/.updates/ 下那些同样是真数据。
+		if filepath.Dir(fullRel) == "usage" && strings.HasPrefix(d.Name(), ".probe-") {
 			return nil
 		}
 		if excludeAbs != "" && samePath(p, excludeAbs) {

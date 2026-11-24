@@ -954,6 +954,7 @@
   "prompt.scheduler.guide": "You can manage scheduled tasks: create them with schedule_task (one-off, every N minutes, or daily at a fixed time), see them with list_tasks, and cancel them with cancel_task. Use these tools when the user asks you to remind them of something or do something \"later / at a set time / every day\". When they mention something in the future in passing (a time you agreed on, something to be done, a moment worth caring about), you may set a one-off task even if they did not ask for a reminder, and bring it up yourself when the time comes. These tasks are reminders and promises to them, carried out by you when they come due; the things you yourself do during the day (going out, keeping appointments, working) are not scheduled tasks — those belong to the agenda tools.",
   "prompt.scheduler.note.busy": "skipped last time because the session was busy",
   "prompt.scheduler.note.busy_gave_up": "the session stayed busy; this run did not happen",
+  "prompt.scheduler.note.budget_mid_turn": "the budget ran out mid-run; this run stopped (nothing that already happened will be repeated)",
   "prompt.scheduler.note.cancelled": "cancelled",
   "prompt.scheduler.note.expired": "the run time was missed by too much; marked as expired",
   "prompt.scheduler.note.failed": "last run failed: %s",

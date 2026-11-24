@@ -4,11 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"wen/internal/config"
 	"wen/internal/modelcfg"
 	"wen/internal/runlock"
+	"wen/internal/statustext"
+	"wen/internal/usage"
 	"wen/internal/version"
 )
 
@@ -65,6 +69,10 @@ func runStatus(args []string) error {
 		}
 	}
 
+	if line := statusUsageLine(cfg, time.Now()); line != "" {
+		fmt.Print(line + "\n")
+	}
+
 	list, err := b.listPlugins()
 	if err != nil {
 		return err
@@ -88,6 +96,132 @@ func runStatus(args []string) error {
 	fmt.Print(trf("cli.status.source", "\n数据来源  %s\n", source))
 	return nil
 }
+
+// statusUsageLine 给出「本月用量」那一行，以及它后面按需追加的预算段。
+//
+// 直接从文件读而不经服务的接口：服务没跑也要能看，而用量是只追加的旁路数据，
+// 复用 /api/status 只会让这一行在离线时消失。没有记录、没设预算、也没记账失败时
+// 返回空串——一行「0 次」不占版面；但设了预算就不能因为本月还没花而把预算藏掉，
+// 那会让用户以为限额没生效（记账失败同理，见 statusBudgetSuffix）。
+func statusUsageLine(cfg *config.Config, now time.Time) string {
+	month := now.In(time.Local).Format("2006-01")
+	// 价格表读不出来时只报 token：金额是旁路信息，不该让这一行整个消失。
+	lookup, _ := usagePriceLookup(cfg)
+	var total usage.CostTotals
+	ledger, err := usage.Open(usageDirFor(cfg, runtimeOverrides{}))
+	if err == nil {
+		if sum, err := ledger.SummaryCostOnMonth(month, usage.GroupByKind, lookup); err == nil {
+			total = sum.Total
+		}
+	}
+
+	line := ""
+	if total.Requests > 0 {
+		line = trf("cli.status.usage", "本月用量  %d 次 · 输入 %s · 输出 %s tokens",
+			total.Requests, statustext.Comma(total.Prompt), statustext.Comma(total.Completion))
+		line += statusCostSuffix(total)
+	}
+
+	// 设置读不出来时标降级，而不是按默认值（不设限）把它悄悄藏掉：预算失效最坏的
+	// 形态就是用户以为限额在生效、实际一分没限。
+	settings, settingsErr := usage.LoadSettings(usageSettingsFor(cfg, runtimeOverrides{}))
+	budget := usage.NewBudget(settings, ledger, lookup, now)
+	if settingsErr != nil {
+		budget.MarkDegraded()
+	}
+	st := budget.Status(now)
+	suffix := statusBudgetSuffix(st)
+	if suffix == "" {
+		return line
+	}
+	if line == "" {
+		line = tr("cli.status.usage.none", "本月用量  暂无记录")
+	}
+	return line + suffix
+}
+
+// statusBudgetSuffix 给出用量行后面的预算段，没有可说的返回空串。
+//
+// 不设限时一般什么都不说（默认状态），但账本写不进去时要破例：本月合计偏少与
+// 上限定没定无关，藏起来就会让人把偏低的数字当成真实用量。
+func statusBudgetSuffix(st usage.BudgetStatus) string {
+	if !st.Enabled && !st.Degraded && !st.WriteFailed {
+		return ""
+	}
+	if st.Degraded {
+		return tr("cli.status.usage.budget_degraded", " · 本月预算不可用（账本或设置读不出来）")
+	}
+	if !st.Enabled {
+		return trf("cli.status.usage.budget", " · 本月预算 %s",
+			tr("cli.usage.budget.write_failed_only", "未设置（账本写入失败，统计可能不完整）"))
+	}
+	// token 段与金额段并列，限额为 0 的维度整段省略：只设钱的上限是正常配置。
+	var parts []string
+	if st.LimitTokens > 0 {
+		parts = append(parts, trf("cli.usage.budget.line", "%s / %s tokens（%s%%）",
+			statustext.Comma64(st.SpentTokens), statustext.Comma64(st.LimitTokens),
+			statustext.Pct64(st.SpentTokens, st.LimitTokens)))
+	}
+	if cost := budgetCostPart(st); cost != "" {
+		parts = append(parts, cost)
+	}
+	// 设了金额上限却没有价格表：那一段永远不会生效，必须说出来。
+	if st.LimitCost > 0 && !st.CostReady {
+		parts = append(parts, tr("cli.usage.budget.no_price", "（缺少价格，金额上限未生效）"))
+	} else if st.LimitCost > 0 && st.CostUnpriced {
+		// 价格表在，本月用到的模型却一个都没定价：同样等于没有金额上限。
+		parts = append(parts, tr("cli.usage.budget.unpriced_usage", "（本月有用量没有价格，金额上限未生效）"))
+	}
+	// 别的币种不计入本币上限；坏分片让合计偏少。两者都会让上面的数字偏离真相。
+	if st.LimitCost > 0 && st.ForeignCost {
+		parts = append(parts, trf("cli.usage.budget.foreign", "（有其他币种的花费未计入 %s 上限）", st.Currency))
+	}
+	if st.SkippedFiles > 0 {
+		parts = append(parts, trf("cli.usage.budget.skipped", "（%d 个账本分片读不出来，合计可能偏少）", st.SkippedFiles))
+	}
+	// 记账失败只让统计偏少，不改变拦截：说出来即可。
+	if st.WriteFailed {
+		parts = append(parts, tr("cli.usage.budget.write_failed", "（账本写入失败，本月统计可能不完整）"))
+	}
+	out := trf("cli.status.usage.budget", " · 本月预算 %s", strings.Join(parts, " · "))
+	// 超限的拦截范围取决于 over：block_all 连前台一起停，只说「后台」是低报。
+	switch {
+	case st.Exceeded && st.Over == usage.OverBlockAll:
+		out += tr("cli.status.usage.budget_exceeded_all", "（已达上限，所有请求已暂停）")
+	case st.Exceeded:
+		out += tr("cli.status.usage.budget_exceeded", "（已达上限，后台任务已暂停）")
+	case st.Warn:
+		out += tr("cli.status.usage.budget_warn", "（接近上限）")
+	}
+	return out
+}
+
+// statusCostSuffix 给出用量行后面的金额与未定价提示，没有可报的就返回空串。
+//
+// 与 wen usage 的合计行同一套口径，只是这里更短：一行状态本来就该短。多币种并列；
+// 「未定价」要说出来——那部分 token 没折成钱，只看金额会以为一分没花。
+func statusCostSuffix(c usage.CostTotals) string {
+	out := ""
+	if len(c.Amounts) > 0 {
+		curs := make([]string, 0, len(c.Amounts))
+		for cur := range c.Amounts {
+			curs = append(curs, cur)
+		}
+		sort.Strings(curs)
+		amounts := make([]string, 0, len(curs))
+		for _, cur := range curs {
+			amounts = append(amounts, cur+" "+statustext.Money(c.Amounts[cur]))
+		}
+		out = trf("cli.status.usage.cost", " · 估算 %s", strings.Join(amounts, " · "))
+	}
+	if c.UnpricedTokens > 0 {
+		out += trf("cli.status.usage.unpriced", " · 未定价 %s tokens", statustext.Comma(c.UnpricedTokens))
+	}
+	return out
+}
+
+// statusBudgetCost 已并入 usage.go 的 budgetCostPart：两条命令的金额段口径必须同一份，
+// 否则同一个数字会在这里说「金额为估算」、在那里不说。
 
 func wrapNames(names []string) string {
 	if len(names) == 0 {

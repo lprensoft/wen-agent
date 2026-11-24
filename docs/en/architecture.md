@@ -10,6 +10,7 @@ internal/config/         config loading (YAML plus ${VAR} substitution from the 
 internal/llm/            the Provider interface plus the OpenAI-compatible (Chat / Responses) and Anthropic implementations
 internal/modelcfg/       model and provider configuration (the models.json overlay, hot switching)
 internal/agent/          the agent loop (tool calls / thinking / compaction / context budget)
+internal/usage/          the usage ledger (daily shards) and the monthly budget decision, dated by local calendar
 internal/backup/         packing and restoring the configuration directory (wen export / wen import)
 internal/plugin/         the plugin protocol (Plugin / Tool / Configurable / observers / visibility
                          scopes / dependencies) plus Manager (toggles and aggregation)

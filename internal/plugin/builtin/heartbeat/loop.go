@@ -224,8 +224,14 @@ func (p *Plugin) beat(ctx context.Context) { _ = p.beatAt(ctx, p.nowTime()) }
 // beatAt 在 now 时刻执行一次心跳：挑最近活跃的会话（没有就新建），以心跳提示词
 // 跑一轮对话。会话忙时跳过本次——心跳排队毫无意义，下个周期自然会再来。
 //
-// 轮次因外部预算没有开始时（EvTurnNotStarted），把 lastBeat 回滚到本次之前，
+// 轮次因外部预算没有开始时（ErrTurnNotStarted），把 lastBeat 回滚到本次之前，
 // 任务保持待处理；理由也放回公告板，等下一次真正开口时再带上。
+//
+// 本月用量预算用尽（ErrBudgetExceeded）则相反：这一拍算过去了，lastBeat 不回滚，
+// 下一拍按正常间隔再来。回滚会让预算耗尽变成紧凑循环——每一拍都被拦下、每一拍
+// 都立刻重试。预算要恢复得靠人改设置或等下个月，那样等多久都值得省下这次重试。
+// 状态行上的「后台因预算暂停」只在最近一拍确实被预算拦下时成立，随后任何非预算的
+// 结果（成功、会话忙、模型报错）都清掉它。
 func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 	p.mu.Lock()
 	prevBeat := p.lastBeat
@@ -269,43 +275,61 @@ func (p *Plugin) beatAt(ctx context.Context, now time.Time) error {
 	_, err = runTurn(tctx, sid, input)
 	// 理由在 TurnPrompt（可见域裁决之后）才被领取；失败就放回公告板等下一拍。
 	p.settleCues(err == nil)
-	if err != nil {
-		if errors.Is(err, plugin.ErrTurnNotStarted) {
+	if errors.Is(err, plugin.ErrBudgetExceeded) {
+		// 这一拍算过去了：不回滚 lastBeat，下一拍按正常间隔来。把「暂停」记下来只
+		// 为了状态行能说明后台为什么安静；日志只在进入这个状态时写一条，否则每拍
+		// 一条日志会把真正的问题淹掉。
+		p.mu.Lock()
+		first := !p.budgetPaused
+		p.budgetPaused = true
+		p.mu.Unlock()
+		if first {
+			i18n.Logf(p.langOf(), "log.heartbeat.budget_paused",
+				"heartbeat: 本月用量预算已用尽，心跳轮次暂停（调高预算或下个月恢复后继续）")
+		}
+		return nil
+	}
+	// 除预算以外的任何结果（成功、会话忙、模型报错）都说明后台又能动了：这个标记
+	// 只描述「最近一拍被预算拦下」这一种状态，不该等到下一次成功才消失——否则预算
+	// 恢复后接连几次模型报错期间，状态行还在说「后台因预算暂停」，与事实相反。
+	p.mu.Lock()
+	p.budgetPaused = false
+	p.mu.Unlock()
+	switch {
+	case errors.Is(err, plugin.ErrTurnNotStarted):
+		p.mu.Lock()
+		if p.lastBeat.Equal(now) {
+			p.lastBeat = prevBeat
+		}
+		p.mu.Unlock()
+		return err
+	case errors.Is(err, plugin.ErrSessionBusy):
+		i18n.Logf(p.langOf(), "log.heartbeat.session_busy", "heartbeat: 会话 %s 忙，本次心跳跳过", sid)
+		// 这个会话读得到的理由还在等时，不能把 lastBeat 留在现在：下一拍会被
+		// 推到最快间隔之后，临期提醒等不到那时。回滚起点并安排一次短重试；
+		// 会话锁真正释放后会清掉重试，让它立刻再试。
+		if dynamic && p.sessionCuePending(sid, now) {
 			p.mu.Lock()
-			if p.lastBeat.Equal(now) {
+			// 只有这次尝试仍对应当前倒计时时才回滚并登记重试：期间倒计时可能
+			// 已被模型重设（或真人开口），旧尝试不能把自己的退避写回去。
+			// 代数比时间戳可靠：延迟到达的结束通知不会前移 lastBeat，但同样是
+			// 一次新的重设。
+			if p.clockGen == attemptGen && p.lastBeat.Equal(now) {
 				p.lastBeat = prevBeat
+				p.beatRetryAt = now.Add(busyRetryDelay)
+				p.beatRetrySession = sid
+				if p.idleGenLocked(sid) != idleBefore {
+					p.beatRetryAt = now // 解锁通知已经来过：立刻再试
+				}
+				// 开跑前已经按 now 落过盘；回滚后的起点才是真正的调度起点。
+				// 快照在锁内取、按序号提交，别的路径先取的旧快照不会反过来
+				// 覆盖这一份。
+				p.commitState(p.snapshotStateLocked())
 			}
 			p.mu.Unlock()
-			return err
 		}
-		if errors.Is(err, plugin.ErrSessionBusy) {
-			i18n.Logf(p.langOf(), "log.heartbeat.session_busy", "heartbeat: 会话 %s 忙，本次心跳跳过", sid)
-			// 这个会话读得到的理由还在等时，不能把 lastBeat 留在现在：下一拍会被
-			// 推到最快间隔之后，临期提醒等不到那时。回滚起点并安排一次短重试；
-			// 会话锁真正释放后会清掉重试，让它立刻再试。
-			if dynamic && p.sessionCuePending(sid, now) {
-				p.mu.Lock()
-				// 只有这次尝试仍对应当前倒计时时才回滚并登记重试：期间倒计时可能
-				// 已被模型重设（或真人开口），旧尝试不能把自己的退避写回去。
-				// 代数比时间戳可靠：延迟到达的结束通知不会前移 lastBeat，但同样是
-				// 一次新的重设。
-				if p.clockGen == attemptGen && p.lastBeat.Equal(now) {
-					p.lastBeat = prevBeat
-					p.beatRetryAt = now.Add(busyRetryDelay)
-					p.beatRetrySession = sid
-					if p.idleGenLocked(sid) != idleBefore {
-						p.beatRetryAt = now // 解锁通知已经来过：立刻再试
-					}
-					// 开跑前已经按 now 落过盘；回滚后的起点才是真正的调度起点。
-					// 快照在锁内取、按序号提交，别的路径先取的旧快照不会反过来
-					// 覆盖这一份。
-					p.commitState(p.snapshotStateLocked())
-				}
-				p.mu.Unlock()
-			}
-		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
-			i18n.Logf(p.langOf(), "log.heartbeat.turn_failed", "heartbeat: 心跳轮次失败: %v", err)
-		}
+	case err != nil && ctx.Err() == nil: // 停止时的取消错误不值得记
+		i18n.Logf(p.langOf(), "log.heartbeat.turn_failed", "heartbeat: 心跳轮次失败: %v", err)
 	}
 	return nil
 }

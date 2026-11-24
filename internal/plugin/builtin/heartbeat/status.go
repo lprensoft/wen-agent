@@ -14,6 +14,7 @@ func (p *Plugin) StatusLines(lang string) []string {
 	p.mu.Lock()
 	cur, dynamic := p.cur, p.dynamic
 	pausedUntil, curContext, asleep := p.pausedUntil, p.curContext, p.asleep
+	budgetPaused := p.budgetPaused
 	var next time.Time
 	if cur > 0 {
 		next, _, _, _ = p.nextBeatAt(now)
@@ -39,6 +40,12 @@ func (p *Plugin) StatusLines(lang string) []string {
 		return []string{i18n.Tf(lang, "plugin.heartbeat.status.paused",
 			"💓 心跳：暂停中，约 %s后恢复（每 %s，%s）",
 			humanDur(lang, until), humanDur(lang, cur), mode)}
+	}
+	// 睡着与暂停优先：那是角色自己的安排，预算只是「后台暂时不能动」，不该盖掉它。
+	// 预算用尽时下一拍仍按正常间隔，只是到点时会被拦下，所以不报下次时刻。
+	if budgetPaused {
+		return []string{i18n.T(lang, "plugin.heartbeat.status.budget",
+			"💓 心跳：用量预算已用尽，后台任务暂停（调整预算后恢复）")}
 	}
 	return []string{i18n.Tf(lang, "plugin.heartbeat.status.line", "💓 心跳：每 %s（%s），%s",
 		humanDur(lang, cur), mode, nextBeatDesc(lang, now, next))}

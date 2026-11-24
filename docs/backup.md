@@ -24,9 +24,11 @@ wen export -c /srv/wen/config.yaml -o /backup/wen.tar.gz
 | `models.json` | 提供商、嵌入服务、密钥与当前模型 |
 | `plugins.state.json` | 插件开关与界面上保存的配置 |
 | `auth.json` | 访问口令的 PBKDF2 派生值 |
+| `usage.json` | 用量预算设置（见[用量与预算](usage.md)） |
 | `sessions/` | 全部会话正文 |
 | `plugins/` | 记忆、归档、心跳状态、消息通道 token 等 |
 | `bundles/` | 外源插件包、签名更新来源与发布者公钥 |
+| `usage/` | 按天的用量账本分片（试写留下的 `.probe-*` 文件除外） |
 
 不包含：
 
@@ -37,7 +39,7 @@ wen export -c /srv/wen/config.yaml -o /backup/wen.tar.gz
 - 配置目录之外的项目记忆：`memory` 插件的 `scope=project` 且工作目录在别处时打印提示并跳过；工作目录在配置目录内时，按可见域分出的 `memories-<标签>` 库会一并备份。
 - 日志、构建产物与空目录。
 
-**备份里有敏感信息。** `models.json` 含明文 API Key，插件状态里有消息通道凭据，`auth.json` 里有口令派生值，会话里有全部对话；外源更新来源 URL 还可能暴露私有部署地址（公钥本身不是秘密）。文件权限是 0600，但仍请加密或放到安全的位置；不要提交到代码仓库。
+**备份里有敏感信息。** `models.json` 含明文 API Key，插件状态里有消息通道凭据，`auth.json` 里有口令派生值，会话里有全部对话；外源更新来源 URL 还可能暴露私有部署地址（公钥本身不是秘密）。用量账本记着每次调用的时间与模型、预算设置里有你的限额。文件权限是 0600，但仍请加密或放到安全的位置；不要提交到代码仓库。
 
 ## 恢复
 

@@ -8,12 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
 	"wen/internal/atomicfile"
 	"wen/internal/config"
 	"wen/internal/llm"
+	"wen/internal/usage"
 
 	"wen/internal/i18n"
 )
@@ -52,6 +54,11 @@ type Provider struct {
 	Models      []Model `json:"models"`
 	// Source 仅出现在响应中："config" 表示该条目来自 config.yaml、尚未被界面接管。
 	Source string `json:"source,omitempty"`
+	// Ref 是界面往返用的原始标识，同样只出现在响应里、不落盘（保存时由 normalize
+	// 清掉）。旧版本允许只差大小写的两个提供商共存，改名保存时按名字回填密钥会被
+	// EqualFold 带到另一家；界面把 Ref 原样带回，保存时据此找到被编辑的那一条，
+	// 见 carryOverKeys。
+	Ref string `json:"ref,omitempty"`
 }
 
 // Model 的可选字段一律用指针：0 与 0.0 是合法取值，必须与「未设置」区分。
@@ -62,6 +69,10 @@ type Model struct {
 	MaxTokens     *int     `json:"max_tokens,omitempty"`
 	Thinking      *string  `json:"thinking,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
+	// Price 是单价（每百万 token），供用量账本把 token 折成钱。nil 表示没定价，
+	// 这一点与全 0 的价格不同：没定价的用量计成「未定价 token」，不会悄悄算成 0 元。
+	// 价格只存在 models.json 里，config.yaml 那份配置没有模型条目、也就没有价格。
+	Price *usage.Price `json:"price,omitempty"`
 }
 
 type Selection struct {
@@ -133,8 +144,11 @@ func NewStore(lang, path string, cfg *config.Config) (*Store, error) {
 
 	// 一个提供商都没有是合法的初始状态（全新安装、尚未跑过向导），载入时放行；
 	// 能不能用由 Resolve 回答，「至少保留一个」那条只在保存时把关。
+	//
+	// 载入用宽松版校验：旧文件里可能存着升级后才算重名的提供商（见 validateLoadedDoc），
+	// 在进设置页之前就失败会让用户无法改名修正。
 	if view := s.viewLocked(); len(view.Providers) > 0 {
-		if err := validateDoc(lang, view); err != nil {
+		if err := validateLoadedDoc(lang, view); err != nil {
 			return nil, fmt.Errorf(i18n.T(lang, "modelcfg.err.invalid", "模型配置无效: %w"), err)
 		}
 		if err := validateFallbacks(lang, view); err != nil {
@@ -171,11 +185,30 @@ func baseProviders(cfg *config.Config) []Provider {
 	return out
 }
 
-// Snapshot 返回合并后的完整文档（含明文密钥，仅供内部使用）。
+// Snapshot 返回合并后的完整文档（含明文密钥，仅供内部使用）。提供商带上 Ref：
+// 它是界面往返时的原始标识，不落盘（见 Provider.Ref）。
 func (s *Store) Snapshot() File {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.viewLocked()
+	f := s.viewLocked()
+	for i := range f.Providers {
+		f.Providers[i].Ref = providerRef(f.Providers, i)
+	}
+	return f
+}
+
+// providerRef 给列表里的第 i 个提供商生成原始标识：精确名字 + 同名出现序号。
+//
+// 不用下标：列表增删、改名都不该让未动的条目错位。只用名字也不够：手工文件里可能
+// 有完全同名的两条（载入会拒绝，但标识仍应自洽）。名字 + 序号对这两种情况都稳定。
+func providerRef(ps []Provider, i int) string {
+	ordinal := 0
+	for j := 0; j < i; j++ {
+		if ps[j].Name == ps[i].Name {
+			ordinal++
+		}
+	}
+	return ps[i].Name + "\x1f" + strconv.Itoa(ordinal)
 }
 
 // Defaults 返回 config.yaml model: 段的全局默认值（模型条目留空时的回退来源）。
@@ -218,8 +251,15 @@ func (s *Store) ResolveChain(lang string) ([]Resolved, error) {
 	return out, nil
 }
 
+// selectionKey 是备用链去重用的键：解析后的实际提供商名与模型 ID，原样拼接。
+//
+// 不再折小写：两家提供商可以合法地只差「ToLower 相同、EqualFold 不同」的大小写
+// （如 İstanbul 与 istanbul），各自都有同名模型时它们是两个不同的目标；折小写会把
+// 备用项误判成主模型的重复项丢掉，主模型故障时因此不会切换。同一家换个大小写写进
+// 备用项的，resolveSelection 已经返回条目里的实际名字（findProvider 按 EqualFold
+// 匹配），键仍然相同，照旧去重。
 func selectionKey(r Resolved) string {
-	return strings.ToLower(r.ProviderName) + "\x00" + r.ModelID
+	return r.ProviderName + "\x00" + r.ModelID
 }
 
 // Status 返回 /api/status 需要的非敏感字段。
@@ -293,7 +333,10 @@ func (s *Store) Save(lang string, next File) (File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	own := carryOverKeys(next, s.viewLocked())
+	own, err := carryOverKeys(lang, next, s.viewLocked())
+	if err != nil {
+		return File{}, err
+	}
 	normalize(&own)
 	own.Version = 1
 	own.Embedding = s.own.Embedding
@@ -366,20 +409,152 @@ func removeSelection(list []Selection, want Selection) []Selection {
 	return out
 }
 
-// Lookup 按名取提供商及其模型（供测试连接使用）。
-func (s *Store) Lookup(provider, model string) (Provider, Model, bool) {
+// Lookup 按名取提供商及其模型，供测试连接沿用已保存的密钥与协议。
+//
+// 名字按 EqualFold 找（与 findProvider 同口径），命中多家时必须带 Ref 才认得出是
+// 哪一家：旧配置里两家只差大小写、模型 ID 又相同时，取第一家会把它的密钥发往第二家
+// 的地址。带了 Ref 就只认 Ref——对不上说明页面是旧的，同样在发请求之前拒绝。
+// ok 为 false 表示没有这个名字的条目（新增的提供商），调用方按请求里的密钥测。
+func (s *Store) Lookup(lang, ref, provider, model string) (Provider, Model, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	view := s.viewLocked()
-	p, ok := findProvider(view.Providers, provider)
-	if !ok {
-		return Provider{}, Model{}, false
+	ps := s.viewLocked().Providers
+
+	at := -1
+	switch {
+	case ref != "":
+		for i, p := range ps {
+			if providerRef(ps, i) == ref && strings.EqualFold(p.Name, provider) {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			return Provider{}, Model{}, false, fmt.Errorf(i18n.T(lang, "modelcfg.err.stale_ref",
+				"提供商 %q 与当前配置对不上：配置已在别处被修改，请刷新后重试"), provider)
+		}
+	default:
+		for i, p := range ps {
+			if !strings.EqualFold(p.Name, provider) {
+				continue
+			}
+			if at >= 0 {
+				return Provider{}, Model{}, false, fmt.Errorf(i18n.T(lang, "modelcfg.err.test_ambiguous",
+					"有多个提供商都叫 %q（只差大小写），无法确定要沿用哪一家的密钥；请刷新页面后重试"), provider)
+			}
+			at = i
+		}
 	}
+	if at < 0 {
+		return Provider{}, Model{}, false, nil
+	}
+	p := ps[at]
 	m, ok := findModel(p.Models, model)
 	if !ok {
-		return p, Model{}, false
+		return Provider{}, Model{}, false, nil
 	}
-	return p, m, true
+	return p, m, true, nil
+}
+
+// Price 返回某提供商下某个模型的单价，供用量账本估算金额。查的是 config.yaml +
+// models.json 的合并视图：界面接管过的提供商（含价格）优先，未接管的仍按配置文件
+// 里的名字可见——同一对 (提供商, 模型) 在哪一侧定义都该查到同一份价格。
+//
+// 没填价格（或提供商/模型不存在）返回 false，而不是零值 Price：零值代表的是一份
+// 「0 元」的定价，会把没定价的用量悄悄算成免费。
+func (s *Store) Price(provider, model string) (usage.Price, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := findProvider(s.viewLocked().Providers, provider)
+	if !ok {
+		return usage.Price{}, false
+	}
+	m, ok := findModel(p.Models, model)
+	if !ok || m.Price == nil {
+		return usage.Price{}, false
+	}
+	return *m.Price, true
+}
+
+// priceEntry 是价格快照里的一个提供商：名字与它下面每个模型的单价按合并视图的
+// 顺序复制一份。查询时先选中第一个名字等价的提供商，再在它下面找模型——顺序与
+// Price 的 findProvider → findModel 完全一致。
+type priceEntry struct {
+	provider string
+	models   []priceModel
+}
+
+type priceModel struct {
+	id    string
+	price *usage.Price // nil 表示没定价
+}
+
+// clonePrice 复制一份单价。CacheRead / CacheWrite 是指针，浅拷贝只会共享同一块内存；
+// 快照要的是一份在 Store 之后怎么改都不受影响的值，所以这里把指针指向的数也复制出来。
+func clonePrice(p usage.Price) usage.Price {
+	out := p
+	if p.CacheRead != nil {
+		v := *p.CacheRead
+		out.CacheRead = &v
+	}
+	if p.CacheWrite != nil {
+		v := *p.CacheWrite
+		out.CacheWrite = &v
+	}
+	return out
+}
+
+// PriceSnapshot 一次性取回价格表的只读快照，返回的闭包可以放心传给整月扫描。
+//
+// 报告页扫一整个月的账本时，价格是每条记录现查的（见 Price）。扫描期间若在界面上
+// 保存了一次模型配置，同一份报表就会前半截旧价、后半截新价——合计与分组、甚至同一天
+// 的两条记录各说各话，而它们本该出自同一份价格表。这里在锁内遍历一次合并视图
+// （config.yaml + models.json），把提供商与模型按原顺序复制进一份切片；闭包只读这份
+// 切片，调用期间不再碰 Store，也就不再受后续保存影响。
+//
+// 查找口径与 Price 逐字一致：先按 strings.EqualFold 选中第一个同名提供商
+// （findProvider 同一口径），再在它下面按模型 ID 精确匹配；第一家具名就是答案，
+// 没这个模型或没定价都返回 false。不能「按模型扫全表」——两家名字只差大小写、
+// 第一家未定价时，那会跳过第一家取到第二家的价，报表与实时预算因此对不上。
+//
+// 提供商名不用「折成小写再比」的键：那与 EqualFold 并不等价，希腊字母的 σ 与词尾 ς
+// 是同一个字母的大小写折叠，ToLower 却把它们折成两串，快照于是把已定价的历史用量
+// 当成未定价。提供商数很少，线性扫一遍比多一条口径划算。
+//
+// 没填价格的条目不进快照：查不到返回 false，调用方据此计 unpriced token——「未定价」
+// 与「0 元」是两件相反的事（与 Price 同口径）。
+func (s *Store) PriceSnapshot() usage.PriceLookup {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	providers := s.viewLocked().Providers
+	snap := make([]priceEntry, 0, len(providers))
+	for _, p := range providers {
+		models := make([]priceModel, 0, len(p.Models))
+		for _, m := range p.Models {
+			pm := priceModel{id: m.ID}
+			if m.Price != nil {
+				v := clonePrice(*m.Price)
+				pm.price = &v
+			}
+			models = append(models, pm)
+		}
+		snap = append(snap, priceEntry{provider: p.Name, models: models})
+	}
+	return func(provider, model string) (usage.Price, bool) {
+		for _, p := range snap {
+			if !strings.EqualFold(p.provider, provider) {
+				continue
+			}
+			for _, m := range p.models {
+				if m.id == model && m.price != nil {
+					return *m.price, true
+				}
+			}
+			return usage.Price{}, false
+		}
+		return usage.Price{}, false
+	}
 }
 
 // persistLocked 原子写盘（temp + rename），文件含明文密钥故权限为 0600。

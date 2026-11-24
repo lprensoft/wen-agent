@@ -1,9 +1,12 @@
 package modelcfg
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+
+	"wen/internal/i18n"
 )
 
 // mergeWithBase 把 models.json（own）与 config.yaml 的提供商列表合并：
@@ -54,17 +57,52 @@ func pickCurrent(ps []Provider, own, base Selection) Selection {
 }
 
 // carryOverKeys 把请求中留空的 api_key 用旧值补上（界面只拿得到掩码）。
-func carryOverKeys(next, old File) File {
+//
+// 匹配先看界面带回的原始标识 Ref（见 Provider.Ref）：旧版本允许只差大小写的两个
+// 提供商共存，按名字找会同时命中两家——改名保存时第一家会被清空、第二家反而被写入
+// 第一家的密钥，凭据就可能发往另一家的地址。Ref 跟着条目走，改名也不丢。
+//
+// 没带 Ref 的客户端退回精确名字匹配，不再用 EqualFold：那正是把密钥带到另一家的
+// 原因。匹配不到（新条目）就留空，让用户自己填——宁可多要一次密钥，也不把凭据
+// 抄给另一家。
+//
+// 带了 Ref 却对不上旧配置里任何一条时，整次保存拒绝，而不是把空密钥写下去：这份
+// 提交是在别的改动之前取的（首次保存成功但响应丢了之后的重试、另一个窗口改过名字），
+// 回填不上还照写，等于替用户把密钥清了。
+func carryOverKeys(lang string, next, old File) (File, error) {
 	out := cloneFile(next)
+	byRef := make(map[string]Provider, len(old.Providers))
+	for i, p := range old.Providers {
+		byRef[providerRef(old.Providers, i)] = p
+	}
+	byName := make(map[string]Provider, len(old.Providers))
+	for _, p := range old.Providers {
+		if _, ok := byName[p.Name]; !ok {
+			byName[p.Name] = p
+		}
+	}
 	for i, p := range out.Providers {
-		if strings.TrimSpace(p.APIKey) != "" {
+		if p.Ref == "" {
 			continue
 		}
-		if prev, ok := findProvider(old.Providers, p.Name); ok {
+		prev, ok := byRef[p.Ref]
+		if !ok {
+			return File{}, fmt.Errorf(i18n.T(lang, "modelcfg.err.stale_ref",
+				"提供商 %q 与当前配置对不上：配置已在别处被修改，请刷新后重试"), p.Name)
+		}
+		if strings.TrimSpace(p.APIKey) == "" {
 			out.Providers[i].APIKey = prev.APIKey
 		}
 	}
-	return out
+	for i, p := range out.Providers {
+		if p.Ref != "" || strings.TrimSpace(p.APIKey) != "" {
+			continue
+		}
+		if prev, ok := byName[p.Name]; ok {
+			out.Providers[i].APIKey = prev.APIKey
+		}
+	}
+	return out, nil
 }
 
 // tombstones 重算删除坠碑：config.yaml 里存在但本次提交中没有的提供商记为已删除，
@@ -117,7 +155,7 @@ func sameProvider(a, b Provider) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// normalize 规整用户输入：去空白、去 base_url 末尾斜杠。
+// normalize 规整用户输入：去空白、去 base_url 末尾斜杠、币种统一大写。
 func normalize(f *File) {
 	for i := range f.Providers {
 		p := &f.Providers[i]
@@ -128,10 +166,17 @@ func normalize(f *File) {
 		p.Dialect = strings.TrimSpace(p.Dialect)
 		p.Protocol = strings.TrimSpace(p.Protocol)
 		p.Source = ""
+		p.Ref = "" // 界面往返用的原始标识：只服务 carryOverKeys，不落盘
 		for j := range p.Models {
 			m := &p.Models[j]
 			m.ID = strings.TrimSpace(m.ID)
 			m.Name = strings.TrimSpace(m.Name)
+			// 币种是金额的分桶键（见 usage.CostTotals）：落盘前统一成大写去空白，
+			// 手填的 " usd " 才会与预算里的 "USD" 落进同一桶，界面上的徽标也不必
+			// 跟着用户敲的大小写变来变去。
+			if m.Price != nil {
+				m.Price.Currency = strings.ToUpper(strings.TrimSpace(m.Price.Currency))
+			}
 			if m.Thinking != nil {
 				t := strings.TrimSpace(*m.Thinking)
 				if t == "" {

@@ -116,9 +116,44 @@ type StatusInfo struct {
 	// CompactAt 是自动压缩的触发点（token 数）：会话用量达到它时核心会自动压缩。
 	// 0 表示未知（上下文窗口未配置）。
 	CompactAt int
+	// Budget 是本月的用量预算快照；nil 表示这次运行没有账本、无从判定。
+	// 它与会话无关：不看 sessionID 也照常填。
+	Budget *BudgetInfo
 	// PluginLines 是启用插件贡献的状态行（见 StatusReporter），已按注册顺序排好，
 	// 直接逐行输出即可。核心不解释其内容。
 	PluginLines []string
+}
+
+// BudgetInfo 是本月的用量预算快照，供远端状态输出展示。
+// 字段含义见 usage.BudgetStatus；这里不认识 usage，只保持形状一致。
+type BudgetInfo struct {
+	Enabled     bool
+	Warn        bool
+	Exceeded    bool
+	Degraded    bool
+	LimitTokens int64
+	SpentTokens int64
+	// 金额维度：LimitCost 为 0 表示不设金额上限；CostReady 为假表示没有价格表，
+	// 金额上限因此不生效（token 上限照常）。Currency 是大写的记账币种。
+	LimitCost float64
+	SpentCost float64
+	Currency  string
+	CostReady bool
+	// CostInexact 表示金额是估算（缓存价回填、未定价用量、或有别的币种没计入）。
+	CostInexact    bool
+	UnpricedTokens int64
+	// CostUnpriced 表示设了金额上限、本月却一分都没折进来（用到的模型没定价）；
+	// ForeignCost 表示有别的币种的金额没计进预算币种。两者都让金额上限静默不生效。
+	CostUnpriced bool
+	ForeignCost  bool
+	WarnPercent  int
+	Over         string
+	Month        string
+	// SkippedFiles 是读不出来的账本分片数：合计可能偏少，但不影响拦截。
+	SkippedFiles int
+	// WriteFailed 表示这次运行里至少有一条记录没写进账本。与 SkippedFiles 同类：
+	// 不并入 Degraded（那会 fail-open），只是让「本月统计不完整」这件事可见。
+	WriteFailed bool
 }
 
 // CompactLoad 返回会话用量占自动压缩点的比例：1 表示到了自动压缩的地步，可能略超过 1。

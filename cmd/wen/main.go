@@ -189,6 +189,11 @@ func runServe(args []string) {
 		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
 		Exposed:       exposed,
 		Lang:          uiLang,
+		// 用量账本与预算都复用 runtime 那份：另开一个账本会让 /api/usage 与预算
+		// 各算一套，且两处各自的写锁互不相识。
+		Usage:         rt.ledger,
+		UsageBudget:   rt.budget,
+		UsageSettings: rt.usageSettings,
 	})
 
 	if _, err := os.Stat(path); err == nil {

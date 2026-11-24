@@ -100,6 +100,15 @@ func commands() []command {
 			run:     runStatus,
 		},
 		{
+			name:    "usage",
+			usage:   tr("cli.cmd.usage.usage", "wen usage [-c 配置文件] [--month] [--days N] [--by day|source|model|kind|provider|provider_model]"),
+			summary: tr("cli.cmd.usage.summary", "汇总用量账本（当前自然月或最近 N 天）"),
+			detail: tr("cli.cmd.usage.detail", "默认看当前自然月、按来源分组。--days N 改为最近 N 天（含今天），\n"+
+				"逐日读取后在本地合并；--by 可选 day、source、model、kind、provider、provider_model。\n"+
+				"直接从账本文件读：服务在不在运行都能用，也不改动任何数据。"),
+			run: runUsage,
+		},
+		{
 			name:    "update",
 			usage:   tr("cli.cmd.update.usage", "wen update [--check] [-y] [-c 配置文件]"),
 			summary: tr("cli.cmd.update.summary", "检查并安装新版本"),

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"wen/internal/agent"
 	"wen/internal/llm"
@@ -26,6 +27,15 @@ func (s *Server) saveModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.models.Save(reqLang(r), req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// 单价可能刚被改过：本月已用金额是按旧价算的，重扫一遍让预算与状态立刻
+	// 按新价算，而不是等跨月才知道上限的真实位置。
+	//
+	// 放在应用当前模型之前：新模型可能因为缺 Key 而应用失败（Save 已经成功、价格
+	// 也已经落盘），那种情况下预算更不该继续按旧价算——上限看着绰绰有余，实际
+	// 早该提醒了。
+	if s.usageBudget != nil {
+		s.usageBudget.Refresh(time.Now())
 	}
 	if err := s.applyCurrentModel(reqLang(r)); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -56,6 +66,9 @@ func (s *Server) setCurrentModel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Provider string `json:"provider"`
+		// Ref 是这条提供商在 /api/models 视图里的原始标识：名字按 EqualFold 能对上多家时，
+		// 靠它认出要沿用密钥的是哪一家（见 modelcfg.Store.Lookup）。
+		Ref      string `json:"ref"`
 		Type     string `json:"type"`
 		BaseURL  string `json:"base_url"`
 		APIKey   string `json:"api_key"`
@@ -77,7 +90,13 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 	// 旧页面缓存里没有这一项时按该提供商已保存的协议测试。但接口类型被改过时
 	// 不能继承：Responses 协议只属于 openai_compat，改成 Anthropic 后带回来
 	// 只会在 llm.New 里变成 400。
-	if p, _, ok := s.models.Lookup(req.Provider, req.Model); ok {
+	//
+	// 沿用哪一家的密钥必须在发请求之前认定：对不上（或只差大小写的好几家都在、
+	// 分不清）就直接报错，不拿别人家的密钥去试。
+	if p, _, ok, err := s.models.Lookup(reqLang(r), req.Ref, req.Provider, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	} else if ok {
 		if req.APIKey == "" {
 			req.APIKey = p.APIKey
 		}
@@ -139,7 +158,8 @@ func (s *Server) applyCurrentModel(lang string) error {
 				Thinking:      cur.Thinking,
 				ContextLength: cur.ContextLength,
 			},
-			Label: cur.ProviderName + " / " + cur.ModelID,
+			Label:        cur.ProviderName + " / " + cur.ModelID,
+			ProviderName: cur.ProviderName,
 		})
 	}
 	s.agent.SetModelTargets(targets)
@@ -158,6 +178,10 @@ func (s *Server) modelsView(lang string) map[string]any {
 			models = []modelcfg.Model{}
 		}
 		providers = append(providers, map[string]any{
+			// ref 是这家提供商在这次视图里的原始标识：界面保存时原样带回，服务端据此
+			// 找到被编辑的那一条并沿用密钥。仅靠名字在旧配置里不够——旧版本允许只差
+			// 大小写的两家共存，改名后按名字回填会把两家的密钥对调（见 carryOverKeys）。
+			"ref":              p.Ref,
 			"name":             p.Name,
 			"type":             p.Type,
 			"base_url":         p.BaseURL,

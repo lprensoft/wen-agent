@@ -204,6 +204,36 @@ func TestChatAndCommands(t *testing.T) {
 	}
 }
 
+// /compact 是用户敲下的命令，对面有真人：与 chat 一样带交互标记，
+// skip_background 策略下不该被当成后台轮次拦掉。
+func TestCompactMarkedInteractive(t *testing.T) {
+	got := make(chan bool, 1)
+	c, f := newCore(t, noopTurn, func(cfg *Config) {
+		cfg.Compact = func(ctx context.Context, sessionID string) error {
+			if sessionID == "" {
+				return fmt.Errorf("缺少会话")
+			}
+			got <- plugin.IsInteractive(ctx)
+			return nil
+		}
+	})
+	c.Handle(context.Background(), Message{UserID: "u1", Text: "/compact"})
+	if m := f.expect(t); !strings.Contains(m.text, "开始压缩") {
+		t.Fatalf("应先回「开始压缩」: %s", m.text)
+	}
+	if m := f.expect(t); !strings.Contains(m.text, "已压缩完成") {
+		t.Fatalf("压缩成功后应有回执: %s", m.text)
+	}
+	select {
+	case interactive := <-got:
+		if !interactive {
+			t.Fatal("/compact 的 ctx 应带交互标记")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("压缩没有被调用")
+	}
+}
+
 func TestSessionBusy(t *testing.T) {
 	c, f := newCore(t, func(context.Context, string, string) (string, error) {
 		return "", plugin.ErrSessionBusy

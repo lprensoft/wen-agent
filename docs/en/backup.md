@@ -24,9 +24,11 @@ It includes:
 | `models.json` | Providers, the embedding service, keys and the current model |
 | `plugins.state.json` | Plugin switches and settings saved in the UI |
 | `auth.json` | The PBKDF2-derived access password |
+| `usage.json` | Usage budget settings (see [Usage and budget](usage.md)) |
 | `sessions/` | Every conversation |
 | `plugins/` | Memories, archives, heartbeat state, channel tokens and so on |
 | `bundles/` | External plugin bundles, signed update sources and publisher public keys |
+| `usage/` | The daily usage-ledger shards (except the `.probe-*` files left by a write probe) |
 
 It does not include:
 
@@ -37,7 +39,7 @@ It does not include:
 - project memories outside the configuration directory: when the `memory` plugin uses `scope=project` and the working directory is elsewhere, it prints a note and skips them; when the working directory is inside the configuration directory, the per-domain `memories-<tag>` libraries are included as well.
 - logs, build outputs and empty directories.
 
-**The backup contains sensitive data.** `models.json` holds plaintext API keys, plugin state holds channel credentials, `auth.json` holds the derived password, and the sessions hold every conversation. External update source URLs may also reveal private deployment addresses (the public keys themselves are not secret). The file mode is 0600, but encrypt it or store it somewhere safe anyway; do not commit it to a repository.
+**The backup contains sensitive data.** `models.json` holds plaintext API keys, plugin state holds channel credentials, `auth.json` holds the derived password, and the sessions hold every conversation. External update source URLs may also reveal private deployment addresses (the public keys themselves are not secret). The usage ledger records when and on which model each call was made, and the budget settings hold your limits. The file mode is 0600, but encrypt it or store it somewhere safe anyway; do not commit it to a repository.
 
 ## Restoring
 

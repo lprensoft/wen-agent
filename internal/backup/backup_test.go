@@ -12,6 +12,7 @@ import (
 
 	"wen/internal/agentplugin"
 	"wen/internal/i18n"
+	"wen/internal/usage"
 )
 
 func write(t *testing.T, path, body string, mode os.FileMode) {
@@ -583,5 +584,50 @@ func TestManifestIsFirstEntry(t *testing.T) {
 	}
 	if hdr.Name != ManifestName {
 		t.Fatalf("first entry = %q, want %q", hdr.Name, ManifestName)
+	}
+}
+
+// 用量账本与它的预算设置要随备份迁移：换一台机器时历史用量与这个月的预算都得
+// 跟着走。账本目录里的 .probe-* 是试写用的临时文件，不该被打进归档；但同名前缀
+// 出现在别的目录里可能是真数据（插件的 .probe-state），必须照常备份。
+func TestExportIncludesUsageLedger(t *testing.T) {
+	base := baseFixture(t)
+	write(t, filepath.Join(base, "usage", "2026-11-23.jsonl"),
+		`{"ts":"2026-11-23T10:00:00Z","kind":"turn","prompt":10,"completion":2}`+"\n", 0o600)
+	write(t, filepath.Join(base, "usage", ".probe-123"), "", 0o600)
+	write(t, filepath.Join(base, "plugins", "sample", ".probe-state"), "keep me\n", 0o600)
+	write(t, filepath.Join(base, "usage.json"), `{"version":1,"monthly_tokens":5}`, 0o600)
+
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if _, _, err := Export(base, out, Options{
+		Lang: i18n.LangZH, ConfigFile: "config.yaml", SessionDir: filepath.Join(base, "sessions"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restored")
+	if _, _, err := Import(out, target, i18n.LangZH); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"usage.json", filepath.Join("usage", "2026-11-23.jsonl")} {
+		if read(t, filepath.Join(base, name)) != read(t, filepath.Join(target, name)) {
+			t.Errorf("%s 没有随备份往返", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "usage", ".probe-123")); !os.IsNotExist(err) {
+		t.Errorf("试写用的临时文件不该进备份: %v", err)
+	}
+	// 插件目录下的同名文件是真数据：备份、恢复，内容一致。
+	probeState := filepath.Join("plugins", "sample", ".probe-state")
+	if got := read(t, filepath.Join(target, probeState)); got != "keep me\n" {
+		t.Errorf("%s 没有随备份往返: %q", probeState, got)
+	}
+
+	// 恢复出来的预算要真的能加载：只比字节的话，写坏的配置也会绿。
+	settings, err := usage.LoadSettings(filepath.Join(target, "usage.json"))
+	if err != nil {
+		t.Fatalf("恢复的 usage.json 加载失败: %v", err)
+	}
+	if settings.MonthlyTokens != 5 {
+		t.Fatalf("MonthlyTokens = %d, want 5", settings.MonthlyTokens)
 	}
 }

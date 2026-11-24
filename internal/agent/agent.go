@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"wen/internal/clock"
@@ -13,6 +14,7 @@ import (
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
+	"wen/internal/usage"
 )
 
 type EventType string
@@ -76,6 +78,9 @@ type ModelTarget struct {
 	Options  ModelOptions
 	// Label 只用于日志与状态展示，如 "deepseek / deepseek-chat"。
 	Label string
+	// ProviderName 是提供商的配置名，只用于展示与用量记账，不参与请求。
+	// 账本要能回答「这个月是哪家花的钱」，而 Provider 本身不带名字。
+	ProviderName string
 }
 
 type Agent struct {
@@ -90,6 +95,15 @@ type Agent struct {
 	// turnSink 是一轮结束的实时出口（见 turn.go）。与 noticeSink 同样由 server
 	// 启动时装一次，从发起轮次的 goroutine 上调用。
 	turnSink TurnSink
+
+	// usageLedger 是用量账本。单独用一把原子指针而不是复用 mu：它只在启动装配时
+	// 写一次、此后纯读，不该与模型热切换抢锁，也不该让记账阻塞快照。
+	usageLedger atomic.Pointer[usage.Ledger]
+	// usageBudget 是本月的预算判定，与账本同法注入。nil 表示不判定（不拦）。
+	usageBudget atomic.Pointer[usage.Budget]
+	// usageWarned 让「账本写不进去」只提示一次。磁盘满、目录被删这类故障会一直存在，
+	// 每请求刷一条同样的日志只会把真正的问题淹掉。
+	usageWarned atomic.Bool
 
 	// 每会话一把轮次锁：同一会话的对话轮次与压缩互斥，防止交错写历史，
 	// 以及压缩的 Replace 覆盖并发轮次刚 Append 的消息。
@@ -171,6 +185,139 @@ func (a *Agent) Options() Options {
 	return a.opts
 }
 
+// SetUsageLedger 注入用量账本。只在启动装配阶段调用一次；nil 表示不记账，
+// 此时所有记录点都是 no-op（测试与不落盘的用法即如此）。
+func (a *Agent) SetUsageLedger(l *usage.Ledger) {
+	a.usageLedger.Store(l)
+}
+
+// SetUsageBudget 注入本月预算判定。与账本一样只在启动装配时写一次；nil 表示不判定。
+func (a *Agent) SetUsageBudget(b *usage.Budget) {
+	a.usageBudget.Store(b)
+}
+
+// BudgetStatus 返回当前预算快照；没有预算时返回 nil。
+func (a *Agent) BudgetStatus(now time.Time) *usage.BudgetStatus {
+	b := a.usageBudget.Load()
+	if b == nil {
+		return nil
+	}
+	st := b.Status(now)
+	return &st
+}
+
+// budgetBlocked 问一次「这一轮还能不能花」，被拦时返回带本地化文案的错误。
+//
+// 返回的错误同时包住 plugin.ErrBudgetExceeded 与 usage.ErrBudgetExceeded：
+// 插件按前者决定「这一拍算过去了」（心跳不回滚 lastBeat），核心按后者识别预算问题。
+//
+// started 表示这一轮是否已经发出过模型请求。工具在响应之后执行，因此「轮次中途
+// 被拦」的轮次可能已经动过外部世界；请求发出后失败（还没拿到响应）也算——那一笔
+// 用量可能已经入账，发起方不能再把任务当作「没有发生」回滚重跑，见
+// plugin.BudgetStoppedMidTurn。
+func (a *Agent) budgetBlocked(ctx context.Context, interactive, started bool) error {
+	b := a.usageBudget.Load()
+	if b == nil {
+		return nil
+	}
+	st, blocked := b.Blocked(clock.Now(ctx), interactive)
+	if !blocked {
+		return nil
+	}
+	return &budgetError{
+		msg:         a.budgetExceededText(st),
+		errs:        []error{plugin.ErrBudgetExceeded, usage.ErrBudgetExceeded},
+		turnStarted: started,
+	}
+}
+
+// budgetExceededText 按真正到限的那个维度写文案。
+//
+// 只设了金额上限时不能报「已用 0 / 上限 0 tokens」：那句话既不是原因，也看不出
+// 该去调哪一项。两个维度都设了就连金额一起报，用户才知道离哪个上限更近。
+func (a *Agent) budgetExceededText(st usage.BudgetStatus) string {
+	lang := a.opts.Lang
+	switch {
+	case st.LimitTokens <= 0 && st.LimitCost > 0:
+		return i18n.Tf(lang, "usage.err.budget_exceeded_cost",
+			"本月金额预算已达上限（%s %.2f / %.2f），请在设置里调整预算或等待下月",
+			st.Currency, st.SpentCost, st.LimitCost)
+	case st.LimitCost > 0:
+		return i18n.Tf(lang, "usage.err.budget_exceeded_both",
+			"本月用量已达上限（已用 %d / 上限 %d tokens，金额 %s %.2f / %.2f），请在设置里调整预算或等待下月",
+			st.SpentTokens, st.LimitTokens, st.Currency, st.SpentCost, st.LimitCost)
+	}
+	return i18n.Tf(lang, "usage.err.budget_exceeded",
+		"本月用量已达上限（已用 %d / 上限 %d tokens），请在设置里调整预算或等待下月",
+		st.SpentTokens, st.LimitTokens)
+}
+
+// budgetError 是一轮被预算拦下时交给调用方的错误。文案是给人看的，
+// 两个哨兵错误交给 errors.Is 判断。
+//
+// turnStarted 记录这次拦截发生在轮次已经开始之后（首次模型响应已经拿到，工具可能
+// 已经执行过）。插件侧靠它区分「回滚待办」与「当作已执行」，见
+// plugin.BudgetStoppedMidTurn。
+type budgetError struct {
+	msg         string
+	errs        []error
+	turnStarted bool
+}
+
+func (e *budgetError) Error() string { return e.msg }
+
+// TurnStarted 报告这一轮是否已经开始过。plugin.BudgetStoppedMidTurn 靠它做判别。
+func (e *budgetError) TurnStarted() bool { return e.turnStarted }
+
+// Unwrap 返回两个来源的哨兵错误：插件认 plugin.ErrBudgetExceeded，
+// 核心认 usage.ErrBudgetExceeded。
+func (e *budgetError) Unwrap() []error { return e.errs }
+
+// recordUsage 把一次模型调用的实测用量记进账本。
+//
+// 记账是旁路：写不进去只记一条日志，绝不让它失败掉一轮对话——钱已经花掉了，
+// 少一行账不该连回复一起丢掉。
+func (a *Agent) recordUsage(ctx context.Context, kind, provider, model string, u *llm.Usage) {
+	if u == nil {
+		return
+	}
+	origin := plugin.TurnOriginFrom(ctx)
+	// 辅助调用不带发起方时来自核心自己（记忆提炼、标题这类），不能归到网页前台：
+	// 账本要能回答「后台的哪些活花了多少」，混进前台就等于永远查不出来源。但交互
+	// 轮次里的辅助调用不是后台：失败转译那句台词是有人在等的（translateFailure 带着
+	// 交互标记进来），只看 Kind 会把它错记成内部开销。
+	if kind == usage.KindHelper && origin == "" && !plugin.IsInteractive(ctx) {
+		origin = "internal"
+	}
+	e := usage.Entry{
+		TS:         clock.Now(ctx),
+		Kind:       kind,
+		Origin:     origin,
+		Provider:   provider,
+		Model:      model,
+		Prompt:     u.PromptTokens,
+		Completion: u.CompletionTokens,
+		Cached:     u.CachedTokens,
+		CacheWrite: u.CacheWriteTokens,
+	}
+	// 有预算时走 Budget.Record：它把「追加账本」与「累加已用」放在同一个原子边界里，
+	// 并发的重扫因此不会把同一笔记两次。没写进账本的那一笔照样计入已用——钱已经花掉
+	// 了，预算要按实际花费拦；写失败在状态里由 WriteFailed 交代。
+	var err error
+	if b := a.usageBudget.Load(); b != nil {
+		err = b.Record(e)
+	} else {
+		ledger := a.usageLedger.Load()
+		if ledger == nil {
+			return
+		}
+		err = ledger.Append(e)
+	}
+	if err != nil && a.usageWarned.CompareAndSwap(false, true) {
+		i18n.Logf(a.opts.Lang, "log.agent.usage_write_failed", "agent: 写入用量账本失败: %v", err)
+	}
+}
+
 // Complete 用当前模型做一次一问一答的辅助调用：不带工具、不启用思考、不写入任何会话。
 // 供插件完成提炼、归类这类内部工作，与用户对话相互独立。
 func (a *Agent) Complete(ctx context.Context, prompt string) (string, error) {
@@ -180,10 +327,20 @@ func (a *Agent) Complete(ctx context.Context, prompt string) (string, error) {
 		if t.Provider == nil {
 			continue
 		}
-		out, err := a.completeOne(ctx, t, prompt)
+		// 闸门按 ctx 的交互标记判定：插件无人值守发起的辅助调用是后台，而失败转译
+		// （translateFailure 带着交互标记进来）是有人在等的一句台词——skip_background
+		// 的意思是「后台先停，人还能继续用」，把前台承诺的那句转译拦掉正好相反。
+		// 一问一答没有「中途」：被拦时这一轮什么都没做。
+		if err := a.budgetBlocked(ctx, plugin.IsInteractive(ctx), false); err != nil {
+			return "", err
+		}
+		out, u, err := a.completeOne(ctx, t, prompt)
 		if err == nil {
+			a.recordUsage(ctx, usage.KindHelper, t.ProviderName, t.Options.Model, u)
 			return out, nil
 		}
+		// 失败前已经拿到实测用量时也要入账：这次请求的钱同样花掉了。
+		a.recordUsage(ctx, usage.KindHelper, t.ProviderName, t.Options.Model, u)
 		lastErr = err
 		if !llm.IsTransientError(err) || ctx.Err() != nil {
 			return "", err
@@ -199,7 +356,7 @@ func (a *Agent) Complete(ctx context.Context, prompt string) (string, error) {
 	return "", lastErr
 }
 
-func (a *Agent) completeOne(ctx context.Context, t ModelTarget, prompt string) (string, error) {
+func (a *Agent) completeOne(ctx context.Context, t ModelTarget, prompt string) (string, *llm.Usage, error) {
 	events, err := t.Provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       t.Options.Model,
 		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt}},
@@ -208,21 +365,24 @@ func (a *Agent) completeOne(ctx context.Context, t ModelTarget, prompt string) (
 		Thinking:    "off",
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var out strings.Builder
+	var u *llm.Usage
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
 			out.WriteString(ev.Content)
+		case llm.EventUsage:
+			u = ev.Usage
 		case llm.EventError:
-			return "", ev.Err
+			return "", u, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", u, err
 	}
-	return out.String(), nil
+	return out.String(), u, nil
 }
 
 const titleMaxRunes = 30
@@ -289,6 +449,13 @@ func (a *Agent) RunTurnWithMedia(ctx context.Context, sessionID, input string, i
 }
 
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []llm.ImagePart, files []llm.FilePart, emit func(Event)) (string, error) {
+	// 预算闸门放在最前面：连用户消息都不该落盘——一轮被拦下的对话在历史里留下
+	// 一条没有回复的消息，比直接说「到上限了」更让人困惑。模型链与设置都还没读，
+	// 这一条不花任何请求。轮次还没开始，被拦时发起方可以安全地回滚待办。
+	// 落盘前还有第二道（见裁决可见域之后）：这一条只挡「进来时就已经超了」。
+	if err := a.budgetBlocked(ctx, plugin.IsInteractive(ctx), false); err != nil {
+		return "", err
+	}
 	startedAt := clock.Now(ctx)
 	// 本轮所在的会话：后台轮次没有入站消息可依附，插件（如媒体出口）靠它找到
 	// 「这条消息该发给谁」。
@@ -333,6 +500,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 	ev.Scope = scope
 
 	ephemeral := plugin.IsEphemeralInput(ctx)
+
+	// 第二道预算闸门，落在用户消息落盘之前：入口检查到这里之间隔着加载历史与
+	// 裁决可见域，并发的会话可能刚好把额度用光。此刻标题没写、图片与文件没存、
+	// 历史里也没有本轮的用户消息——被拦的一轮依旧什么都没做，后台发起方可以
+	// 安全回滚待办后重试，不会在会话里留下一条重复的用户消息。
+	if err := a.budgetBlocked(ctx, plugin.IsInteractive(ctx), false); err != nil {
+		return "", err
+	}
 
 	// 首条用户消息生成标题（连同它所属的可见域一起记下）。
 	// 一次性输入不参与命名：心跳提示词不该成为会话标题。
@@ -476,9 +651,16 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 	pinned = append(pinned, false)
 
 	var guard toolGuard
+	// started 表示这一轮已经拿到过模型响应：工具在响应之后执行，于是中途被预算拦下
+	// 的轮次可能已经动过外部世界，发起方不能再把任务当作「没有发生」回滚。它同时是
+	// stream 里复查预算的前提：首次请求的检查点在前面落盘之前，那里被拦不会留下痕迹；
+	// 此后每次请求（含换备用模型）都要重查，见 stream。
+	started := false
 	for turn := 0; turn < opts.MaxTurns; turn++ {
-		r, err := a.stream(ctx, targets, opts, msgs, pinned, emit)
+		r, err := a.stream(ctx, targets, opts, msgs, pinned, started, emit)
 		if err != nil {
+			// 失败尝试的用量由 stream 在每次 streamOne 之后就地入账（见那里的注释）：
+			// 这里再记一次会把最后一笔失败记两遍。
 			// 给插件一个把失败转成正常回复的机会（如角色扮演场景把内容拦截
 			// 演成一句走神）。转译成功即按正常轮次收尾，原始错误进会话注记。
 			// 本轮已经发出去的图片要挂在转译出来的那条 assistant 消息上，
@@ -500,6 +682,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 			})
 			return text, nil
 		}
+		// 拿到响应了：这一轮从这里开始可能已经做过事（工具紧接着执行）。
+		started = true
 		if r.usage != nil {
 			// 记录实测用量（供 /status 展示与自动压缩判断）
 			_ = a.store.SetUsage(sessionID, &session.Usage{
@@ -508,6 +692,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, images []l
 				CachedTokens:     r.usage.CachedTokens,
 				CacheWriteTokens: r.usage.CacheWriteTokens,
 			})
+			// 账本按「每次请求」记：一轮里的多次模型响应各自入账，而不只留末尾一次。
+			a.recordUsage(ctx, usage.KindTurn, r.provider, r.model, r.usage)
 		}
 
 		// reasoning 一并持久化并留在上下文里：带工具调用时 DeepSeek 要求回传，
@@ -602,6 +788,10 @@ type turnResult struct {
 	rawOrigin string
 	toolCalls []llm.ToolCall
 	usage     *llm.Usage
+	// provider/model 是本次尝试实际命中的那一项（不是主模型）：用量与失败都该
+	// 记在真正被调用的模型上，否则备用模型顶上来的钱会记到主模型头上。
+	provider string
+	model    string
 	// emitted 表示界面上已经看到过正文或思考增量。此时失败不能再换模型，
 	// 否则两家的输出会拼在一轮里。
 	emitted bool
@@ -610,16 +800,48 @@ type turnResult struct {
 // stream 按模型链发起一次 LLM 调用。只在尚未输出任何内容、且错误属于瞬态故障时
 // 切换到下一个模型；全部失败后把最后一个错误交回上层，由现有失败收尾处理
 // （交互轮次交给 FailureTranslator，后台轮次交给发起方）。
-func (a *Agent) stream(ctx context.Context, targets []ModelTarget, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
+//
+// started 表示这一轮此前已经拿到过响应（工具因此可能已经执行过）；attempted 表示
+// 本次 stream 已经向某个模型发出过请求。两者都是这里复查预算的前提——首次请求不
+// 在这里拦（检查点在 run 落盘用户消息之前），此后每次请求（工具循环的下一轮，或
+// 主模型失败后换备用模型）都要重新问一次。
+func (a *Agent) stream(ctx context.Context, targets []ModelTarget, opts Options, msgs []llm.Message, pinned []bool, started bool, emit func(Event)) (turnResult, error) {
 	var lastErr error
+	var last turnResult
+	// attempted 记的是「已经发出过请求」，不是「拿到过响应」：主模型可能先上报用量
+	// 再返回可重试错误，那一笔钱已经入账，备用模型不能因此免费放行。
+	attempted := false
 	for i, t := range targets {
 		if t.Provider == nil {
 			continue
 		}
+		// 后台轮次在轮次中途的每次请求前重新问一次预算：一轮工具循环会发出好几次
+		// 请求，中途用尽就该停下；主模型失败后换备用模型也一样——失败那次可能已经
+		// 花掉额度。首次请求的检查点在 run 落盘用户消息之前：那时被拦还什么都没写，
+		// 回滚重试不会重复；放在这里则会留下一条没有回复的会话记录。前台一轮允许
+		// 走完——用户正等着一个完整答复，半途报「到上限了」比多花这一轮更糟。
+		//
+		// 已经发出过请求却在这里被拦，错误必须报成「轮次已开始」：调度器据此不回滚
+		// 任务，额度恢复后不会把同一件事再做一遍（那一笔请求的钱也已经花掉了）。
+		if !plugin.IsInteractive(ctx) && (started || attempted) {
+			if err := a.budgetBlocked(ctx, false, true); err != nil {
+				return last, err
+			}
+		}
+		attempted = true
 		r, err := a.streamOne(ctx, t.Provider, withTargetOptions(opts, t.Options), msgs, pinned, emit)
+		// 无论成败都先记下这次尝试命中的模型，再决定是否重试：失败那一笔同样
+		// 落在真正被调用的那一项上。
+		r.provider = t.ProviderName
+		r.model = t.Options.Model
+		last = r
 		if err == nil {
 			return r, nil
 		}
+		// 失败尝试报过用量就地入账：备用链还会接着往下走，这一笔的钱已经花掉了；
+		// 等到上层再记就只能记住最后一笔。成功那笔仍由 run 记（它还要更新
+		// session.Meta.LastUsage），这里只管失败。
+		a.recordUsage(ctx, usage.KindTurn, t.ProviderName, t.Options.Model, r.usage)
 		lastErr = err
 		if !llm.IsTransientError(err) || ctx.Err() != nil || r.emitted {
 			return r, err
@@ -632,7 +854,7 @@ func (a *Agent) stream(ctx context.Context, targets []ModelTarget, opts Options,
 	if lastErr == nil {
 		lastErr = fmt.Errorf("%s", i18n.T(opts.Lang, "agent.err.no_model_target", "没有可用的模型"))
 	}
-	return turnResult{}, lastErr
+	return last, lastErr
 }
 
 func withTargetOptions(opts Options, m ModelOptions) Options {
@@ -708,7 +930,10 @@ func (a *Agent) streamOne(ctx context.Context, provider llm.Provider, opts Optio
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return turnResult{}, err
+		// 带着已经收到的用量返回：用户取消时那一次请求的钱也已经花掉了，
+		// 上层（stream）据此入账。注意这里通常拿不到 usage——OpenAI 的实现在
+		// 取消时根本不会补发 usage 事件，能记到的是取消前已经发过的那一笔。
+		return r, err
 	}
 	return r, nil
 }

@@ -6,6 +6,7 @@
 
 - [命令行](cli.md) —— `wen serve` / `wen config` / `wen status` / `wen update` 等子命令
 - [配置与模型](configuration.md) —— config.yaml 的各项、设置页里的提供商与模型管理
+- [用量与预算](usage.md) —— 账本记什么、单价怎么折成金额、上限到了之后拦谁
 - [插件总览](plugins/README.md) —— 三十九个内置插件的说明与配置项
 - [部署与访问控制](deployment.md) —— 远程访问的认证模型、启停脚本与 systemd
 - [容器部署（Docker）](docker.md) —— 镜像、compose、数据卷与升级

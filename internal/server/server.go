@@ -4,11 +4,13 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"sync"
 
 	"wen/internal/agent"
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/session"
+	"wen/internal/usage"
 )
 
 //go:embed webui
@@ -26,6 +28,13 @@ type Options struct {
 	// Lang 是进程语言，只用在**没有请求可依附**的地方：模型 provider 建出来之后
 	// 要为每个人报错，那份文本不能跟着某一次请求走。界面文案仍按 reqLang 判定。
 	Lang string
+	// Usage 是运行时那份用量账本；为 nil 表示这次运行没有账本（打开失败、评测没接上），
+	// /api/usage 据此返回空报告并标降级，而不是报错——用量是旁路数据。
+	Usage *usage.Ledger
+	// UsageBudget 是同一个运行时里的预算判定，供 /api/usage 与设置保存共用。
+	UsageBudget *usage.Budget
+	// UsageSettings 是 usage.json 的路径；界面保存预算设置时写它。
+	UsageSettings string
 }
 
 type Server struct {
@@ -35,6 +44,16 @@ type Server struct {
 	models   *modelcfg.Store
 	confirms *confirmBroker
 	notices  *noticeHub
+
+	// 用量账本、预算与设置落点。三者可以各自为 nil / 空串：账本打不开时接口返回
+	// 降级报告，没有预算时只读不写。
+	usage         *usage.Ledger
+	usageBudget   *usage.Budget
+	usageSettings string
+	// usageSettingsMu 串行化「读底稿 → 合并 → 落盘 → 热更新」。保存是读-改-写的整段，
+	// 两个窗口（或同一页面连点）同时保存时，后一方若读到前一方写之前的文件，就会把
+	// 对方刚设的那一项按缺省值清掉——用户看到两次「保存成功」，上限却只剩一个。
+	usageSettingsMu sync.Mutex
 
 	auth          *AuthStore
 	tokens        *tokenStore
@@ -52,6 +71,7 @@ func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *
 	s := &Server{
 		agent: a, store: store, plugins: plugins, models: models,
 		confirms: newConfirmBroker(), notices: newNoticeHub(),
+		usage: opts.Usage, usageBudget: opts.UsageBudget, usageSettings: opts.UsageSettings,
 		auth: auth, tokens: newTokenStore(), gate: newFailGate(),
 		trustLoopback: opts.TrustLoopback, exposed: opts.Exposed, lang: opts.Lang,
 	}
@@ -95,6 +115,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/embedding", s.getEmbedding)
 	mux.HandleFunc("PUT /api/embedding", s.saveEmbedding)
 	mux.HandleFunc("POST /api/embedding/test", s.testEmbedding)
+	// 用量与预算：GET 读报告，PUT 存预算设置（保存后热更新到运行中的那份预算）。
+	// 认证与同源保护由最外层的 guard 统一处理，这里不另开旁路。
+	mux.HandleFunc("GET /api/usage", s.usageReport)
+	mux.HandleFunc("PUT /api/usage/settings", s.saveUsageSettings)
 
 	mux.HandleFunc("GET /api/auth/status", s.authStatus)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)

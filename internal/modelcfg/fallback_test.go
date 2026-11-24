@@ -99,6 +99,51 @@ func TestFallbackAcceptsConfigProvider(t *testing.T) {
 	}
 }
 
+// 两家提供商可以合法地只差「ToLower 相同、EqualFold 不同」的大小写（İstanbul 与
+// istanbul），各有一个同名模型时它们是两个不同的目标。备用链去重若再折一次小写，
+// 会把备用项误判成主模型的重复项丢掉，主模型故障时因此不会切换。同一家换个大小写
+// 写进备用项的仍应去重——resolveSelection 返回的是条目里的实际名字。
+func TestResolveChainKeepsToLowerCollidingProviders(t *testing.T) {
+	s, path := newStore(t, baseConfig())
+
+	next := s.Snapshot()
+	next.Providers = append(next.Providers,
+		Provider{Name: "İstanbul", Type: "openai_compat", BaseURL: "https://a.example.com",
+			APIKey: "k", Models: []Model{{ID: "m"}}},
+		Provider{Name: "istanbul", Type: "openai_compat", BaseURL: "https://b.example.com",
+			APIKey: "k", Models: []Model{{ID: "m"}}},
+	)
+	next.Current = Selection{Provider: "İstanbul", Model: "m"}
+	next.Fallbacks = []Selection{
+		{Provider: "istanbul", Model: "m"},
+		{Provider: "Istanbul", Model: "m"}, // 解析后就是 istanbul，与上一条重复
+	}
+	if _, err := s.Save("", next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	chain, err := s.ResolveChain("")
+	if err != nil {
+		t.Fatalf("ResolveChain: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("两家实际不同的提供商都应保留（大小写写法的重复项仍去重）: %+v", chain)
+	}
+	if chain[0].ProviderName != "İstanbul" || chain[1].ProviderName != "istanbul" {
+		t.Fatalf("chain = %+v", chain)
+	}
+
+	// 新版本保存允许这种组合，载入必须同样接受——否则一次成功保存会把下次启动挡住。
+	reloaded, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatalf("重新载入: %v", err)
+	}
+	chain, err = reloaded.ResolveChain("")
+	if err != nil || len(chain) != 2 {
+		t.Fatalf("载入后链应仍是两家: chain=%+v err=%v", chain, err)
+	}
+}
+
 func TestSetCurrentRemovesDuplicateFallback(t *testing.T) {
 	s, _ := newStore(t, baseConfig())
 	next := s.Snapshot()

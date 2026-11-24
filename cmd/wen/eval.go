@@ -100,6 +100,7 @@ func runEval(args []string) error {
 
 	rt, err := buildRuntime(cfg, runtimeOverrides{
 		SessionDir: filepath.Join(tmp, "sessions"),
+		UsageDir:   filepath.Join(tmp, "usage"),
 		Clock:      clk,
 		ManualTime: true,
 		BeforeTurn: budget.before,
