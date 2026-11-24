@@ -556,6 +556,7 @@ func TestOverlappingReflectionsKeepTheirOwnClaims(t *testing.T) {
 	var (
 		mu      sync.Mutex
 		calls   int
+		claimed = make(chan struct{}, 1)
 		release = make(chan struct{})
 		toolErr = make(chan error, 1)
 		notices []string
@@ -569,9 +570,10 @@ func TestOverlappingReflectionsKeepTheirOwnClaims(t *testing.T) {
 		if !first {
 			return "", plugin.ErrSessionBusy // 第二次反思：会话正被第一次占着
 		}
-		turn := asTurn(ctx, "")
-		_, _ = p.TurnPrompt(turn, plugin.TurnEvent{SessionID: sid}) // 认领表人格
-		<-release                                                   // 第二次在这期间收尾
+		turn := asTurn(ctx, "") // 这一轮落在表人格
+		_, _ = p.TurnPrompt(turn, plugin.TurnEvent{SessionID: sid})
+		claimed <- struct{}{} // 认领已写下，外层可以安全触发另一条反思
+		<-release             // 第二次在这期间收尾
 		_, err := p.Tools()[0].Execute(turn, json.RawMessage(`{"action":"add","text":"爱上手冲","basis":"x","why":"y"}`))
 		toolErr <- err
 		return "", nil
@@ -590,8 +592,16 @@ func TestOverlappingReflectionsKeepTheirOwnClaims(t *testing.T) {
 		})
 	}
 	c.add(24 * time.Hour)
-	endTurnIn(p, "inner", "s1", false)
+	// 让表人格先认领，确保另一条（里人格）是撞忙的那条：反过来时，撞忙的反思放弃后
+	// 会把表人格记成「今天已反思」，先跑的那条自然认领不到——测的是 LastReflect 的
+	// 先后，不是认领被清掉。
 	endTurnIn(p, "", "s1", false)
+	select {
+	case <-claimed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("第一次反思没有认领")
+	}
+	endTurnIn(p, "inner", "s1", false)
 
 	// 等第二次重试耗尽、收尾（只剩第一次还在跑）
 	deadline := time.Now().Add(3 * time.Second)

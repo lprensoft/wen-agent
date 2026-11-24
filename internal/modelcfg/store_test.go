@@ -2,8 +2,11 @@ package modelcfg
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"wen/internal/config"
@@ -228,6 +231,215 @@ func TestSaveDoesNotTakeOverUnchangedConfigProvider(t *testing.T) {
 	}
 }
 
+// 旧版本用 ToLower 判重，曾把只差大小写的两个名字同时存进 models.json。升级后
+// 加载不能因为新的 EqualFold 重名校验直接失败——那会把服务与配置界面一起挡在门外，
+// 用户连重命名、把两家设置都保住的机会都没有。载入放行，保存仍严格。
+func TestLoadAllowsLegacyCaseDuplicateProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	raw := `{
+      "version": 1,
+      "providers": [
+        {"name":"Ζευς","type":"openai_compat","base_url":"https://a.example.com","api_key":"k",
+         "models":[{"id":"m"}]},
+        {"name":"ΖΕΥΣ","type":"openai_compat","base_url":"https://b.example.com","api_key":"k",
+         "models":[{"id":"m"}]}
+      ],
+      "current": {"provider":"Ζευς","model":"m"}
+    }`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatalf("旧文件应当能载入: %v", err)
+	}
+	view := s.Snapshot()
+	var names []string
+	for _, p := range view.Providers {
+		names = append(names, p.Name)
+	}
+	if len(names) != 3 { // 两家旧提供商 + config.yaml 的 deepseek
+		t.Fatalf("载入后应保留两家旧提供商，得到 %v", names)
+	}
+	// 不重命名直接保存：严格校验仍然拒绝，避免新的重名被写回磁盘。
+	if _, err := s.Save("", view); err == nil {
+		t.Fatal("未改名的重名配置不该保存成功")
+	}
+	// 改掉其中一家之后可以保存，两家的设置都保留。
+	view.Providers[1].Name = "Ζευς 2"
+	out, err := s.Save("", view)
+	if err != nil {
+		t.Fatalf("改名后应能保存: %v", err)
+	}
+	var got []string
+	for _, p := range out.Providers {
+		got = append(got, p.Name)
+	}
+	if !slices.Contains(got, "Ζευς") || !slices.Contains(got, "Ζευς 2") {
+		t.Fatalf("改名保存后两家都应保留，得到 %v", got)
+	}
+}
+
+// 改名保存时密钥必须跟着原条目走，而不是按名字（更不是 EqualFold）重新配对。
+// 旧配置里 Ζευς 与 ΖΕΥΣ 可以共存；把第一家改名、界面回传的 api_key 全部留空，
+// 保存后第一家的密钥仍是自己的，第二家也不会被写入第一家的密钥。
+func TestSaveKeepsKeysWithRenamedDuplicateProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	raw := `{
+      "version": 1,
+      "providers": [
+        {"name":"Ζευς","type":"openai_compat","base_url":"https://a.example.com","api_key":"sk-a",
+         "models":[{"id":"m"}]},
+        {"name":"ΖΕΥΣ","type":"openai_compat","base_url":"https://b.example.com","api_key":"sk-b",
+         "models":[{"id":"m"}]}
+      ],
+      "current": {"provider":"Ζευς","model":"m"}
+    }`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatalf("旧文件应当能载入: %v", err)
+	}
+
+	next := s.Snapshot() // 带 Ref；密钥按界面规则全部留空
+	for i := range next.Providers {
+		next.Providers[i].APIKey = ""
+	}
+	next.Providers[0].Name = "Zeus"
+	next.Current.Provider = "Zeus"
+	if _, err := s.Save("", next); err != nil {
+		t.Fatalf("改名保存: %v", err)
+	}
+
+	reloaded, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatalf("重新载入: %v", err)
+	}
+	keys := map[string]string{}
+	for _, p := range reloaded.Snapshot().Providers {
+		keys[p.Name] = p.APIKey
+	}
+	if keys["Zeus"] != "sk-a" {
+		t.Fatalf("改名后的第一家应保留自己的密钥，得到 %q", keys["Zeus"])
+	}
+	if keys["ΖΕΥΣ"] != "sk-b" {
+		t.Fatalf("第二家不该被写入第一家的密钥，得到 %q", keys["ΖΕΥΣ"])
+	}
+	// Ref 只是响应里的往返标识，不能落盘。
+	if body, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(body), `"ref"`) {
+		t.Fatalf("models.json 里不该出现 ref: %s", body)
+	}
+}
+
+// 旧版本按 ToLower 判重时留下的文件：两家只差大小写、模型 ID 相同、密钥不同。
+func legacyGreekStore(t *testing.T) (*Store, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "models.json")
+	raw := `{
+      "version": 1,
+      "providers": [
+        {"name":"Ζευς","type":"openai_compat","base_url":"https://a.example.com","api_key":"sk-a",
+         "models":[{"id":"m"}]},
+        {"name":"ΖΕΥΣ","type":"openai_compat","base_url":"https://b.example.com","api_key":"sk-b",
+         "models":[{"id":"m"}]}
+      ],
+      "current": {"provider":"Ζευς","model":"m"}
+    }`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatalf("旧文件应当能载入: %v", err)
+	}
+	return s, path
+}
+
+// 同一份改名请求提交两次——第一次成功但响应丢了，用户点了重试。第二次带回的 ref
+// 已经对不上（那一家的名字改了）：必须拒绝，而不是回填不上就把空密钥写下去。
+func TestSaveRejectsStaleRefInsteadOfClearingKey(t *testing.T) {
+	s, path := legacyGreekStore(t)
+
+	next := s.Snapshot()
+	for i := range next.Providers {
+		next.Providers[i].APIKey = ""
+	}
+	next.Providers[0].Name = "Zeus"
+	next.Current.Provider = "Zeus"
+	if _, err := s.Save("", next); err != nil {
+		t.Fatalf("首次保存: %v", err)
+	}
+	if _, err := s.Save("", next); err == nil {
+		t.Fatal("重试同一份请求时旧 ref 已失效，应被拒绝")
+	}
+
+	reloaded, err := NewStore("", path, baseConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range reloaded.Snapshot().Providers {
+		if p.APIKey == "" {
+			t.Fatalf("被拒绝的重试不该把 %q 的密钥清掉", p.Name)
+		}
+	}
+}
+
+// 测试连接沿用哪一家的密钥：名字按 EqualFold 对上两家时，不带 ref 分不清就报错，
+// 带了 ref 只认 ref；名字唯一时不带 ref 也照常取到。
+func TestLookupPicksSavedProviderByRef(t *testing.T) {
+	s, _ := legacyGreekStore(t)
+	view := s.Snapshot()
+	second := view.Providers[1].Ref
+
+	if _, _, _, err := s.Lookup("", "", "ΖΕΥΣ", "m"); err == nil {
+		t.Fatal("两家只差大小写又不带 ref，不该替用户挑一家的密钥")
+	}
+	if _, _, _, err := s.Lookup("", "gone", "ΖΕΥΣ", "m"); err == nil {
+		t.Fatal("ref 对不上任何条目时应报错")
+	}
+	p, m, ok, err := s.Lookup("", second, "ΖΕΥΣ", "m")
+	if err != nil || !ok {
+		t.Fatalf("带 ref 取第二家: ok=%v err=%v", ok, err)
+	}
+	if p.APIKey != "sk-b" || p.BaseURL != "https://b.example.com" || m.ID != "m" {
+		t.Fatalf("带 ref 应取到第二家自己保存的值: %+v", p)
+	}
+
+	single, _ := newStore(t, baseConfig())
+	if p, _, ok, err := single.Lookup("", "", "DeepSeek", "deepseek-chat"); err != nil || !ok || p.APIKey != "sk-cfg" {
+		t.Fatalf("名字唯一时不带 ref 也应取到: ok=%v err=%v %+v", ok, err, p)
+	}
+	if _, _, ok, err := single.Lookup("", "", "nobody", "m"); ok || err != nil {
+		t.Fatalf("没有这个名字应是「没找到」而不是报错: ok=%v err=%v", ok, err)
+	}
+}
+
+// 载入的宽松只对旧版曾接受的名称组合生效：两个都叫 Alpha（或普通 ASCII 大小写
+// 变体）旧版就会拒绝，只可能来自手改；按名字查找只会静默命中第一家，载入即报错。
+func TestLoadRejectsExactDuplicateProviders(t *testing.T) {
+	for _, pair := range [][2]string{{"Alpha", "Alpha"}, {"Alpha", "alpha"}} {
+		path := filepath.Join(t.TempDir(), "models.json")
+		raw := fmt.Sprintf(`{
+      "version": 1,
+      "providers": [
+        {"name":%q,"type":"openai_compat","base_url":"https://a.example.com","api_key":"k","models":[{"id":"m"}]},
+        {"name":%q,"type":"openai_compat","base_url":"https://b.example.com","api_key":"k","models":[{"id":"m"}]}
+      ],
+      "current": {"provider":%q,"model":"m"}
+    }`, pair[0], pair[1], pair[0])
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewStore("", path, baseConfig()); err == nil {
+			t.Fatalf("%q 与 %q 重名，应在载入时被拒绝", pair[0], pair[1])
+		}
+	}
+}
+
 func TestValidateRejects(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -236,6 +448,15 @@ func TestValidateRejects(t *testing.T) {
 		{"重名（大小写不敏感）", func(f *File) {
 			f.Providers = append(f.Providers, Provider{Name: "DeepSeek", Type: "openai_compat",
 				BaseURL: "https://x.com", APIKey: "k", Models: []Model{{ID: "m"}}})
+		}},
+		{"重名（Unicode 大小写折叠）", func(f *File) {
+			// Ζευς 与 ΖΕΥΣ 只差大小写，但 ToLower 折不出同一个键（词尾 ς 与 σ 不同），
+			// 而 EqualFold 与查价口径都认它们是同一个名字。
+			f.Providers = append(f.Providers,
+				Provider{Name: "Ζευς", Type: "openai_compat",
+					BaseURL: "https://a.example.com", APIKey: "k", Models: []Model{{ID: "m"}}},
+				Provider{Name: "ΖΕΥΣ", Type: "openai_compat",
+					BaseURL: "https://b.example.com", APIKey: "k", Models: []Model{{ID: "m"}}})
 		}},
 		{"非法 base_url", func(f *File) { f.Providers[0].BaseURL = "abc" }},
 		{"未知类型", func(f *File) { f.Providers[0].Type = "ollama" }},

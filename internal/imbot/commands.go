@@ -253,6 +253,9 @@ func (c *Core) cmdCompact(ctx context.Context, msg Message) {
 	c.send(ctx, msg, i18n.T(c.cfg.Lang, "imbot.compacting", "开始压缩会话历史，请稍候…"))
 	tctx, cancel := context.WithTimeout(ctx, c.cfg.TurnTimeout)
 	defer cancel()
+	// 这是用户敲下的命令，与 chat 一样对面有真人：skip_background 策略下不该把
+	// 它当成后台轮次拦掉。压缩自己还会花一次模型调用，判定必须与对话轮次同一口径。
+	tctx = plugin.WithInteractive(tctx)
 	if err := c.cfg.Compact(tctx, sid); err != nil {
 		c.send(ctx, msg, i18n.Tf(c.cfg.Lang, "imbot.err.compact", "压缩失败：%s", err.Error()))
 		return

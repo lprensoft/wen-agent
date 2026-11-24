@@ -398,6 +398,51 @@ func TestManagerInjectsOriginIntoNotice(t *testing.T) {
 	}
 }
 
+// callingPlugin 在 Init 里把辅助调用与压缩各调一次：管理器给这两个入口注入的
+// 发起方只能在 Init 拿到的运行环境上看出来。
+type callingPlugin struct {
+	name string
+}
+
+func (p *callingPlugin) Name() string         { return p.name }
+func (p *callingPlugin) Description() string  { return "测试插件 " + p.name }
+func (p *callingPlugin) SystemPrompt() string { return "" }
+func (p *callingPlugin) Tools() []Tool        { return nil }
+func (p *callingPlugin) Init(ictx InitContext, _ map[string]any) error {
+	if ictx.Complete != nil {
+		_, _ = ictx.Complete(context.Background(), "提炼")
+	}
+	if ictx.Compact != nil {
+		_ = ictx.Compact(context.Background(), "s1")
+	}
+	return nil
+}
+
+// 辅助调用与压缩都会真实花钱，来源必须由 Manager 裁定，插件无法伪装成前台。
+func TestManagerInjectsOriginIntoCompleteAndCompact(t *testing.T) {
+	var completeOrigin, compactOrigin string
+	m := NewManager(InitContext{
+		Complete: func(ctx context.Context, _ string) (string, error) {
+			completeOrigin = TurnOriginFrom(ctx)
+			return "", nil
+		},
+		Compact: func(ctx context.Context, _ string) error {
+			compactOrigin = TurnOriginFrom(ctx)
+			return nil
+		},
+	}, "")
+	p := &callingPlugin{name: "memory"}
+	if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if completeOrigin != "memory" {
+		t.Errorf("辅助调用应自动带上发起方，实际 %q", completeOrigin)
+	}
+	if compactOrigin != "memory" {
+		t.Errorf("压缩应自动带上发起方，实际 %q", compactOrigin)
+	}
+}
+
 // WithoutInit 的 Manager 必须一次都不调用 Init：离线配置工具靠它避免把
 // 长连接、心跳与定时任务一并启动起来。开关、配置与状态持久化仍要正常工作。
 func TestWithoutInitNeverInitializes(t *testing.T) {

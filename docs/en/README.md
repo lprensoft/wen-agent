@@ -6,6 +6,7 @@
 
 - [CLI](cli.md) — the `wen serve` / `wen config` / `wen status` / `wen update` subcommands
 - [Configuration and models](configuration.md) — every option in config.yaml, and provider/model management on the settings page
+- [Usage and budget](usage.md) — what the ledger records, how prices become amounts, and who gets blocked at the limit
 - [Plugin overview](plugins/README.md) — what each of the thirty-nine built-in plugins does, with its settings
 - [Deployment and access control](deployment.md) — the authentication model for remote access, a start/stop script, and systemd
 - [Docker deployment](docker.md) — the image, compose, data volumes and upgrades

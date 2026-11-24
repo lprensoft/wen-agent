@@ -16,6 +16,7 @@ import (
 	"wen/internal/clock"
 	"wen/internal/cue"
 	"wen/internal/plugin"
+	"wen/internal/usage"
 )
 
 // ---------- 测试替身 ----------
@@ -763,6 +764,29 @@ func TestPlanTriggeredByHeartbeatTurn(t *testing.T) {
 	h.waitPlanning()
 	if h.calls.Load() != 1 {
 		t.Fatalf("不该再触发，调用了 %d 次", h.calls.Load())
+	}
+}
+
+// 预算用尽不是「今天没排成」：轮次压根没开始，不该烧掉当天的尝试次数——否则两次
+// 被拦之后今天就再也不排了，预算恢复也没用。
+func TestPlanBudgetExceededKeepsAttempts(t *testing.T) {
+	h := newHarness(t, true, nil)
+	h.runTurn = func(context.Context, string, string) (string, error) {
+		return "", errors.Join(plugin.ErrBudgetExceeded, usage.ErrBudgetExceeded)
+	}
+	h.turnEnd("")
+	recvInput(t, h)
+	h.waitPlanning()
+	if got := h.calls.Load(); got != 1 {
+		t.Fatalf("应真的尝试一次，实际 %d", got)
+	}
+	if n := h.plan(t).Attempts.Count; n != 0 {
+		t.Fatalf("预算拦下不该记尝试，得到 %d", n)
+	}
+	select {
+	case n := <-h.notices:
+		t.Fatalf("不该留下「没排成」的注记: %s", n)
+	default:
 	}
 }
 

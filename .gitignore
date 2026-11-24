@@ -10,6 +10,11 @@ models.json
 auth.json
 wen.lock
 
+# 用量账本与预算设置（把仓库根目录当配置目录运行时生成；锚定根目录，
+# 源码在 internal/usage/ 下，不加前导 / 会把目录本身也忽略掉）
+/usage/
+/usage.json
+
 # 插件的持久化目录（记忆条目与压缩归档等；锚定根目录，源码在 internal/plugin/ 下不受影响）
 /plugins/
 

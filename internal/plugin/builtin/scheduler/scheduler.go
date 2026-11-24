@@ -46,6 +46,14 @@ type Plugin struct {
 	sessions   plugin.SessionQuery // 只读：挑选最近活跃会话
 
 	tasks []*Task
+	// dispatchSeq 是进程内的派发序号：每次派发自增一次并写进那个任务的 runSeq。
+	// 回滚只认序号——两次周期任务重叠、或用户取消、或上一轮刚写下成功备注，都能从
+	// 「序号是否还是派发时那一个」与取消标记上看出来，不必比较完整状态快照。
+	// 它不落盘：重启后任务重新加载，序号从头开始，互不相干。
+	dispatchSeq uint64
+	// blockedAt 是最近一次「整批派发被预算拦下」的时刻。被拦下的任务会原样保持
+	// 到期，调度循环据此至少等一个兜底轮询周期再试，而不是空转（见 untilNextAt）。
+	blockedAt time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc

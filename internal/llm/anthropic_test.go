@@ -506,8 +506,10 @@ func TestAnthropicUsageMerged(t *testing.T) {
 		{"message_stop", `{"type":"message_stop"}`},
 	}, ChatRequest{Model: "claude-opus-4-5", Messages: testMessages("hi")})
 
-	if r.usageHits != 1 {
-		t.Fatalf("usage emitted %d times, want 1", r.usageHits)
+	// 输入侧（message_start）与输出侧（message_delta）各发一次快照：失败的请求
+	// 也要留得下已经花掉的用量，所以不再是收尾时发的那一次。
+	if r.usageHits < 2 {
+		t.Fatalf("usage emitted %d times, want at least 2", r.usageHits)
 	}
 	if r.usage.PromptTokens != 150 || r.usage.CompletionTokens != 30 || r.usage.TotalTokens != 180 {
 		t.Errorf("usage = %+v", r.usage)
@@ -522,6 +524,11 @@ func TestAnthropicStreamErrorEvent(t *testing.T) {
 
 	if r.err == nil {
 		t.Fatal("expected stream error")
+	}
+	// 流错误之前已经上报过的输入用量要留着：token 真花掉了，账本不能因为
+	// 这一轮失败就漏记这一笔。
+	if r.usage == nil || r.usage.PromptTokens != 5 {
+		t.Fatalf("usage = %+v, want prompt 5", r.usage)
 	}
 }
 

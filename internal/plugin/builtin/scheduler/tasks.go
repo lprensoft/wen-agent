@@ -36,6 +36,19 @@ type Task struct {
 	Done      bool      `json:"done,omitempty"` // once 已派发 / 已取消 / 已过期
 	Note      string    `json:"note,omitempty"` // 最近一次执行结果或状态说明
 	DoneAt    time.Time `json:"done_at,omitempty"`
+
+	// runSeq 是最近一次派发拿到的进程内序号（见 Plugin.dispatchSeq）。不落盘、不导出：
+	// 它只用来判断「这条任务是不是还停在我派发时的那一轮」——中途被预算拦下的那一轮
+	// 回滚与否据此判定，上一轮写下的备注不再参与比较（那会让回滚被一次正常的成功
+	// 备注挡住，额度恢复后要多等一整轮）。
+	runSeq uint64
+
+	// roundNotes 是每轮备注表：派发序号 → 那一轮写下的结果说明。不落盘、不导出。
+	// 周期任务的两轮可能重叠，轮次完成的先后与派发的先后无关；只认「当前 runSeq」
+	// 会把先派发、后完成那一轮的备注丢掉（LastRun 还停在更早一轮时列表就露馅了）。
+	// 表里留着每一轮的结论，Note 取序号最大的那条显示——既不会因为旧轮次晚回来而
+	// 倒退，也不会因为新轮次被回滚而丢结果。只保留最近几轮，长跑进程不会无限增长。
+	roundNotes map[uint64]string
 }
 
 // nextRun 是既有调用点与测试的入口，等价于 nextAt。
@@ -246,6 +259,9 @@ func (p *Plugin) catchUpAt(now time.Time) {
 			t.Done = true
 			t.DoneAt = now
 			t.Note = prompt.T(p.lang, "prompt.scheduler.note.expired", "错过执行时间过久，已标记过期")
+			// 过期是用户视角的终态：残留的轮次备注（可能来自重启前那次没跑完的派发）
+			// 不能在某次刷新里把「已过期」换掉。
+			t.roundNotes = nil
 			changed = true
 		}
 	}

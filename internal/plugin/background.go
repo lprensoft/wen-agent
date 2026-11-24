@@ -13,8 +13,45 @@ import (
 // ErrTurnNotStarted 表示一轮对话因外部预算或限额没有开始。
 //
 // 它与「模型调用失败」不同：插件在轮次开始前改过的状态应当回滚，任务保持待处理。
-// 由 RunTurn 的实现方返回，插件用 errors.Is 判断。生产路径不会产生它。
+// 由 RunTurn 的实现方返回，插件用 errors.Is 判断。
+//
+// 生产路径也会产生它：启动装配的短窗口里，插件循环（buildPlugins）已经跑起来，
+// 而 Agent 与预算要等装配的最后一步才发布，此时 RunTurn 一律返回这个错误。调度方
+// 因此必须按「回滚待办、稍后再试」处置，不能当成一次性失败记下来；窗口只持续到
+// 装配返回，重试很快就能真正开始。
 var ErrTurnNotStarted = errors.New("轮次未开始")
+
+// ErrBudgetExceeded 表示这一轮没有被发出：本月的用量预算已经用尽。
+//
+// 与 ErrTurnNotStarted 的分工是「这一拍算不算过去」。后者说的是轮次压根没开始，
+// 发起方该回滚自己改过的状态（心跳回滚 lastBeat）并尽快重试——那是外部临时的拦截。
+// 预算用尽是一个会持续到下个月或用户改设置的状况：这一拍就算过去了，发起方按正常
+// 间隔等下一次；立刻重试只会把每一次尝试都撞在同一堵墙上，变成紧凑循环。
+// 两者互不匹配（errors.Is 各认各的），发起方按哪个错误做处置必须分清楚。
+//
+// 预算拦下还有第二种情形：轮次已经发出过请求（可能已经执行过工具甚至发过消息，
+// 也可能请求失败但用量已入账），下一次请求前才撞上上限。它同样是 ErrBudgetExceeded，
+// 但发起方不能把任务当作「没有发生」回滚——额度恢复后会从头再跑一遍，通知与写入
+// 就做了两次（那笔已花掉的钱也不会退）。要区分它，用 BudgetStoppedMidTurn。
+var ErrBudgetExceeded = errors.New("用量预算已用尽")
+
+// turnStartedReporter 由能说明「这次拦截发生在轮次已经开始之后」的错误实现。
+// 放在顶层（而不是某个包装层）是因为 errors.As 只找链上第一个匹配，而实现方
+// （agent 的预算错误）正是链上的那一层。
+type turnStartedReporter interface {
+	TurnStarted() bool
+}
+
+// BudgetStoppedMidTurn 报告这次预算拦截发生在轮次已经发出过请求之后（可能已执行
+// 工具，也可能上一次请求失败但用量已入账）。
+//
+// 调用方据此决定「这一轮算不算发生过」：中途停下的一轮已经动过外部世界（至少花掉了
+// 一次请求的钱），回滚任务会让它在额度恢复后从头重跑；入口就被拦下的那一轮什么都没
+// 做，回滚才是对的。
+func BudgetStoppedMidTurn(err error) bool {
+	var r turnStartedReporter
+	return errors.As(err, &r) && r.TurnStarted()
+}
 
 // BackgroundWorker 是能按时间自发做事、又能由外部显式驱动的插件。
 //
@@ -25,7 +62,9 @@ type BackgroundWorker interface {
 	// ok=false 表示没有安排。返回 <= now 表示已经到期。
 	NextBackgroundAt(now time.Time) (time.Time, bool)
 	// RunBackground 同步执行 now 时刻到期的全部后台工作，不得再起 goroutine。
-	// 遇到 ErrTurnNotStarted 必须原样向上返回。
+	// 遇到 ErrTurnNotStarted 与 ErrBudgetExceeded 都必须原样向上返回：前者要求
+	// 回滚待办、保持任务未完成，后者要求把这一拍当作已经过去。两者的处置相反，
+	// 由调度方（如心跳）按 errors.Is 分辨。
 	RunBackground(ctx context.Context, now time.Time) error
 }
 

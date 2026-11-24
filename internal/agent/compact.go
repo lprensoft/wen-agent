@@ -11,6 +11,7 @@ import (
 	"wen/internal/plugin"
 	"wen/internal/prompt"
 	"wen/internal/session"
+	"wen/internal/usage"
 )
 
 // EstimateHistoryTokens 估算一组消息的 token 总量（粗略值，供状态展示与预算裁剪）。
@@ -256,10 +257,20 @@ func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Optio
 		if t.Provider == nil {
 			continue
 		}
-		summary, retained, files, media, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), sessionID, msgs, extras, emit)
+		// 压缩也花真钱，与轮次同一道闸门。前台（手动压缩、自动压缩都在用户眼前）
+		// 按交互判定：skip_background 策略下不该把这次拦住。压缩没有「中途」：
+		// 被拦时这一轮什么都没做，发起方可以安全回滚。
+		if err := a.budgetBlocked(ctx, plugin.IsInteractive(ctx), false); err != nil {
+			return "", nil, nil, nil, err
+		}
+		summary, retained, files, media, u, emitted, err := a.summarizeOne(ctx, t.Provider, withTargetOptions(opts, t.Options), sessionID, msgs, extras, emit)
 		if err == nil {
+			// 压缩也是真实花钱的调用，记在真正成功的那一项上。
+			a.recordUsage(ctx, usage.KindCompact, t.ProviderName, t.Options.Model, u)
 			return summary, retained, files, media, nil
 		}
+		// 失败前已经拿到实测用量时也要入账：这次压缩请求同样花了钱。
+		a.recordUsage(ctx, usage.KindCompact, t.ProviderName, t.Options.Model, u)
 		lastErr = err
 		if !llm.IsTransientError(err) || ctx.Err() != nil || emitted {
 			return "", nil, nil, nil, err
@@ -275,7 +286,7 @@ func (a *Agent) summarize(ctx context.Context, targets []ModelTarget, opts Optio
 	return "", nil, nil, nil, lastErr
 }
 
-func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, []llm.FilePart, []llm.ImagePart, bool, error) {
+func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Options, sessionID string, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, []session.StoredMessage, []llm.FilePart, []llm.ImagePart, *llm.Usage, bool, error) {
 	images, labels, retained, files, media := a.summaryMedia(sessionID, opts.Lang, msgs)
 	promptText := buildCompactPrompt(opts.Lang, extras, serializeHistoryWithLabels(opts.Lang, msgs, labels))
 	if len(images) > 0 {
@@ -290,9 +301,10 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 		Thinking:    "off", // 压缩追求速度，不启用思考
 	})
 	if err != nil {
-		return "", nil, nil, nil, false, err
+		return "", nil, nil, nil, nil, false, err
 	}
 	var summary strings.Builder
+	var u *llm.Usage
 	emitted := false
 	for ev := range events {
 		switch ev.Type {
@@ -300,17 +312,19 @@ func (a *Agent) summarizeOne(ctx context.Context, provider llm.Provider, opts Op
 			emitted = true
 			summary.WriteString(ev.Content)
 			emit(Event{Type: EventDelta, Content: ev.Content})
+		case llm.EventUsage:
+			u = ev.Usage
 		case llm.EventError:
-			return "", nil, nil, nil, emitted, ev.Err
+			return "", nil, nil, nil, u, emitted, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", nil, nil, nil, emitted, err
+		return "", nil, nil, nil, u, emitted, err
 	}
 	if strings.TrimSpace(summary.String()) == "" {
-		return "", nil, nil, nil, emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
+		return "", nil, nil, nil, u, emitted, fmt.Errorf("%s", i18n.T(a.opts.Lang, "agent.compact.err.empty_summary", "摘要生成失败：模型返回为空"))
 	}
-	return summary.String(), retained, files, media, emitted, nil
+	return summary.String(), retained, files, media, u, emitted, nil
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。

@@ -16,6 +16,9 @@ models.json
 auth.json
 plugins.state.json
 wen.lock
+# 用量账本与预算设置：前导 / 锚定构建上下文的根目录，不带会把 internal/usage/ 也排掉
+/usage/
+/usage.json
 README.md
 README.en.md
 CHANGELOG.md

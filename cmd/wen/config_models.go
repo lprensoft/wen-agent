@@ -263,7 +263,7 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 		protocol = ""
 	}
 	edited := modelcfg.Provider{
-		Name: strings.TrimSpace(name), Type: typ, BaseURL: strings.TrimSpace(baseURL),
+		Ref: p.Ref, Name: strings.TrimSpace(name), Type: typ, BaseURL: strings.TrimSpace(baseURL),
 		APIKey:  newKey, // 留空 = 沿用旧值，由服务端的 carryOverKeys 补上
 		Dialect: dialect, Protocol: protocol, PromptCache: stringToCache(cache),
 		Models: textToModels(modelsText, p.Models),
@@ -271,15 +271,48 @@ func editProvider(b backend, doc modelsDoc, p providerView, consoleURL string, i
 	if isNew {
 		next.Providers = append(next.Providers, edited)
 	} else {
-		next.Providers = replaceProvider(next.Providers, p.Name, edited)
-		next.Fallbacks = renameFallbackProvider(next.Fallbacks, p.Name, edited.Name)
-		next.Fallbacks = keepFallbacksForModels(next.Fallbacks, edited.Name, edited.Models)
+		next = applyProviderEdit(next, p, edited)
 	}
 	if err := b.saveModels(next); err != nil {
 		return err
 	}
 	note(trf("cli.models.savedProvider", "✓ 提供商 %s 已保存", edited.Name))
 	return nil
+}
+
+// applyProviderEdit 在替换条目前解析当前选择和备用项。旧配置里两家只差大小写时，
+// 只有原本解析到被编辑条目的引用才跟着改。
+func applyProviderEdit(next modelcfg.File, p providerView, edited modelcfg.Provider) modelcfg.File {
+	at := -1
+	for i, x := range next.Providers {
+		if x.Ref == p.Ref && (p.Ref != "" || x.Name == p.Name) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		// 对不上已有条目（页面取到之后别处改过名字）：照旧追加提交，带着的旧 ref
+		// 会让保存被拒绝并提示刷新，而不是悄悄丢掉这次编辑。
+		next.Providers = append(next.Providers, edited)
+		return next
+	}
+	if selectionTarget(next.Providers, next.Current.Provider) == at {
+		next.Current.Provider = edited.Name
+	}
+	next.Fallbacks = updateEditedProviderFallbacks(next, at, edited)
+	next.Providers[at] = edited
+	return next
+}
+
+// selectionTarget 返回按名字解析（当前选择、备用项都这样解析）实际落到的条目下标；
+// 找不到返回 -1。
+func selectionTarget(ps []modelcfg.Provider, name string) int {
+	for i, x := range ps {
+		if strings.EqualFold(x.Name, name) {
+			return i
+		}
+	}
+	return -1
 }
 
 func dropFallbacksForProvider(list []modelcfg.Selection, name string) []modelcfg.Selection {
@@ -293,29 +326,20 @@ func dropFallbacksForProvider(list []modelcfg.Selection, name string) []modelcfg
 	return out
 }
 
-func renameFallbackProvider(list []modelcfg.Selection, old, next string) []modelcfg.Selection {
-	if old == next {
-		return list
-	}
-	out := make([]modelcfg.Selection, 0, len(list))
-	for _, sel := range list {
-		if strings.EqualFold(sel.Provider, old) {
-			sel.Provider = next
-		}
-		out = append(out, sel)
-	}
-	return out
-}
-
-func keepFallbacksForModels(list []modelcfg.Selection, provider string, models []modelcfg.Model) []modelcfg.Selection {
-	ids := make(map[string]bool, len(models))
-	for _, m := range models {
+func updateEditedProviderFallbacks(file modelcfg.File, at int, edited modelcfg.Provider) []modelcfg.Selection {
+	ids := make(map[string]bool, len(edited.Models))
+	for _, m := range edited.Models {
 		ids[m.ID] = true
 	}
-	out := make([]modelcfg.Selection, 0, len(list))
-	for _, sel := range list {
-		if strings.EqualFold(sel.Provider, provider) && !ids[sel.Model] {
-			continue
+	out := make([]modelcfg.Selection, 0, len(file.Fallbacks))
+	for _, sel := range file.Fallbacks {
+		if selectionTarget(file.Providers, sel.Provider) == at {
+			if !ids[sel.Model] {
+				continue
+			}
+			if edited.Name != file.Providers[at].Name {
+				sel.Provider = edited.Name
+			}
 		}
 		out = append(out, sel)
 	}
@@ -330,16 +354,6 @@ func dropProvider(list []modelcfg.Provider, name string) []modelcfg.Provider {
 		}
 	}
 	return out
-}
-
-func replaceProvider(list []modelcfg.Provider, name string, next modelcfg.Provider) []modelcfg.Provider {
-	for i, p := range list {
-		if p.Name == name {
-			list[i] = next
-			return list
-		}
-	}
-	return append(list, next)
 }
 
 func modelsToText(models []modelcfg.Model) string {

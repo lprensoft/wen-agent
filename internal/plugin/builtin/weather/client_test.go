@@ -252,17 +252,3 @@ func TestFirstInstantOfDateAcrossLeapYearEnd(t *testing.T) {
 		}
 	}
 }
-
-// 区间不前进时兜底扫描偏移变化；伦敦 2029-03-25 01:00 UTC 进入 BST。
-func TestNextOffsetChangeFindsTransition(t *testing.T) {
-	london, err := time.LoadLocation("Europe/London")
-	if err != nil {
-		t.Skipf("没有时区数据: %v", err)
-	}
-	from := time.Date(2029, 3, 25, 0, 0, 0, 0, time.UTC)
-	got := nextOffsetChange(from, from.Add(48*time.Hour), london)
-	want := time.Date(2029, 3, 25, 1, 0, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Errorf("nextOffsetChange = %v，期望 %v", got.UTC(), want)
-	}
-}

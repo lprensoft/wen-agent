@@ -1177,6 +1177,17 @@ body {
 .model-row-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; }
 .model-row:hover .model-row-actions, .model-row.active .model-row-actions { opacity: 1; }
 .model-empty { font-size: 12.5px; color: var(--text-dim); padding: 6px 8px; }
+/* 单价小标签：只标币种与输入价，压得比模型 ID 还轻，别和模型名抢注意力 */
+.model-price-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--tool-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 /* 备用模型链：主模型失败时按顺序尝试 */
 .fallback-section {
@@ -1521,3 +1532,140 @@ body.viewing-image { overflow: hidden; }
 }
 .chip-icon { padding: 6px; }
 .chip-icon svg { width: 16px; height: 16px; }
+
+/* ---------- 用量与预算 ---------- */
+/* 概览卡片：与插件网格同法按宽度铺开，窄屏自动变一列 */
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.usage-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-card-label { font-size: 12px; color: var(--text-dim); }
+.usage-card-value { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.usage-card-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; }
+
+.usage-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.usage-month-label { font-size: 12.5px; color: var(--text-dim); }
+.usage-toolbar input[type="month"] {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+  color-scheme: light;
+}
+:root[data-theme="dark"] .usage-toolbar input[type="month"] { color-scheme: dark; }
+.usage-toolbar input[type="month"]:focus { border-color: var(--accent); }
+.usage-toolbar-gap { flex: 1; }
+
+.usage-block-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+
+.usage-budget,
+.usage-table-block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.usage-budget-status {
+  font-size: 12.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.usage-budget-status.warn {
+  border-color: rgba(245, 158, 11, .8);
+  background: rgba(245, 158, 11, .14);
+}
+.usage-budget-status.danger { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.usage-budget-note { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; line-height: 1.5; }
+.usage-budget-note.error { color: var(--danger); }
+/* settings_stale 那条：不是错误（保存一次就好），但比普通备注更要紧，别用暗色。 */
+.usage-budget-note.warn { color: var(--text); font-weight: 500; }
+
+/* 预算表单两列；窄屏在媒体查询里换成一列 */
+.usage-budget-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.usage-budget-form > .field-desc { margin-bottom: 10px; }
+.usage-budget-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.usage-budget-error {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+.usage-budget-error.hidden { display: none; }
+
+/* 按日柱状：纯 CSS，柱高按当月最大值归一；标签用日号，悬停看详情 */
+.usage-chart {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.usage-chart-empty,
+.usage-table-empty { font-size: 12.5px; color: var(--text-dim); padding: 6px 0; }
+.usage-bars { display: flex; align-items: flex-end; gap: 3px; overflow-x: auto; }
+.usage-bar-col { flex: 1 0 12px; min-width: 12px; display: flex; flex-direction: column; gap: 4px; }
+.usage-bar-track { height: 120px; display: flex; align-items: flex-end; background: var(--bg); border-radius: 4px; }
+.usage-bar {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 4px 4px 0 0;
+  transition: height .2s ease;
+}
+.usage-bar-col:hover .usage-bar { background: var(--accent-hover); }
+.usage-bar-label { font-size: 10.5px; color: var(--text-dim); text-align: center; }
+
+/* 表格：第一列名称左对齐，数字列右对齐；窄屏横向滚动而不是压扁列 */
+.usage-table-block { overflow-x: auto; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.usage-table th,
+.usage-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.usage-table th { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.usage-table th:not(:first-child),
+.usage-table td.num { text-align: right; }
+.usage-table td.name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.usage-table tbody tr:last-child td { border-bottom: none; }
+.usage-table tbody tr:hover { background: var(--bg); }
+
+.usage-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  white-space: pre-line;
+  max-width: 860px;
+}
+.usage-note.error { color: var(--danger); }
+
+@media (max-width: 720px) {
+  .usage-budget-fields { grid-template-columns: minmax(0, 1fr); }
+  .usage-toolbar-gap { display: none; }
+  .usage-bar-col { flex-basis: 16px; }
+}

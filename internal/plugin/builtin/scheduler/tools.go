@@ -185,6 +185,8 @@ func (t *cancelTool) Execute(ctx context.Context, args json.RawMessage) (string,
 			task.Done = true
 			task.DoneAt = clock.Now(ctx)
 			task.Note = prompt.T(lang, "prompt.scheduler.note.cancelled", "已取消")
+			// 取消是终态：在飞轮次之后写下的结果不能再借每轮备注表把它显示回来。
+			task.roundNotes = nil
 			if err := p.saveLocked(); err != nil {
 				return "", fmt.Errorf(prompt.T(lang, "prompt.scheduler.err.save_short", "保存失败: %w"), err)
 			}

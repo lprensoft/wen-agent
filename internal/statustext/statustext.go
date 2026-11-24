@@ -12,6 +12,7 @@ import (
 
 	"wen/internal/i18n"
 	"wen/internal/plugin"
+	"wen/internal/usage"
 )
 
 // Render 渲染完整的状态文本。sessionID 为空时不展示会话 ID 那一行。
@@ -32,6 +33,9 @@ func Render(lang string, info plugin.StatusInfo, sessionID string) string {
 			// 会话 ID 便于用 read_session / read_archive 定位这次对话
 			lines = append(lines, i18n.Tf(lang, "status.session_id", "会话 ID：%s", sessionID))
 		}
+	}
+	if line := BudgetLine(lang, info); line != "" {
+		lines = append(lines, line)
 	}
 	lines = append(lines, info.PluginLines...) // 插件贡献的状态行，按注册顺序
 	return strings.Join(lines, "\n")
@@ -76,8 +80,114 @@ func CacheLine(lang string, info plugin.StatusInfo) string {
 	return s
 }
 
+// BudgetLine 给出本月用量预算那一行；没有预算、或既不设限也不降级也不记账失败时
+// 返回空串。不设限但记账失败时给单独一行（见下）。
+//
+// 阈值（Warn / Exceeded / Degraded）与口径都由 BudgetInfo 给，这里只负责排版：
+// 自己重算等于在界面上引入第二套判定，两边迟早会对不上。
+//
+// token 与金额两段都在时用「 · 」并列，任一维度的限额为 0 就整段省略——设了钱
+// 的上限却没设 token 上限是正常配置，不该显示「0 / 0 tokens」。
+func BudgetLine(lang string, info plugin.StatusInfo) string {
+	b := info.Budget
+	if b == nil {
+		return ""
+	}
+	if b.Degraded {
+		// 降级时不报数字：账本或设置读不出来，报出来的比例只会被当成真实用量。
+		return i18n.T(lang, "status.budget.degraded", "⚠️ 本月用量预算不可用（账本或设置读不出来）")
+	}
+	// 没设上限时本来不占版面，但账本写不进去是另一件事：即便不设限，本月合计
+	// 也可能偏少。它不该被「没有预算就没有预算行」一起藏掉，也不该塞进预算行冒充。
+	if !b.Enabled {
+		if !b.WriteFailed {
+			return ""
+		}
+		return i18n.T(lang, "status.budget.writeFailedOnly", "⚠️ 本月用量账本写入失败，统计可能不完整")
+	}
+	var parts []string
+	if b.LimitTokens > 0 {
+		parts = append(parts, i18n.Tf(lang, "status.budget.tokens", "%s / %s tokens（%s%%）",
+			Comma64(b.SpentTokens), Comma64(b.LimitTokens), Pct64(b.SpentTokens, b.LimitTokens)))
+	}
+	if cost := costDetail(lang, b); cost != "" {
+		parts = append(parts, cost)
+	}
+	line := i18n.T(lang, "status.budget.head", "本月用量预算：") + strings.Join(parts, " · ")
+	// 设了金额上限却没有价格表：那一段永远不会生效，必须说出来，否则用户会以为
+	// 钱的上限在兜底，实际只有 token 那一路管着。
+	if b.LimitCost > 0 && !b.CostReady {
+		line += i18n.T(lang, "status.budget.noPrice", "（缺少价格，金额上限未生效）")
+	} else if b.LimitCost > 0 && b.CostUnpriced {
+		// 价格表在，但本月用到的模型一个都没定价：同样等于没有金额上限。
+		line += i18n.T(lang, "status.budget.costUnpriced", "（本月有用量没有价格，金额上限未生效）")
+	}
+	// 别的币种的金额没计进本币上限：不说明的话，「还差得远」是个假象。
+	if b.LimitCost > 0 && b.ForeignCost {
+		line += i18n.Tf(lang, "status.budget.foreign", "（有其他币种的花费未计入 %s 上限）", b.Currency)
+	}
+	// 坏分片让合计偏少，但不改变拦截：说出来即可，别让用户把偏低的数字当成真实用量。
+	if b.SkippedFiles > 0 {
+		line += i18n.Tf(lang, "status.budget.skipped", "（%d 个账本分片读不出来，合计可能偏少）", b.SkippedFiles)
+	}
+	// 记账失败同样只让统计偏少，不改变拦截：说出来即可。它不并进 Degraded——
+	// 那会 fail-open，而 token 上限正该继续按已观测到的花费拦着。
+	if b.WriteFailed {
+		line += i18n.T(lang, "status.budget.writeFailed", "（账本写入失败，本月统计可能不完整）")
+	}
+	// 超限的拦截范围取决于 over：block_all 连前台一起停，只说「后台」是低报。
+	switch {
+	case b.Exceeded && b.Over == usage.OverBlockAll:
+		return "⛔ " + line + i18n.T(lang, "status.budget.exceededAll", "（已达上限，所有请求已暂停）")
+	case b.Exceeded:
+		return "⛔ " + line + i18n.T(lang, "status.budget.exceeded", "（已达上限，后台任务已暂停）")
+	case b.Warn:
+		return "⚠️ " + line + i18n.T(lang, "status.budget.warn", "（接近上限）")
+	}
+	return "💰 " + line
+}
+
+// costDetail 给出预算行里的金额段（含「这个数不准」的说明）。
+//
+// 没有价格表、或既没设金额上限也没花过钱时返回空串：前者由 BudgetLine 的 noPrice
+// 说明，后者没有可看的数字。
+func costDetail(lang string, b *plugin.BudgetInfo) string {
+	if !b.CostReady || (b.LimitCost <= 0 && b.SpentCost <= 0) {
+		return ""
+	}
+	amount := Money(b.SpentCost)
+	if b.LimitCost > 0 {
+		amount += " / " + Money(b.LimitCost)
+	}
+	if cur := strings.TrimSpace(b.Currency); cur != "" {
+		amount = cur + " " + amount
+	}
+	// 未定价的用量与缓存价回退都会让这个数字偏离账单，二选一说一句就够。花了 0
+	// 元时这两句没有意义——那时该由 CostUnpriced / ForeignCost 解释为什么是 0。
+	// 缓存价那一档不说「偏高」：读缓存通常更便宜、写缓存有时更贵，方向因提供商而异。
+	switch {
+	case b.SpentCost > 0 && b.UnpricedTokens > 0:
+		amount += i18n.Tf(lang, "status.budget.unpriced", "（含 %s tokens 未定价，金额为估算）",
+			Comma64(b.UnpricedTokens))
+	case b.SpentCost > 0 && b.CostInexact:
+		amount += i18n.T(lang, "status.budget.inexact", "（金额为估算，可能偏高或偏低）")
+	}
+	return amount
+}
+
+// Money 把金额排成两位小数。单价是每百万 token 的价，账单上的数到分就够了；
+// 更细的小数只是把浮点噪声显示得更精确。
+func Money(v float64) string {
+	return fmt.Sprintf("%.2f", v)
+}
+
 // Comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。
 func Comma(n int) string {
+	return Comma64(int64(n))
+}
+
+// Comma64 是 Comma 的 int64 版本：预算的已用数与上限都是 int64。
+func Comma64(n int64) string {
 	s := fmt.Sprintf("%d", n)
 	neg := strings.HasPrefix(s, "-")
 	if neg {
@@ -95,8 +205,18 @@ func Comma(n int) string {
 // Pct 取一位小数。token 占用本就是个粗略量（还带着估算值），
 // 两位小数只是把噪声显示得更精确。
 func Pct(used, total int) string {
-	if total <= 0 {
+	return Pct64(int64(used), int64(total))
+}
+
+// Pct64 是 Pct 的 int64 版本，供预算这类大数用。
+//
+// 整数半上取一位小数，不走 "%.1f"：后者按二进制浮点值舍入，5,000 / 2,000,000
+// 这种恰好落在 .25 处的比例会被舍成 0.2，而 Web 端的 toFixed(1) 给 0.3——同一个
+// 数字在终端与网页上不一样，是一种只在截图里才看得见的别扭。
+func Pct64(used, total int64) string {
+	if total <= 0 || used <= 0 {
 		return "0.0"
 	}
-	return fmt.Sprintf("%.1f", float64(used)/float64(total)*100)
+	tenths := (used*1000 + total/2) / total
+	return fmt.Sprintf("%d.%d", tenths/10, tenths%10)
 }

@@ -53,6 +53,9 @@ type modelsDoc struct {
 }
 
 type providerView struct {
+	// Ref 是服务端下发的原始标识，保存时原样带回，用于在旧配置的重名条目间
+	// 认准被编辑的那一条（见 modelcfg.carryOverKeys）。
+	Ref         string           `json:"ref"`
 	Name        string           `json:"name"`
 	Type        string           `json:"type"`
 	BaseURL     string           `json:"base_url"`
@@ -71,7 +74,7 @@ func (d modelsDoc) toFile() modelcfg.File {
 	providers := make([]modelcfg.Provider, 0, len(d.Providers))
 	for _, p := range d.Providers {
 		providers = append(providers, modelcfg.Provider{
-			Name: p.Name, Type: p.Type, BaseURL: p.BaseURL,
+			Ref: p.Ref, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL,
 			Dialect: p.Dialect, Protocol: p.Protocol, PromptCache: p.PromptCache, Models: p.Models,
 		})
 	}
@@ -217,7 +220,7 @@ func (b *offlineBackend) loadModels() (modelsDoc, error) {
 			models = []modelcfg.Model{}
 		}
 		doc.Providers = append(doc.Providers, providerView{
-			Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, Dialect: p.Dialect,
+			Ref: p.Ref, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, Dialect: p.Dialect,
 			Protocol: p.Protocol, PromptCache: p.PromptCache, HasAPIKey: p.APIKey != "",
 			MaskedKey: modelcfg.MaskKey(p.APIKey), Source: p.Source, Models: models,
 		})

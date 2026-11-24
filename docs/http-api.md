@@ -29,6 +29,8 @@
 | GET | `/api/embedding` | 嵌入服务配置（`api_key` 只返回掩码），并带上接口类型与预置 |
 | PUT | `/api/embedding` | 保存嵌入服务配置，立即生效；`api_key` 留空且地址没变时表示不修改 |
 | POST | `/api/embedding/test` | 用一次真实的嵌入请求测试表单里的配置，返回 `{"ok":true,"dimensions":N}` |
+| GET | `/api/usage` | 某个自然月的用量报告，`month=YYYY-MM`（默认本月）：合计、按日、按来源与按模型（模型键是「提供商 / 模型」，与价格表逐行对得上），附当前预算状态与 `usage.json` 里的设置。`degraded`、`settings_error` 与 `settings_stale` 分别说明报告不完整、设置读不出来、磁盘上的设置与运行中的预算不一致；`degraded` 只表示这次运行没有接上账本或设置读不出来，某个分片读不完整不会置它——那种情况看合计行上的 `totals.skipped_files`，大于 0 时合计可能偏少 |
+| PUT | `/api/usage/settings` | 保存预算设置并立即生效；只提交改过的字段（缺省保持原值），未知键与 `null` 一律拒绝，未超过 64 KB。返回 `{"settings","budget"}`；`usage.json` 由更新的版本写过时返回 409 |
 | GET | `/api/auth/status` | 访问控制状态（是否已设口令、当前请求是否已认证、是否对外监听），登录前即可访问 |
 | POST | `/api/auth/login` | `{"password"}` 登录，成功后下发会话 Cookie |
 | POST | `/api/auth/logout` | 退出登录 |

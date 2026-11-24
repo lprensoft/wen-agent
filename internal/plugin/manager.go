@@ -184,8 +184,8 @@ func (m *Manager) fieldsFor(p Plugin, source string) []ConfigField {
 
 // initCtxFor 返回该插件专属的运行环境：在公共 InitContext 上补一个按插件名隔离的持久化目录。
 // 未配置状态文件时 StateDir 留空，由插件自行决定是否拒绝启用。
-// RunTurn 与 Notice 被包一层自动注入发起方标记——发起方由 Manager 裁定，
-// 插件无法伪装成前台。
+// RunTurn、Complete、Compact 与 Notice 被包一层自动注入发起方标记——发起方由
+// Manager 裁定，插件无法伪装成前台。
 func (m *Manager) initCtxFor(name string) InitContext {
 	ictx := m.ictx
 	switch {
@@ -207,6 +207,20 @@ func (m *Manager) initCtxFor(name string) InitContext {
 	if base := m.ictx.RunTurnMedia; base != nil {
 		ictx.RunTurnMedia = func(ctx context.Context, sessionID, input string, images []llm.ImagePart, files []llm.FilePart) (string, error) {
 			return base(WithTurnOrigin(ctx, name), sessionID, input, images, files)
+		}
+	}
+	if base := m.ictx.Complete; base != nil {
+		// 辅助调用不执行工具，复用轮次发起方标记只影响「这次调用是谁花的钱」，
+		// 不牵动 growth 那类按轮次来源放行的门禁。
+		ictx.Complete = func(ctx context.Context, prompt string) (string, error) {
+			return base(WithTurnOrigin(ctx, name), prompt)
+		}
+	}
+	if base := m.ictx.Compact; base != nil {
+		// 压缩同样会花掉一次模型调用，来源得能回答「是谁让你压的」。
+		// 它不执行工具，因此与 Complete 一样不影响任何按轮次来源放行的门禁。
+		ictx.Compact = func(ctx context.Context, sessionID string) error {
+			return base(WithTurnOrigin(ctx, name), sessionID)
 		}
 	}
 	if base := m.ictx.Notice; base != nil {

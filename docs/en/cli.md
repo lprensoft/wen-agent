@@ -13,6 +13,7 @@ wen export [-o backup file] [-c config]  back up the configuration directory
 wen import <backup file> [-c config]  restore a backup into an empty directory
 wen plugins [subcommand] [-c config]  manage external plugin bundles (install / uninstall / signed updates)
 wen status [-c config]           print the current configuration and runtime state
+wen usage [-c config] [--month | --days N] [--by dimension]  this month's (or the last N days') usage and budget
 wen eval <script.json> [-o file] replay a scripted conversation and report on style and consistency
 wen update [--check] [-y]    check for and install a new version
 wen version                  print the version
@@ -45,6 +46,32 @@ In offline mode plugins are **registered but not initialized**: reading their co
 The first item on the top-level menu is `Language`. It changes **this run only** and is forgotten on exit — `wen config` is something you open once every few months, with a person sitting right there at the terminal, so two extra keypresses beat one more state file. To change the language for good, edit `lang:` in config.yaml, creating the file with just that line if it does not exist (see [Configuration and models](configuration.md#language)). The word "Language" and the language names themselves are never translated: once the interface is in a language you cannot read, that is the one line you can still recognise.
 
 The form is generated from the config fields the plugins declare themselves, the same source the settings page uses, so a new plugin gets both interfaces at once. Plugin actions are here too: select the WeChat channel and a "bind by QR code" action appears, with the code drawn as text right in the terminal (black and white regardless of your color scheme, so it scans under a dark theme too), the raw link printed underneath as a fallback, and an automatic refresh and redraw when it expires — no need to open the web UI on a remote server just to scan a code.
+
+## wen usage: this month's usage
+
+`wen usage` prints the current calendar month from the usage ledger: requests, input and output tokens, cache hits and an estimated cost, followed by a breakdown by source (or whatever `--by` asks for) and, when a budget is set, one "This month's budget" line.
+
+It reads the ledger files under `<config dir>/usage/` directly rather than going through the running service — usage is append-only side data with no single owner, so it can be read while the server runs.
+
+| Flag | Meaning |
+|---|---|
+| `-c config` | The configuration file; both the ledger and the price table are looked up from its directory |
+| `--month` | The current calendar month (the default) |
+| `--days N` | Switch to the last N days, today included, at most 3660; cannot be combined with `--month` |
+| `--by dimension` | Grouping: `day`, `source` (default), `model`, `kind`, `provider`, `provider_model` |
+
+```
+$ wen usage --days 7 --by model
+Wen Agent usage
+Range                7-day window
+Total                requests: 4 · input 7,000 · output 400 · estimated CNY 0.01 · unpriced tokens: 1,100
+This month's budget  7,400 / 100,000 tokens (7.4%) · CNY 0.01 (incl. unpriced tokens: 1,100; amount is an estimate)
+By model
+  m1                 requests: 3 · input 6,000 · output 300 · estimated CNY 0.01
+  m2                 requests: 1 · input 1,000 · output 100 · unpriced tokens: 1,100
+```
+
+Amounts come from the per-model prices in models.json. Unpriced usage is counted separately as "unpriced tokens"; if the price table cannot be read at all the report shows tokens only and says so. The budget is a calendar-month figure independent of the `--days` window, which is why it is always labelled "this month". The rules, the fields of `usage.json` and the web entry point are in [Usage and budget](usage.md).
 
 ## wen export / wen import: backup and restore
 

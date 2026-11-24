@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"wen/internal/agent"
 	"wen/internal/i18n"
@@ -247,6 +248,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if lines := s.plugins.StatusLines(reqLang(r)); len(lines) > 0 {
 		resp["plugin_lines"] = lines
 	}
+	// 本月用量预算：没有账本（装了不记账）时不下发该字段
+	if b := s.agent.BudgetStatus(time.Now()); b != nil {
+		resp["budget"] = b
+	}
 	if sid := r.URL.Query().Get("session_id"); sid != "" {
 		if meta, msgs, err := s.store.Get(sid); err == nil {
 			sess := map[string]any{
@@ -480,5 +485,7 @@ func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.agent.Compact(r.Context(), id, emit)
+	// 手动压缩是用户在界面上点的一次操作：带上交互标记，skip_background 策略
+	// 才不会被当成后台工作而拦下——用户在场时该由他说了算。
+	s.agent.Compact(plugin.WithInteractive(r.Context()), id, emit)
 }

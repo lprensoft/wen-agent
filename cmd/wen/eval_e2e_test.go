@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +35,9 @@ func TestRunEvalEndToEndWithFakeProvider(t *testing.T) {
 			"choices": []any{map[string]any{"delta": map[string]any{"content": reply}}},
 		})
 		fmt.Fprintf(w, "data: %s\n\n", line)
+		// 和真实提供商一样在末尾补一个 usage chunk：评测里的调用同样会花钱，
+		// 有了这个数字才谈得上「账本该不该落在配置目录里」。
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -85,6 +90,8 @@ func TestRunEvalEndToEndWithFakeProvider(t *testing.T) {
 	if got.Schema != evalJSONSchema || len(got.Turns) != 2 || got.Judge == nil || got.Judge.SamePerson != 4 {
 		t.Fatalf("JSON 结果不对：%+v", got)
 	}
+	// 评测的模型调用一条都不该落进配置目录的账本：删掉 UsageDir 的覆盖就会变红。
+	assertNoUsageLedger(t, dir)
 
 	// 跨天示例：真跑一遍 run_hours、心跳、规划与日切，确认整条长时程链路可走通。
 	weekReport := filepath.Join(dir, "week.md")
@@ -100,5 +107,23 @@ func TestRunEvalEndToEndWithFakeProvider(t *testing.T) {
 		if !strings.Contains(string(week), want) {
 			t.Errorf("跨天报告缺 %q", want)
 		}
+	}
+	// 跨天那一场同样不该在配置目录里留下任何用量记录。
+	assertNoUsageLedger(t, dir)
+}
+
+// assertNoUsageLedger 断言配置目录下没有用量账本：评测自己跑出来的开销不该
+// 记进真实账本，否则回放一次就把「这个月花了多少」染上了机器造的数字。
+func assertNoUsageLedger(t *testing.T, configDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(configDir, "usage"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		t.Fatalf("读取用量目录失败: %v", err)
+	}
+	if len(entries) > 0 {
+		t.Fatalf("评测不该在配置目录里写用量账本，实际有 %d 个文件: %v", len(entries), entries)
 	}
 }

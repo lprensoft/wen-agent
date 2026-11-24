@@ -450,17 +450,21 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 		thinks := map[int]*partialBlock{}
 		var usage Usage
 
+		// 用量在收到时就发一次快照，而不是等 finish()：输入侧随 message_start 到，
+		// 输出侧随 message_delta 到，之后还可能来一个流错误。只在收尾时发的话，
+		// 失败的请求就一条用量都没有，主模型这笔钱漏记——而 token 已经真的花掉了。
+		emitUsage := func() bool {
+			u := usage
+			u.TotalTokens = u.PromptTokens + u.CompletionTokens
+			return emit(StreamEvent{Type: EventUsage, Usage: &u})
+		}
+
 		finish := func() {
 			if len(thinks) > 0 {
 				emit(StreamEvent{Type: EventReasoning, Reasoning: assembleBlocks(thinks)})
 			}
 			if len(calls) > 0 {
 				emit(StreamEvent{Type: EventToolCalls, ToolCalls: assembleCalls(calls)})
-			}
-			if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
-				u := usage
-				u.TotalTokens = u.PromptTokens + u.CompletionTokens
-				emit(StreamEvent{Type: EventUsage, Usage: &u})
 			}
 			emit(StreamEvent{Type: EventDone})
 		}
@@ -479,13 +483,17 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 
 			switch ev.Type {
 			case "message_start":
-				// usage 分两处下发：这里给输入侧（含缓存命中），message_delta 给输出侧
+				// usage 分两处下发：这里给输入侧（含缓存命中），message_delta 给输出侧。
+				// 两处各发一次快照，失败的请求也留得下已经花掉的输入。
 				if ev.Message != nil && ev.Message.Usage != nil {
 					u := ev.Message.Usage
 					usage.PromptTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 					usage.CompletionTokens = u.OutputTokens
 					usage.CachedTokens = u.CacheReadInputTokens
 					usage.CacheWriteTokens = u.CacheCreationInputTokens
+					if !emitUsage() {
+						return
+					}
 				}
 			case "content_block_start":
 				if ev.ContentBlock == nil {
@@ -528,6 +536,9 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 				// output_tokens 是累计值，覆盖而非累加
 				if ev.Usage != nil && ev.Usage.OutputTokens > 0 {
 					usage.CompletionTokens = ev.Usage.OutputTokens
+					if !emitUsage() {
+						return
+					}
 				}
 			case "message_stop":
 				finish()

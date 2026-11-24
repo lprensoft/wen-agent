@@ -1458,6 +1458,12 @@ async function handleCommand(text) {
   inputEl.focus();
 }
 
+// money 把金额排成两位小数，与 Go 侧 statustext.Money 一致：单价是每百万 token
+// 的价，账单上的数到分就够了。
+function money(v) {
+  return Number.isFinite(v) ? v.toFixed(2) : "0.00";
+}
+
 async function runStatus() {
   try {
     const q = currentSession ? "?session_id=" + encodeURIComponent(currentSession) : "";
@@ -1499,12 +1505,73 @@ async function runStatus() {
     } else {
       lines.push(t("status.noSession", { total: I18N.num(st.context_length) }));
     }
+    // 本月用量预算：与会话无关，字段只在本月设了限、数据不可靠或账本写不进去时下发。
+    // 措辞与 internal/statustext 的 BudgetLine 一致，两边改动要一起动。
+    if (st.budget && (st.budget.enabled || st.budget.degraded || st.budget.write_failed)) {
+      lines.push(budgetText(st.budget));
+    }
     // 插件贡献的状态行（如心跳节奏），没有插件可报时字段不存在
     if (Array.isArray(st.plugin_lines)) lines.push(...st.plugin_lines);
     addSysBlock(lines.join("\n"));
   } catch (e) {
     addError(t("status.failed", { msg: e.message }));
   }
+}
+
+// budgetText 拼一行本月预算状态。/status 与设置页「用量」共用它：两处各写一份的话，
+// 一次改措辞就会让同一个数字在两页上说两套话。
+function budgetText(b) {
+  if (b.degraded) return t("status.budgetDegraded");
+  // token 段与金额段各算各的：只设了钱的上限是正常配置，不该显示「0 / 0 tokens」。
+  // 任一段的限额/已用不是有限数字时整段省略——拿 NaN 或除零去算比例，出来的
+  // 「NaN%」会被当成真实用量。与 Go 侧同一条规矩。
+  const parts = [];
+  if (Number.isFinite(b.limit_tokens) && b.limit_tokens > 0 && Number.isFinite(b.spent_tokens)) {
+    parts.push(t("status.budgetTokens", {
+      spent: I18N.num(b.spent_tokens),
+      limit: I18N.num(b.limit_tokens),
+      pct: ((b.spent_tokens / b.limit_tokens) * 100).toFixed(1),
+    }));
+  }
+  if (b.cost_ready && ((b.limit_cost > 0) || (b.spent_cost > 0))) {
+    let amount = money(b.spent_cost || 0);
+    if (b.limit_cost > 0) amount += " / " + money(b.limit_cost);
+    if (b.currency) amount = b.currency + " " + amount;
+    // 未定价与缓存价回退都会让这个数字偏离账单，二选一说一句就够；花了 0 元
+    // 时这两句没有意义，那时由下面那两句解释为什么是 0。
+    if (b.spent_cost > 0 && b.unpriced_tokens > 0) {
+      amount += t("status.budgetUnpriced", { n: I18N.num(b.unpriced_tokens) });
+    } else if (b.spent_cost > 0 && b.cost_inexact) amount += t("status.budgetInexact");
+    parts.push(amount);
+  }
+  if (!b.enabled) {
+    // 没设上限时前面的数字段没有意义，但「合计本身可能偏少」与上限定没定无关：
+    // 账本写不进去、有分片读不出来，这两句仍要说，否则默认配置下永远看不到它们。
+    let none = t("status.budgetNone");
+    if (b.skipped_files > 0) none += t("status.budgetSkipped", { n: I18N.num(b.skipped_files) });
+    // 记账失败同样只让统计偏少，不改变拦截：说出来即可。
+    if (b.write_failed) none += t("status.budgetWriteFailed");
+    return none;
+  }
+  let budget = t("status.budgetHead") + parts.join(" · ");
+  // 设了金额上限却没有价格表：那一段永远不会生效，必须说出来。
+  if (b.limit_cost > 0 && !b.cost_ready) budget += t("status.budgetNoPrice");
+  // 价格表在、本月用到的模型却没定价：同样等于没有金额上限。
+  else if (b.limit_cost > 0 && b.cost_unpriced) budget += t("status.budgetCostUnpriced");
+  // 别的币种不计入本币上限；坏分片让合计偏少。两者都会让上面的数字偏离真相。
+  if (b.limit_cost > 0 && b.foreign_cost) {
+    budget += t("status.budgetForeign", { currency: b.currency });
+  }
+  if (b.skipped_files > 0) budget += t("status.budgetSkipped", { n: I18N.num(b.skipped_files) });
+  // 记账失败同样只让统计偏少，不改变拦截：说出来即可。
+  if (b.write_failed) budget += t("status.budgetWriteFailed");
+  // 超限的拦截范围取决于 over：block_all 连前台一起停，只说「后台」是低报。
+  if (b.exceeded) {
+    budget = "⛔ " + budget +
+      t(b.over === "block_all" ? "status.budgetExceededAll" : "status.budgetExceeded");
+  } else if (b.warn) budget = "⚠️ " + budget + t("status.budgetWarn");
+  else budget = "💰 " + budget;
+  return budget;
 }
 
 async function runCompact() {
@@ -1571,6 +1638,7 @@ async function openSettings() {
   // 否则刚聊完的记忆与现场会一直是上次打开时的那一份。
   const nav = $(".settings-nav-item.active");
   if (nav && nav.dataset.section === "state") loadState();
+  if (nav && nav.dataset.section === "usage") loadUsage();
 }
 
 async function loadSettingsPlugins() {
@@ -2097,6 +2165,7 @@ $("#settings-nav").addEventListener("click", (e) => {
   showSettingsSection(btn.dataset.section);
   if (btn.dataset.section === "access") loadAccessState();
   if (btn.dataset.section === "state") loadState();
+  if (btn.dataset.section === "usage") loadUsage();
 });
 
 // ---------- 访问控制 ----------
@@ -2713,10 +2782,13 @@ function showModelsError(msg) {
   modelsErrorEl.classList.toggle("hidden", !msg);
 }
 
-// 提交整档配置：api_key 一律留空表示不修改，需要改的由调用方填上
+// 提交整档配置：api_key 一律留空表示不修改，需要改的由调用方填上。
+// ref 必须原样带回：旧配置里可能有只差大小写的两家提供商，改名保存时服务端靠它
+// 找到被编辑的那一条并沿用密钥；没有 ref 会退化成按名字匹配，两家的密钥可能对调。
 function payloadFromDoc() {
   return {
     providers: modelsDoc.providers.map((p) => ({
+      ref: p.ref || "",
       name: p.name,
       type: p.type,
       base_url: p.base_url,
@@ -2982,6 +3054,13 @@ function buildProviderCard(p) {
   return card;
 }
 
+// trimPrice 把单价显示成紧凑的样子：最多四位小数，去掉无意义的零（2 而不是 2.0000）。
+function trimPrice(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "0";
+  return String(Number(n.toFixed(4)));
+}
+
 function buildModelRow(p, m) {
   const row = document.createElement("div");
   row.className = "model-row";
@@ -2995,6 +3074,18 @@ function buildModelRow(p, m) {
   name.className = "model-name";
   name.textContent = m.name || m.id;
   row.append(radio, name);
+  // 模型名旁只标币种与输入价：一眼看出这个模型有没有算钱、按哪国货币算。
+  if (m.price && m.price.currency) {
+    const priceTag = document.createElement("span");
+    priceTag.className = "model-price-tag";
+    priceTag.textContent = m.price.currency + " " + trimPrice(m.price.input);
+    priceTag.title = t("model.price.badgeTitle", {
+      currency: m.price.currency,
+      input: trimPrice(m.price.input),
+      output: trimPrice(m.price.output),
+    });
+    row.appendChild(priceTag);
+  }
   if (m.name) {
     const id = document.createElement("span");
     id.className = "model-id";
@@ -3086,6 +3177,7 @@ const providerForm = $("#provider-form");
 const providerErrorEl = $("#provider-error");
 const providerTitleEl = $("#provider-modal-title");
 let providerEditing = null; // 正在编辑的提供商名，null 表示新增
+let providerEditingRef = ""; // 正在编辑的条目在当前视图里的 ref：测试连接时带回，服务端据此沿用这一条的密钥
 let providerInputs = {};
 
 // ---------- 嵌入服务 ----------
@@ -3296,7 +3388,9 @@ function customPresetRow() {
 function openProviderModal(name, preset) {
   providerEditing = name || null;
   pendingPresetModels = preset ? preset.models || [] : null;
+  providerEditingRef = "";
   const p = name ? modelsDoc.providers.find((x) => x.name === name) : null;
+  providerEditingRef = (p && p.ref) || "";
   providerTitleEl.textContent = p ? t("provider.edit", { name: p.name }) : t("provider.add");
   providerForm.textContent = "";
   showProviderError("");
@@ -3387,6 +3481,7 @@ function openProviderModal(name, preset) {
 function closeProviderModal() {
   providerModal.classList.add("hidden");
   providerEditing = null;
+  providerEditingRef = "";
   pendingPresetModels = null;
 }
 
@@ -3446,6 +3541,9 @@ async function testProvider() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         provider: providerEditing,
+        // 旧配置里可能有两家只差大小写的提供商：不带 ref，服务端会沿用第一家的密钥
+        // 去连第二家的地址。
+        ref: providerEditingRef,
         type: providerInputs.type.value,
         base_url: providerInputs.base_url.value.trim(),
         api_key: providerInputs.api_key.value.trim(),
@@ -3491,6 +3589,18 @@ function openModelModal(provider, id) {
   const maxInput = numberInput(m && m.max_tokens, t("model.followGlobal", { value: d.max_tokens }), { min: 1 });
   const tempInput = numberInput(m && m.temperature, t("model.followGlobal", { value: d.temperature }), { min: 0, max: 2, step: 0.1 });
 
+  // 单价（每百万 token）。缓存两项留空表示「按输入价估算」，所以回填时要区分
+  // 「没写」（不填）与写着 0（缓存免费）：0 是合法价，不能当成没填。
+  const price = m && m.price ? m.price : null;
+  const currencyInput = textInput(price && price.currency ? price.currency : "CNY");
+  currencyInput.placeholder = "CNY";
+  const inputPrice = numberInput(price ? price.input : "", "0", { min: 0, step: "any" });
+  const outputPrice = numberInput(price ? price.output : "", "0", { min: 0, step: "any" });
+  const cacheRead = numberInput(price && price.cache_read != null ? price.cache_read : "",
+    t("model.price.cacheOmitted"), { min: 0, step: "any" });
+  const cacheWrite = numberInput(price && price.cache_write != null ? price.cache_write : "",
+    t("model.price.cacheOmitted"), { min: 0, step: "any" });
+
   const thinkSelect = document.createElement("select");
   const follow = document.createElement("option");
   follow.value = "";
@@ -3514,8 +3624,23 @@ function openModelModal(provider, id) {
       t(isAnthropic ? "model.thinkingDescAnthropic" : "model.thinkingDesc")),
     fieldEl(t("model.temperature"), tempInput,
       t(isAnthropic ? "model.temperatureDescAnthropic" : "model.temperatureDesc")),
+    // 价格四项都由用户手填：账本不猜任何单价，不填就只统计 token 不折算金额。
+    fieldEl(t("model.price.currency"), currencyInput, t("model.price.currencyDesc")),
+    fieldEl(t("model.price.input"), inputPrice, t("model.price.inputDesc"), { plain: true }),
+    fieldEl(t("model.price.output"), outputPrice, t("model.price.outputDesc"), { plain: true }),
+    fieldEl(t("model.price.cacheRead"), cacheRead, t("model.price.cacheReadDesc"), { plain: true }),
+    fieldEl(t("model.price.cacheWrite"), cacheWrite, t("model.price.cacheWriteDesc"), { plain: true }),
   );
-  modelInputs = { id: idInput, name: nameInput, context_length: ctxInput, max_tokens: maxInput, thinking: thinkSelect, temperature: tempInput };
+  const priceNote = document.createElement("div");
+  priceNote.className = "field-desc price-note";
+  priceNote.textContent = t("model.price.note");
+  modelForm.appendChild(priceNote);
+  modelInputs = {
+    id: idInput, name: nameInput, context_length: ctxInput, max_tokens: maxInput,
+    thinking: thinkSelect, temperature: tempInput,
+    currency: currencyInput, price_input: inputPrice, price_output: outputPrice,
+    price_cache_read: cacheRead, price_cache_write: cacheWrite,
+  };
 
   modelModal.classList.remove("hidden");
   idInput.focus();
@@ -3532,23 +3657,77 @@ function showModelError(msg) {
 }
 
 async function saveModel() {
-  const entry = { id: modelInputs.id.value.trim() };
+  const payload = payloadFromDoc();
+  // 弹窗开着的时候，别处（另一个窗口、或刚刷新过列表）可能已经删掉了这个提供商或
+  // 模型。找不到就当场停下并说明：继续拼下去会把一整份缺了目标的配置写回去，
+  // 而且是在用户以为只是在改一个字段的时候。
+  const p = payload.providers.find((x) => x.name === modelEditing.provider);
+  if (!p) {
+    showModelError(t("model.stale"));
+    return;
+  }
+  p.models = (p.models || []).slice();
+  // 以原模型为底：这个弹窗只编几项基础字段，整体替换会把 price（以及将来别的
+  // 字段）悄悄丢掉——保存一次 name 就清掉单价，用户根本看不出发生了什么。
+  const i = modelEditing.id ? p.models.findIndex((m) => m.id === modelEditing.id) : -1;
+  if (modelEditing.id && i < 0) {
+    showModelError(t("model.stale"));
+    return;
+  }
+  const entry = { ...(i >= 0 ? p.models[i] || {} : {}) };
+  entry.id = modelInputs.id.value.trim();
   const name = modelInputs.name.value.trim();
+  // 留空的可选项从底稿里删掉，由服务端回退到全局值；不删就会保留旧值，
+  // 「清空输入框」反而成了「恢复原来那一个」。
   if (name) entry.name = name;
-  // 留空的可选项直接不提交，由服务端回退到全局值
+  else delete entry.name;
   const ctx = modelInputs.context_length.value.trim();
   if (ctx) entry.context_length = Number(ctx);
+  else delete entry.context_length;
   const max = modelInputs.max_tokens.value.trim();
   if (max) entry.max_tokens = Number(max);
+  else delete entry.max_tokens;
   const temp = modelInputs.temperature.value.trim();
   if (temp) entry.temperature = Number(temp);
+  else delete entry.temperature;
   if (modelInputs.thinking.value) entry.thinking = modelInputs.thinking.value;
+  else delete entry.thinking;
 
-  const payload = payloadFromDoc();
-  const p = payload.providers.find((x) => x.name === modelEditing.provider);
-  p.models = (p.models || []).slice();
+  // 单价：四个数字全空表示不为这个模型折算金额——底稿里的旧价要删掉，否则「清空
+  // 输入框」反而成了「保留原来那份价格」。只填币种不算价格。
+  // 缓存两项只在非空时写入：留空是「按输入价估算」（指针缺省），写成 0 会被当成
+  // 「缓存免费」，那是另一个意思。
+  //
+  // 但半成品（1e、-. 之类）读出来也是空串、只是带 validity.badInput：那在下面表示
+  // 「这一项不填」，不先拦下，正在填的输入价就被提交成 0，之后的用量全按零价重算。
+  // 守卫必须在构造 entry.price 之前——一旦拼进 price，零价就已经写进配置了。
+  for (const key of ["price_input", "price_output", "price_cache_read", "price_cache_write"]) {
+    const input = modelInputs[key];
+    if (input && input.validity && input.validity.badInput) {
+      showModelError(t("model.priceBadInput"));
+      return;
+    }
+  }
+  const priceInputs = [
+    modelInputs.price_input.value.trim(),
+    modelInputs.price_output.value.trim(),
+    modelInputs.price_cache_read.value.trim(),
+    modelInputs.price_cache_write.value.trim(),
+  ];
+  if (priceInputs.some((v) => v !== "")) {
+    const price = {
+      currency: modelInputs.currency.value.trim().toUpperCase() || "CNY",
+      input: numberOrZero(priceInputs[0]),
+      output: numberOrZero(priceInputs[1]),
+    };
+    if (priceInputs[2] !== "") price.cache_read = numberOrZero(priceInputs[2]);
+    if (priceInputs[3] !== "") price.cache_write = numberOrZero(priceInputs[3]);
+    entry.price = price;
+  } else {
+    delete entry.price;
+  }
+
   if (modelEditing.id) {
-    const i = p.models.findIndex((m) => m.id === modelEditing.id);
     p.models[i] = entry;
     if (payload.current.provider === p.name && payload.current.model === modelEditing.id) {
       payload.current.model = entry.id;
@@ -3566,6 +3745,500 @@ async function saveModel() {
     showModelError(t("model.saveFailed", { msg: e.message }));
   }
 }
+
+// ---------- 用量与预算 ----------
+//
+// 报表来自 GET /api/usage：账本按自然月扫一遍，金额是用户自己填的单价估出来的。
+// 这里所有内容都用 textContent 写：来源名与模型名来自用户配置，拼进 innerHTML
+// 等于把它们当 HTML 执行。
+
+const usageEls = {
+  month: $("#usage-month"),
+  summary: $("#usage-summary"),
+  budget: $("#usage-budget"),
+  chart: $("#usage-chart"),
+  tables: $("#usage-tables"),
+  note: $("#usage-note"),
+};
+// lastUsage 是最近一次响应：切语言时按它就地把整页重画，不再重新扫一遍账本。
+let lastUsage = null;
+// usageSeq 挡住乱序返回：连点两次刷新或快速换月份时，先发的那份可能后到，
+// 不认序号就会把旧月份的数字画在新月份上。
+let usageSeq = 0;
+
+// currentMonth 给出本机时区的 YYYY-MM。账本按落盘日期分月，墙上月份才是用户认的月。
+function currentMonth() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+
+async function loadUsage() {
+  // 旧版页面缓存里没有这一节：查询是 null，直接跳过，不必报错。
+  if (!usageEls.month) return;
+  const month = usageEls.month.value || currentMonth();
+  usageEls.month.value = month;
+  const seq = ++usageSeq;
+  // 清掉上一个月的内容再取：请求失败或还没回来时，旧数字挂在新月份上会被当真。
+  clearUsageBody();
+  usageEls.note.textContent = t("common.loading");
+  usageEls.note.classList.remove("error");
+  try {
+    const res = await fetch(withLang("/api/usage?month=" + encodeURIComponent(month)));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+    const data = await res.json();
+    if (seq !== usageSeq) return;
+    renderUsage(data);
+  } catch (e) {
+    if (seq !== usageSeq) return;
+    // 换月份失败时不能让上一个月的数字留在屏幕上：那几个数会被当成新月份的。
+    lastUsage = null;
+    clearUsageBody();
+    usageEls.note.textContent = t("settings.usage.loadFailed", { msg: e.message });
+    usageEls.note.classList.add("error");
+  }
+}
+
+function clearUsageBody() {
+  if (usageEls.summary) usageEls.summary.textContent = "";
+  if (usageEls.budget) usageEls.budget.textContent = "";
+  if (usageEls.chart) usageEls.chart.textContent = "";
+  if (usageEls.tables) usageEls.tables.textContent = "";
+}
+
+function renderUsage(data) {
+  if (!usageEls.summary) return;
+  lastUsage = data;
+  if (data && data.month) usageEls.month.value = data.month;
+  renderUsageSummary(data || {});
+  renderUsageBudget(data || {});
+  renderUsageChart(data || {});
+  renderUsageTables(data || {});
+  renderUsageNote(data || {});
+}
+
+// usageCostText 把按币种分开的金额排成一行：币种不折算，并列几行比一个换算过的总数诚实。
+// overflow 为真时在金额后加一个小标记：这个数已经被截断到可表示范围的上限，与「估算」
+// 是两件事，标记本身说不清原因，完整说明挂在调用处的 title 上。
+function usageCostText(costs, overflow) {
+  const keys = Object.keys(costs || {}).sort();
+  if (!keys.length) return "—";
+  const text = keys.map((c) => c + " " + money(costs[c])).join(" · ");
+  return overflow ? text + " " + t("settings.usage.overflowMark") : text;
+}
+
+function usageCard(parent, label, value, hint) {
+  const card = document.createElement("div");
+  card.className = "usage-card";
+  const l = document.createElement("div");
+  l.className = "usage-card-label";
+  l.textContent = label;
+  const v = document.createElement("div");
+  v.className = "usage-card-value";
+  v.textContent = value;
+  card.append(l, v);
+  if (hint) {
+    const h = document.createElement("div");
+    h.className = "usage-card-hint";
+    h.textContent = hint;
+    card.appendChild(h);
+  }
+  parent.appendChild(card);
+}
+
+function renderUsageSummary(data) {
+  const el = usageEls.summary;
+  el.textContent = "";
+  const tot = data.totals || {};
+  const prompt = tot.prompt || 0;
+  const completion = tot.completion || 0;
+  const cached = tot.cached || 0;
+  // 命中率的分母是总输入：缓存写与未命中都算在输入里，只拿命中去除会高估。
+  const hit = prompt > 0 ? ((cached / prompt) * 100).toFixed(1) + "%" : "—";
+  usageCard(el, t("settings.usage.requests"), I18N.num(tot.requests || 0));
+  usageCard(el, t("settings.usage.tokens"), I18N.num(prompt) + " / " + I18N.num(completion));
+  usageCard(el, t("settings.usage.cacheHit"), hit);
+  // 两个提示可以同时成立：金额既可能是估算，也可能已经超出可表示范围被截断。
+  const costHints = [];
+  if (tot.inexact) costHints.push(t("settings.usage.estimate"));
+  if (tot.overflow) costHints.push(t("settings.usage.overflow"));
+  usageCard(el, t("settings.usage.cost"), usageCostText(tot.costs, tot.overflow),
+    costHints.join(" · "));
+  if (tot.unpriced_tokens > 0) {
+    usageCard(el, t("settings.usage.unpriced"), I18N.num(tot.unpriced_tokens), t("settings.usage.unpricedHint"));
+  }
+  if (tot.skipped_files > 0) {
+    usageCard(el, t("settings.usage.skipped"), I18N.num(tot.skipped_files), t("settings.usage.skippedHint"));
+  }
+}
+
+function usageBlockTitle(text) {
+  const head = document.createElement("div");
+  head.className = "usage-block-title";
+  head.textContent = text;
+  return head;
+}
+
+function renderUsageBudget(data) {
+  const el = usageEls.budget;
+  el.textContent = "";
+  el.appendChild(usageBlockTitle(t("settings.usage.budgetTitle")));
+
+  const budget = data.budget;
+  if (budget) {
+    // 与 /status 同一份措辞：两处各写一份，改一次就会让同一个数字说两套话。
+    const status = document.createElement("div");
+    status.className = "usage-budget-status";
+    status.textContent = budgetText(budget);
+    if (budget.exceeded || budget.degraded) status.classList.add("danger");
+    else if (budget.warn) status.classList.add("warn");
+    el.appendChild(status);
+    // 查历史月份时预算仍按运行中的当前月算：不说清楚，读者会把它当成这份报表的预算。
+    if (data.budget_month_matches === false) {
+      const mismatch = document.createElement("div");
+      mismatch.className = "usage-budget-note";
+      mismatch.textContent = t("settings.usage.budgetOtherMonth", { month: budget.month || "" });
+      el.appendChild(mismatch);
+    }
+    // 磁盘上的 usage.json 与运行中的预算分叉了（另一个窗口或手改过文件）：上面的
+    // 表单显示的是新值，真正在管的仍是旧值，不说出来会让人以为改完就生效了。
+    if (data.settings_stale) {
+      const stale = document.createElement("div");
+      stale.className = "usage-budget-note warn";
+      stale.textContent = t("settings.usage.budgetStale");
+      el.appendChild(stale);
+    }
+  } else {
+    // 没有 budget 字段表示这次运行没装配预算，不是「不设限」。
+    const none = document.createElement("div");
+    none.className = "usage-budget-note";
+    none.textContent = t("settings.usage.budgetMissing");
+    el.appendChild(none);
+  }
+  if (data.settings_error) {
+    const err = document.createElement("div");
+    err.className = "usage-budget-note error";
+    err.textContent = t("settings.usage.budgetSettingsError", { msg: data.settings_error });
+    el.appendChild(err);
+  }
+  // 强制应用要跟着表单走：表单里的值与加载时同一份，用户点保存时看不出任何改动，
+  // 但这一次点击的意思正是「把磁盘上的那份应用起来」。
+  // 两种情形都得强制：settings_stale 是磁盘配置与运行中的预算分叉；settings_error
+  // 是文件根本读不出来（此处显示的是默认值，磁盘上还坏着）——不强制的话这一次保存
+  // 只重新取一遍数据，文件不会修好，预算继续降级到进程结束。
+  el.appendChild(usageBudgetForm(data.settings || {}, !!(data.settings_stale || data.settings_error)));
+}
+
+function usageCurrencySelect(current) {
+  const sel = document.createElement("select");
+  const cur = (current || "CNY").toUpperCase();
+  const opts = ["CNY", "USD", "EUR"];
+  // 文件里写着 JPY 之类的币种也要能原样保存，不能因为下拉里没有就悄悄改成 CNY。
+  if (!opts.includes(cur)) opts.unshift(cur);
+  for (const c of opts) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  }
+  sel.value = cur;
+  return sel;
+}
+
+function usageOverSelect(current) {
+  const sel = document.createElement("select");
+  for (const v of ["skip_background", "block_all"]) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = t(v === "block_all" ? "settings.usage.overBlock" : "settings.usage.overSkip");
+    sel.appendChild(opt);
+  }
+  sel.value = current === "block_all" ? "block_all" : "skip_background";
+  return sel;
+}
+
+// forceApply 为真表示这一次保存无论有没有改动字段，都要让服务端拿磁盘上的那份重写
+// 一遍并应用到运行中的预算：磁盘与运行中的预算分叉（另一个窗口或手改过文件），或者
+// 磁盘上的 usage.json 根本读不出来（页面显示的是默认值，保存才能把文件修好）。
+function usageBudgetForm(settings, forceApply) {
+  const form = document.createElement("div");
+  form.className = "usage-budget-form";
+  const fields = document.createElement("div");
+  fields.className = "usage-budget-fields";
+
+  const tokens = numberInput(settings.monthly_tokens || "", "0", { min: 0, step: 1 });
+  const cost = numberInput(settings.monthly_cost || "", "0", { min: 0, step: 0.01 });
+  const currency = usageCurrencySelect(settings.currency);
+  const warn = numberInput(settings.warn_percent != null ? settings.warn_percent : 80, "80",
+    { min: 0, max: 100, step: 1 });
+  const over = usageOverSelect(settings.over);
+
+  fields.append(
+    fieldEl(t("settings.usage.monthlyTokens"), tokens, t("settings.usage.noLimitHint")),
+    fieldEl(t("settings.usage.monthlyCost"), cost, t("settings.usage.noLimitHint")),
+    fieldEl(t("settings.usage.currency"), currency, t("settings.usage.currencyDesc")),
+    fieldEl(t("settings.usage.warnPercent"), warn, t("settings.usage.warnPercentDesc")),
+    fieldEl(t("settings.usage.over"), over, t("settings.usage.overDesc")),
+  );
+  form.appendChild(fields);
+
+  const note = document.createElement("div");
+  note.className = "field-desc";
+  note.textContent = t("settings.usage.budgetNote");
+  form.appendChild(note);
+
+  const err = document.createElement("div");
+  err.className = "usage-budget-error hidden";
+  const actions = document.createElement("div");
+  actions.className = "usage-budget-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn-primary";
+  save.textContent = t("common.save");
+  save.addEventListener("click", () => saveUsageBudget({ tokens, cost, currency, warn, over }, settings, err, save, forceApply));
+  actions.appendChild(save);
+  form.append(err, actions);
+  return form;
+}
+
+// budgetBaseline 把加载时的设置归一成与表单提交值同一形态，好逐项比较：文件里
+// 可能没写币种、阈值或 over，缺省值由服务端补，界面上看到的就是补过之后的默认档。
+function budgetBaseline(settings) {
+  const s = settings || {};
+  const num = (v, dft) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : dft;
+  };
+  return {
+    monthly_tokens: num(s.monthly_tokens, 0),
+    monthly_cost: num(s.monthly_cost, 0),
+    currency: String(s.currency || "CNY").toUpperCase(),
+    warn_percent: num(s.warn_percent ?? 80, 80),
+    over: s.over || "skip_background",
+  };
+}
+
+// budgetBadInput 判断一个数字框是不是「还没输完」：输入 1e、-. 这类半成品时浏览器
+// 回的是空串加 validity.badInput=true，而空串在 budgetInteger/budgetCost 里表示
+// 「主动清空限额」——不先拦下，一次保存就把用户正在填的上限解除了。
+function budgetBadInput(input) {
+  return !!(input && input.validity && input.validity.badInput);
+}
+
+async function saveUsageBudget(inputs, baseline, errEl, saveBtn, forceApply) {
+  errEl.textContent = "";
+  errEl.classList.add("hidden");
+  // 先于格式校验：半成品数字代表的不是错误值，而是「还没输完」——它读出来是空串，
+  // 留着走后面的路径就等于替用户把限额清成 0。
+  if (budgetBadInput(inputs.tokens) || budgetBadInput(inputs.cost) || budgetBadInput(inputs.warn)) {
+    errEl.textContent = t("settings.usage.badInput");
+    errEl.classList.remove("hidden");
+    return;
+  }
+  // 先在本地校一遍再发请求：服务端按整份配置校验，遇到 0.5 会截成 0——也就是把
+  // 「每月上限」悄悄改成了「不设限」，而界面还显示保存成功。宁可当场报字段错误。
+  const tokens = budgetInteger(inputs.tokens.value);
+  const cost = budgetCost(inputs.cost.value);
+  const warn = budgetInteger(inputs.warn.value);
+  let invalid = "";
+  if (tokens === null) invalid = t("settings.usage.tokenInteger");
+  else if (cost === null) invalid = t("settings.usage.costNumber");
+  else if (warn === null || warn > 100) invalid = t("settings.usage.warnInteger");
+  if (invalid) {
+    errEl.textContent = invalid;
+    errEl.classList.remove("hidden");
+    return; // 不提交：这一次请求会把用户看不清的值写进 usage.json
+  }
+  // 只提交与加载时不同的字段：服务端按「缺失字段沿用现有值」合并，整份提交会拿
+  // 本页加载时的旧值盖掉另一个标签页刚改的那几项（token 上限就这样被解除过）。
+  // 显式清空（空串）读出来是 0，与 baseline 不同，照常发送。
+  const base = budgetBaseline(baseline);
+  const current = {
+    monthly_tokens: tokens,
+    monthly_cost: cost,
+    currency: inputs.currency.value.trim().toUpperCase() || "CNY",
+    warn_percent: warn,
+    over: inputs.over.value,
+  };
+  const body = {};
+  for (const key of Object.keys(current)) {
+    if (current[key] !== base[key]) body[key] = current[key];
+  }
+  // 一个字段都没改时：不强制就不发请求（那在服务端也是一次写入），重新取一份即可；
+  // 强制时发空对象——服务端以磁盘上的现有值为底稿，落盘 + 热更新，把磁盘上的那份
+  // 配置真正应用到运行中的预算。文件坏了的时候底稿就是默认值，这一次保存顺手把
+  // 文件写成合法内容（版本比程序新时服务端回 409，界面照原话显示，文件不动）。
+  // 只在「没有改动」时发空对象：有改动时仍只提交改动的字段，多标签页各改一项才不会
+  // 互相覆盖。
+  if (!Object.keys(body).length && !forceApply) {
+    await loadUsage();
+    return;
+  }
+  saveBtn.disabled = true;
+  try {
+    // 只提交这五个键里的改动项：请求体里的未知字段会被服务端拒绝，多塞一个 version 就是一次 400。
+    const res = await fetch(withLang("/api/usage/settings"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || "HTTP " + res.status);
+    }
+    // 存进去的是服务端归一化后的值（币种大写、over 补默认），重新取一份比自算可靠。
+    await loadUsage();
+  } catch (e) {
+    // 服务端校验失败的原话（负限额、未知 over）直接给用户看，不自造一句。
+    errEl.textContent = t("settings.usage.budgetSaveFailed", { msg: e.message });
+    errEl.classList.remove("hidden");
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+function renderUsageChart(data) {
+  const el = usageEls.chart;
+  el.textContent = "";
+  el.appendChild(usageBlockTitle(t("settings.usage.chartTitle")));
+  const daily = Array.isArray(data.daily) ? data.daily : [];
+  const totalOf = (d) => (d.prompt || 0) + (d.completion || 0);
+  const max = daily.reduce((m, d) => Math.max(m, totalOf(d)), 0);
+  if (!daily.length || max <= 0) {
+    const empty = document.createElement("div");
+    empty.className = "usage-chart-empty";
+    empty.textContent = t("settings.usage.chartEmpty");
+    el.appendChild(empty);
+    return;
+  }
+  const bars = document.createElement("div");
+  bars.className = "usage-bars";
+  for (const d of daily) {
+    const total = totalOf(d);
+    const col = document.createElement("div");
+    col.className = "usage-bar-col";
+    const track = document.createElement("div");
+    track.className = "usage-bar-track";
+    const bar = document.createElement("div");
+    bar.className = "usage-bar";
+    // 有记录的那一天至少留 2% 高度，否则一天的用量在这里会看不见。
+    bar.style.height = total > 0 ? Math.max(2, (total / max) * 100).toFixed(2) + "%" : "0";
+    const date = d.key || "";
+    bar.title = t("settings.usage.chartTooltip", {
+      date,
+      requests: I18N.num(d.requests || 0),
+      tokens: I18N.num(total),
+    });
+    track.appendChild(bar);
+    const label = document.createElement("div");
+    label.className = "usage-bar-label";
+    label.textContent = date.length >= 10 ? date.slice(8) : date;
+    col.append(track, label);
+    bars.appendChild(col);
+  }
+  el.appendChild(bars);
+}
+
+function usageSourceLabel(key) {
+  const k = {
+    foreground: "settings.usage.sourceForeground",
+    internal: "settings.usage.sourceInternal",
+    // 早期记录或插件没带来源时账本写 unknown：原样输出会把内部键名当成人看的名字。
+    unknown: "settings.usage.sourceUnknown",
+  }[key];
+  return k ? t(k) : (key || "—");
+}
+
+// usageModelLabel 把「提供商 / 模型」两段里的 unknown 换成译名。unknown 是账本对
+// 空值的落点（旧记录、外部写入方没写模型），原样输出等于把内部键名当成用户认得的名。
+function usageModelLabel(key) {
+  if (!key) return "—";
+  return key
+    .split(" / ")
+    .map((part) => (part === "unknown" ? t("settings.usage.unknown") : part))
+    .join(" / ");
+}
+
+function usageTableCell(row, text, cls, title) {
+  const td = document.createElement("td");
+  if (cls) td.className = cls;
+  td.textContent = text;
+  if (title) td.title = title;
+  row.appendChild(td);
+}
+
+function usageTable(title, rows, labelOf) {
+  const block = document.createElement("div");
+  block.className = "usage-table-block";
+  block.appendChild(usageBlockTitle(title));
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "usage-table-empty";
+    empty.textContent = t("settings.usage.tableEmpty");
+    block.appendChild(empty);
+    return block;
+  }
+  const table = document.createElement("table");
+  table.className = "usage-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const key of ["colName", "colRequests", "colInput", "colOutput", "colCache", "colCost", "colUnpriced"]) {
+    const th = document.createElement("th");
+    th.textContent = t("settings.usage." + key);
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  const tbody = document.createElement("tbody");
+  for (const row of list) {
+    const tr = document.createElement("tr");
+    usageTableCell(tr, labelOf ? labelOf(row.key) : (row.key || "—"), "name");
+    usageTableCell(tr, I18N.num(row.requests || 0), "num");
+    usageTableCell(tr, I18N.num(row.prompt || 0), "num");
+    usageTableCell(tr, I18N.num(row.completion || 0), "num");
+    // 缓存一列把命中与写入合在一起：两者都是「没按普通输入价算的那部分」。
+    usageTableCell(tr, I18N.num((row.cached || 0) + (row.cache_write || 0)), "num");
+    // 这一行的金额被截断过：金额后加小标记，鼠标悬停时给出完整原因。
+    usageTableCell(tr, usageCostText(row.costs, row.overflow), "num",
+      row.overflow ? t("settings.usage.overflow") : "");
+    usageTableCell(tr, row.unpriced_tokens > 0 ? I18N.num(row.unpriced_tokens) : "—", "num");
+    tbody.appendChild(tr);
+  }
+  table.append(thead, tbody);
+  block.appendChild(table);
+  return block;
+}
+
+function renderUsageTables(data) {
+  const el = usageEls.tables;
+  el.textContent = "";
+  el.append(
+    usageTable(t("settings.usage.bySource"), data.by_source, usageSourceLabel),
+    usageTable(t("settings.usage.byModel"), data.by_model, usageModelLabel),
+  );
+}
+
+function renderUsageNote(data) {
+  const el = usageEls.note;
+  el.textContent = "";
+  el.classList.remove("error");
+  const lines = [];
+  if (data.degraded) lines.push(t("settings.usage.degradedNote"));
+  if (data.totals && data.totals.inexact) lines.push(t("settings.usage.inexactNote"));
+  // 截断与估算分开说：金额被截断时，改缓存价解决不了问题，得先知道这个数的来历。
+  if (data.totals && data.totals.overflow) lines.push(t("settings.usage.overflow"));
+  // 单价怎么来的、金额能信到几分，固定写在这里：只给数字不给口径，会被当成账单。
+  lines.push(t("settings.usage.priceNote"));
+  el.textContent = lines.join("\n");
+}
+
+if (usageEls.month) {
+  usageEls.month.value = currentMonth();
+  usageEls.month.addEventListener("change", loadUsage);
+}
+if ($("#btn-usage-refresh")) $("#btn-usage-refresh").addEventListener("click", loadUsage);
 
 // ---------- 表单小工具 ----------
 
@@ -3643,13 +4316,16 @@ function numberInput(value, placeholder, opts) {
   return el;
 }
 
-function fieldEl(label, input, desc) {
+function fieldEl(label, input, desc, opts) {
   const wrap = document.createElement("div");
   wrap.className = "field";
   const lab = document.createElement("span");
   lab.className = "field-label";
   lab.textContent = label;
-  wrap.append(lab, wrapNumberInput(input));
+  // plain 用于 step="any" 的数字框：浏览器的 stepUp/stepDown 对 any 会抛异常，
+  // 上下箭头按钮点了就是一次报错，索性不挂。
+  const o = opts || {};
+  wrap.append(lab, o.plain ? input : wrapNumberInput(input));
   if (desc) {
     const d = document.createElement("div");
     d.className = "field-desc";
@@ -3657,6 +4333,29 @@ function fieldEl(label, input, desc) {
     wrap.appendChild(d);
   }
   return wrap;
+}
+
+// numberOrZero 把输入框里的字符串读成数字：空串与非法值都按 0，负数交给服务端校验报错。
+function numberOrZero(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// budgetInteger 读预算里的 token 数这类非负整数输入：空串按 0（显式填 0 表示解除
+// 上限），其余必须全是十进制数字。返回 null 表示格式不对，由调用方显示字段错误——
+// 这里不能像 numberOrZero 那样抹成 0，那等于把用户填的上限悄悄改成不设限。
+function budgetInteger(raw) {
+  const v = String(raw).trim();
+  if (v === "") return 0;
+  return /^\d+$/.test(v) ? Number(v) : null;
+}
+
+// budgetCost 读金额上限：空串按 0，其余必须是非负有限数（金额允许小数）。
+function budgetCost(raw) {
+  const v = String(raw).trim();
+  if (v === "") return 0;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 // 添加提供商先进预置列表，挑不到再走「自定义」到手工表单
@@ -3803,6 +4502,11 @@ function retranslate() {
     const nav = $(".settings-nav-item.active");
     if (nav && nav.dataset.section === "access") loadAccessState();
     if (nav && nav.dataset.section === "state") loadState();
+    // 用量报表里几乎全是拼出来的文字：有上一份数据就地重画，没有再去取。
+    if (nav && nav.dataset.section === "usage") {
+      if (lastUsage) renderUsage(lastUsage);
+      else loadUsage();
+    }
   }
 }
 
